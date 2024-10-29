@@ -908,11 +908,13 @@ ELSEIF(NOT APPLE)
   INSTALL(FILES ${MNN_PUB_HDRS} DESTINATION include/MNN/)
   INSTALL(FILES ${MNN_EXPR_PUB_HDRS} DESTINATION include/MNN/expr/)
   install(TARGETS MNN
+      EXPORT MNNTargets
       LIBRARY DESTINATION lib
       ARCHIVE DESTINATION lib
   )
 ELSE()
   install(TARGETS MNN
+      EXPORT MNNTargets
       LIBRARY DESTINATION lib
       ARCHIVE DESTINATION lib
       FRAMEWORK DESTINATION /Library/Frameworks/
@@ -969,6 +971,35 @@ ELSE()
     SET_SOURCE_FILES_PROPERTIES(${CMAKE_CURRENT_BINARY_DIR}/mnn.metallib PROPERTIES MACOSX_PACKAGE_LOCATION Resources/)
   ENDIF()
 ENDIF()
+export(EXPORT MNNTargets
+       FILE "${CMAKE_CURRENT_BINARY_DIR}/MNNTargets.cmake"
+       NAMESPACE MNN::)
+include(CMakePackageConfigHelpers)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/MNNConfigVersion.cmake"
+    VERSION 1.0
+    COMPATIBILITY AnyNewerVersion
+)
+
+# Configure the package config file
+configure_package_config_file(
+    "${CMAKE_SOURCE_DIR}/cmake/MNNConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/MNNConfig.cmake"
+    INSTALL_DESTINATION lib/cmake/MNN
+)
+
+install(EXPORT MNNTargets
+        FILE MNNTargets.cmake
+        NAMESPACE MNN::
+        DESTINATION lib/cmake/MNN)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/MNNConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/MNNConfigVersion.cmake"
+    DESTINATION lib/cmake/MNN)
+
+
 if (MNN_JNI)
     add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/source/jni/)
 endif()
