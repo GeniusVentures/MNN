@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.20)
 
 # Versioning stuff
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/include/MNN/MNNDefine.h" MNN_DEFINE)
@@ -722,7 +722,7 @@ ELSE()
         add_library(MNN STATIC ${CMAKE_CURRENT_LIST_DIR}/cmake/dummy.cpp ${MNN_OBJECTS_TO_LINK} ${MNN_PUB_HDRS} ${MNN_EXPR_PUB_HDRS})
     ENDIF()
 
-    target_link_libraries(MNN PUBLIC ${MNN_EXTRA_DEPENDS})
+    #target_link_libraries(MNN PUBLIC $<BUILD_INTERFACE:<${MNN_EXTRA_DEPENDS}>)
 ENDIF()
 
 if(MSVC)
