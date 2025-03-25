@@ -85,6 +85,8 @@ struct BackendConfig {
 
     PrecisionMode precision = Precision_Normal;
 
+    float queuePriority = 1.0f;
+
     /** user defined context */
     union {
         void* sharedContext = nullptr;

@@ -19,7 +19,8 @@ namespace MNN {
 class VulkanDevice : public NonCopyable {
 public:
     explicit VulkanDevice(std::shared_ptr<VulkanInstance> instance,
-                          const std::vector<const char*>& device_extensions = {});
+                          const std::vector<const char*>& device_extensions = {},
+                          float queuePriority = 1.0f);
     explicit VulkanDevice(std::shared_ptr<VulkanInstance> instance, VkPhysicalDevice physicalDevice, VkDevice device,
                           uint32_t queueFamilyIndex, VkQueue queue);
     virtual ~VulkanDevice();

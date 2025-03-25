@@ -10,7 +10,7 @@
 #include <string.h>
 //#define MNN_VULKAN_PRINT_EXT
 namespace MNN {
-VulkanDevice::VulkanDevice(std::shared_ptr<VulkanInstance> instance, const std::vector<const char*>& device_extensions)
+VulkanDevice::VulkanDevice(std::shared_ptr<VulkanInstance> instance, const std::vector<const char*>& device_extensions, float queuePriority )
     : mOwner(true),
       mInstance(instance),
       mQueueFamilyIndex(0),
@@ -53,7 +53,7 @@ VulkanDevice::VulkanDevice(std::shared_ptr<VulkanInstance> instance, const std::
 
     // Create a logical device (vulkan device)
     float priorities[] = {
-        1.0f,
+        queuePriority,
     };
     VkDeviceQueueCreateInfo queueCreateInfo{
         /* .sType            = */ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,

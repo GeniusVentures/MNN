@@ -37,6 +37,9 @@ float VulkanRuntime::onGetMemoryInMB() {
 
 VulkanRuntime::VulkanRuntime(const Backend::Info& info) {
     mInfo = info;
+    if (info.user != nullptr) {
+        queuePriority = info.user->queuePriority;
+    }    
     MNNVulkanContext* context = nullptr;
     if (nullptr != info.user && nullptr != info.user->sharedContext) {
        MNN_PRINT("Use user's vulkan context\n");
@@ -48,7 +51,7 @@ VulkanRuntime::VulkanRuntime(const Backend::Info& info) {
                                                  context->iQueueFamilyIndex, context->pQueue);
     } else {
         mInstance = std::make_shared<VulkanInstance>();
-        mDevice   = std::make_shared<VulkanDevice>(mInstance);
+        mDevice   = std::make_shared<VulkanDevice>(mInstance,std::vector<const char*>{},queuePriority);
     }
     auto& dev              = *mDevice;
     mCmdPool               = std::make_shared<VulkanCommandPool>(dev);

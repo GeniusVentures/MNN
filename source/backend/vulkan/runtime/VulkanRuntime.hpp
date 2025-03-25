@@ -50,6 +50,7 @@ private:
     int mUniformSize = 512;
     int mCacheUniformLimitSize = 1024;
     float mFlops = 0.0f;
+    float queuePriority = 1.0f;
     friend class VulkanBackend;
     GPUType mGpuType = OTHER;
 };
