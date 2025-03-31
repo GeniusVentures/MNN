@@ -591,6 +591,7 @@ ENDIF()
 
 # Vulkan
 IF(MNN_VULKAN)
+  add_definitions(-DMNN_VULKAN_BACKEND_ENABLED)
   add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/source/backend/vulkan/)
   IF(MNN_SEP_BUILD)
     list(APPEND MNN_DEPS MNN_Vulkan)
