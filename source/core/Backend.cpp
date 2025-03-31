@@ -45,6 +45,9 @@ extern void registerCoreMLRuntimeCreator();
 #if MNN_NNAPI_ENABLED
 extern void registerNNAPIRuntimeCreator();
 #endif
+#if MNN_VULKAN_BACKEND_ENABLED
+extern void registerCoreVulkanRuntimeCreator();
+#endif
 
 static std::once_flag s_flag;
 void registerBackend() {
@@ -68,6 +71,9 @@ void registerBackend() {
 #endif
 #if MNN_METAL_ENABLED
         registerMetalRuntimeCreator();
+#endif
+#if MNN_VULKAN_BACKEND_ENABLED
+        registerCoreVulkanRuntimeCreator();
 #endif
         auto& gExtraCreator = GetExtraCreator();
         for(auto iter = gExtraCreator.begin(); iter != gExtraCreator.end();){

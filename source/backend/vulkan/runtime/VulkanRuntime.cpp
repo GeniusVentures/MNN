@@ -205,4 +205,11 @@ static bool gResistor = []() {
     MNNInsertExtraRuntimeCreator(MNN_FORWARD_VULKAN, new VulkanRuntimeCreator, true);
     return false;
 }();
+
+void registerCoreVulkanRuntimeCreator()
+{
+    VulkanRuntimeCreator temp;
+    (void) temp;
+}
+
 }
