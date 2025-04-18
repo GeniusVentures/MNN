@@ -48,6 +48,7 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
     __private const int output_width,
     __private const int output_height,
     __private const int output_channel,
+    __private const int batch,
     __private const int x_blocks,
     __private const int input_pad_left, 
     __private const int input_pad_right,
@@ -82,10 +83,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
     const uint output_x_pitch = 4;
     const uint output_y_pitch = output_x_pitch * output_width;
     const uint output_fs_pitch = output_y_pitch * output_height;
-    const uint output_b_pitch = output_fs_pitch *  ((output_channel + 3) / 4);
+    const uint output_b_pitch = output_fs_pitch * batch;
 
-    const uint output_offset = b * output_b_pitch +
-                               (feature_block << 2) * output_fs_pitch +
+    const uint output_offset = b * output_fs_pitch +
+                               (feature_block << 2) * output_b_pitch +
                                y * output_y_pitch +
                                x * output_x_pitch;
 
@@ -98,19 +99,19 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
     const uint filter_offset = feature_block * filter_os_pitch;
 
 #if SLM_DIV_FACTOR == 1
-    FLOAT2 dst = (FLOAT2)(GROUP_READ(biases, feature_block * 16));
+    COMPUTE_FLOAT2 dst = (COMPUTE_FLOAT2)((GROUP_READ(biases, feature_block * 16)));
 #else
-    FLOAT2 dst;
+    COMPUTE_FLOAT2 dst;
 
     if (feature_sub_block == 0) {
-        dst = (FLOAT2)(GROUP_READ(biases, feature_block * 16));
+        dst = (COMPUTE_FLOAT2)((GROUP_READ(biases, feature_block * 16)));
     } else {
-        dst = (FLOAT2)0;
+        dst = (COMPUTE_FLOAT2)0;
     }
 #endif 
 
 #if SLM_DIV_FACTOR > 1
-    __local FLOAT2 sum[WORK_GROUP_SIZE];
+    __local COMPUTE_FLOAT2 sum[WORK_GROUP_SIZE];
 #endif
 
 
@@ -129,10 +130,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
                 {
                     int xb = 0;
                     for (; xb + 8 <= INPUT_LINE_SIZE; xb += 8) {
-                        FLOAT8 tmp = GROUP_READ8(input, input_offset +
+                        COMPUTE_FLOAT8 tmp = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -144,10 +145,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
                         line_cache[xb + 7] = tmp[7];
                     }
                     for (; xb + 4 <= INPUT_LINE_SIZE; xb += 4) {
-                        FLOAT4 tmp = GROUP_READ4(input, input_offset +
+                        COMPUTE_FLOAT4 tmp = CONVERT_COMPUTE_FLOAT4(GROUP_READ4(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -173,31 +174,31 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
                         src[i] = line_cache[kw * DILATION_WIDTH + STRIDE_WIDTH * i];
 #endif
                     }
-                    FLOAT8 weight0 = GROUP_READ8(weights, filter_offset +
+                    COMPUTE_FLOAT8 weight0 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
-                                                                    kw * filter_x_pitch);
-                    FLOAT8 weight1 = GROUP_READ8(weights, filter_offset +
+                                                                    kw * filter_x_pitch));
+                    COMPUTE_FLOAT8 weight1 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
                                                                     kw * filter_x_pitch +
-                                                                    8 * filter_isv_pitch);
-                    const FLOAT2 src0  = GROUP_SHUFFLE2(src, 0);
-                    const FLOAT2 src1  = GROUP_SHUFFLE2(src, 1);
-                    const FLOAT2 src2  = GROUP_SHUFFLE2(src, 2);
-                    const FLOAT2 src3  = GROUP_SHUFFLE2(src, 3);
-                    const FLOAT2 src4  = GROUP_SHUFFLE2(src, 4);
-                    const FLOAT2 src5  = GROUP_SHUFFLE2(src, 5);
-                    const FLOAT2 src6  = GROUP_SHUFFLE2(src, 6);
-                    const FLOAT2 src7  = GROUP_SHUFFLE2(src, 7);
-                    const FLOAT2 src8  = GROUP_SHUFFLE2(src, 8);
-                    const FLOAT2 src9  = GROUP_SHUFFLE2(src, 9);
-                    const FLOAT2 src10 = GROUP_SHUFFLE2(src, 10);
-                    const FLOAT2 src11 = GROUP_SHUFFLE2(src, 11);
-                    const FLOAT2 src12 = GROUP_SHUFFLE2(src, 12);
-                    const FLOAT2 src13 = GROUP_SHUFFLE2(src, 13);
-                    const FLOAT2 src14 = GROUP_SHUFFLE2(src, 14);
-                    const FLOAT2 src15 = GROUP_SHUFFLE2(src, 15);
+                                                                    8 * filter_isv_pitch));
+                    const COMPUTE_FLOAT2 src0  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 0));
+                    const COMPUTE_FLOAT2 src1  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 1));
+                    const COMPUTE_FLOAT2 src2  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 2));
+                    const COMPUTE_FLOAT2 src3  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 3));
+                    const COMPUTE_FLOAT2 src4  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 4));
+                    const COMPUTE_FLOAT2 src5  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 5));
+                    const COMPUTE_FLOAT2 src6  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 6));
+                    const COMPUTE_FLOAT2 src7  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 7));
+                    const COMPUTE_FLOAT2 src8  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 8));
+                    const COMPUTE_FLOAT2 src9  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 9));
+                    const COMPUTE_FLOAT2 src10 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 10));
+                    const COMPUTE_FLOAT2 src11 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 11));
+                    const COMPUTE_FLOAT2 src12 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 12));
+                    const COMPUTE_FLOAT2 src13 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 13));
+                    const COMPUTE_FLOAT2 src14 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 14));
+                    const COMPUTE_FLOAT2 src15 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 15));
 
                     dst = mad(weight0.s0, src0,  dst);
                     dst = mad(weight0.s1, src1,  dst);
@@ -229,11 +230,11 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
 #endif
 
 #ifdef RELU
-    dst = fmax(dst, (FLOAT2)0);
+    dst = fmax(dst, (COMPUTE_FLOAT2)0);
 #endif
 
 #ifdef RELU6
-    dst = clamp(dst, (FLOAT2)0, (FLOAT2)6);
+    dst = clamp(dst, (COMPUTE_FLOAT2)0, (COMPUTE_FLOAT2)6);
 #endif
 
     const uint lid_x = sglid % 4;
@@ -242,13 +243,13 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b2(
     if ((feature_block+1)*16 >= output_channel) {
         for (int i = 0; i < 2 && (x + i) < output_width; i++) {
             if ((feature_block*16 + lid_y * 4 + lid_x < output_channel))
-                output[output_offset + lid_y * output_fs_pitch + i * output_x_pitch + lid_x] = dst[i];
+                output[output_offset + lid_y * output_b_pitch + i * output_x_pitch + lid_x] = (FLOAT)dst[i];
         }
     }
     else
     {
         for (int i = 0; i < 2 && (x + i) < output_width; i++) {
-            output[output_offset + lid_y * output_fs_pitch + i * output_x_pitch + lid_x] = dst[i];
+            output[output_offset + lid_y * output_b_pitch + i * output_x_pitch + lid_x] = (FLOAT)dst[i];
         }
     }
 #if SLM_DIV_FACTOR > 1
@@ -269,6 +270,7 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
     __private const int output_width,
     __private const int output_height,
     __private const int output_channel,
+    __private const int batch,
     __private const int x_blocks,
     __private const int input_pad_left, 
     __private const int input_pad_right,
@@ -303,10 +305,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
     const uint output_x_pitch = 4;
     const uint output_y_pitch = output_x_pitch * output_width;
     const uint output_fs_pitch = output_y_pitch * output_height;
-    const uint output_b_pitch = output_fs_pitch *  ((output_channel + 3) / 4);
+    const uint output_b_pitch = output_fs_pitch * batch;
 
-    const uint output_offset = b * output_b_pitch +
-                               (feature_block << 2) * output_fs_pitch +
+    const uint output_offset = b * output_fs_pitch +
+                               (feature_block << 2) * output_b_pitch +
                                y * output_y_pitch +
                                x * output_x_pitch;
 
@@ -319,19 +321,19 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
     const uint filter_offset = feature_block * filter_os_pitch;
 
 #if SLM_DIV_FACTOR == 1
-    FLOAT4 dst = (FLOAT4)(GROUP_READ(biases, feature_block * 16));
+    COMPUTE_FLOAT4 dst = (COMPUTE_FLOAT4)((GROUP_READ(biases, feature_block * 16)));
 #else
-    FLOAT4 dst;
+    COMPUTE_FLOAT4 dst;
 
     if (feature_sub_block == 0) {
-        dst = (FLOAT4)(GROUP_READ(biases, feature_block * 16));
+        dst = (COMPUTE_FLOAT4)((GROUP_READ(biases, feature_block * 16)));
     } else {
-        dst = (FLOAT4)0;
+        dst = (COMPUTE_FLOAT4)0;
     }
 #endif 
 
 #if SLM_DIV_FACTOR > 1
-    __local FLOAT4 sum[WORK_GROUP_SIZE];
+    __local COMPUTE_FLOAT4 sum[WORK_GROUP_SIZE];
 #endif
 
 
@@ -350,10 +352,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
                 {
                     int xb = 0;
                     for (; xb + 8 <= INPUT_LINE_SIZE; xb += 8) {
-                        FLOAT8 tmp = GROUP_READ8(input, input_offset +
+                        COMPUTE_FLOAT8 tmp = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -365,10 +367,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
                         line_cache[xb + 7] = tmp[7];
                     }
                     for (; xb + 4 <= INPUT_LINE_SIZE; xb += 4) {
-                        FLOAT4 tmp = GROUP_READ4(input, input_offset +
+                        COMPUTE_FLOAT4 tmp = CONVERT_COMPUTE_FLOAT4(GROUP_READ4(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -376,7 +378,7 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
                         line_cache[xb + 3] = tmp[3];
                     }
                     for (; xb < INPUT_LINE_SIZE; xb++) {
-                        line_cache[xb] = GROUP_READ(input, input_offset +
+                        line_cache[xb] = (COMPUTE_FLOAT)GROUP_READ(input, input_offset +
                                                              icb * input_fs_pitch +
                                                              kh * DILATION_HEIGHT * input_y_pitch +
                                                              xb * input_x_pitch);
@@ -394,31 +396,31 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
                         src[i] = line_cache[kw * DILATION_WIDTH + STRIDE_WIDTH * i];
 #endif
                     }
-                    FLOAT8 weight0 = GROUP_READ8(weights, filter_offset +
+                    COMPUTE_FLOAT8 weight0 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
-                                                                    kw * filter_x_pitch);
-                    FLOAT8 weight1 = GROUP_READ8(weights, filter_offset +
+                                                                    kw * filter_x_pitch));
+                    COMPUTE_FLOAT8 weight1 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
                                                                     kw * filter_x_pitch +
-                                                                    8 * filter_isv_pitch);
-                    const FLOAT4 src0  = GROUP_SHUFFLE4(src, 0);
-                    const FLOAT4 src1  = GROUP_SHUFFLE4(src, 1);
-                    const FLOAT4 src2  = GROUP_SHUFFLE4(src, 2);
-                    const FLOAT4 src3  = GROUP_SHUFFLE4(src, 3);
-                    const FLOAT4 src4  = GROUP_SHUFFLE4(src, 4);
-                    const FLOAT4 src5  = GROUP_SHUFFLE4(src, 5);
-                    const FLOAT4 src6  = GROUP_SHUFFLE4(src, 6);
-                    const FLOAT4 src7  = GROUP_SHUFFLE4(src, 7);
-                    const FLOAT4 src8  = GROUP_SHUFFLE4(src, 8);
-                    const FLOAT4 src9  = GROUP_SHUFFLE4(src, 9);
-                    const FLOAT4 src10 = GROUP_SHUFFLE4(src, 10);
-                    const FLOAT4 src11 = GROUP_SHUFFLE4(src, 11);
-                    const FLOAT4 src12 = GROUP_SHUFFLE4(src, 12);
-                    const FLOAT4 src13 = GROUP_SHUFFLE4(src, 13);
-                    const FLOAT4 src14 = GROUP_SHUFFLE4(src, 14);
-                    const FLOAT4 src15 = GROUP_SHUFFLE4(src, 15);
+                                                                    8 * filter_isv_pitch));
+                    const COMPUTE_FLOAT4 src0  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 0));
+                    const COMPUTE_FLOAT4 src1  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 1));
+                    const COMPUTE_FLOAT4 src2  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 2));
+                    const COMPUTE_FLOAT4 src3  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 3));
+                    const COMPUTE_FLOAT4 src4  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 4));
+                    const COMPUTE_FLOAT4 src5  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 5));
+                    const COMPUTE_FLOAT4 src6  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 6));
+                    const COMPUTE_FLOAT4 src7  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 7));
+                    const COMPUTE_FLOAT4 src8  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 8));
+                    const COMPUTE_FLOAT4 src9  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 9));
+                    const COMPUTE_FLOAT4 src10 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 10));
+                    const COMPUTE_FLOAT4 src11 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 11));
+                    const COMPUTE_FLOAT4 src12 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 12));
+                    const COMPUTE_FLOAT4 src13 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 13));
+                    const COMPUTE_FLOAT4 src14 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 14));
+                    const COMPUTE_FLOAT4 src15 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 15));
 
                     dst = mad(weight0.s0, src0,  dst);
                     dst = mad(weight0.s1, src1,  dst);
@@ -450,11 +452,11 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
 #endif
 
 #ifdef RELU
-    dst = fmax(dst, (FLOAT4)0);
+    dst = fmax(dst, (COMPUTE_FLOAT4)0);
 #endif
 
 #ifdef RELU6
-    dst = clamp(dst, (FLOAT4)0, (FLOAT4)6);
+    dst = clamp(dst, (COMPUTE_FLOAT4)0, (COMPUTE_FLOAT4)6);
 #endif
 
     const uint lid_x = sglid % 4;
@@ -463,13 +465,13 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b4(
     if ((feature_block+1)*16 >= output_channel) {
         for (int i = 0; i < 4 && (x + i) < output_width; i++) {
             if ((feature_block*16 + lid_y * 4 + lid_x < output_channel))
-                output[output_offset + lid_y * output_fs_pitch + i * output_x_pitch + lid_x] = dst[i];
+                output[output_offset + lid_y * output_b_pitch + i * output_x_pitch + lid_x] = (FLOAT)dst[i];
         }
     }
     else
     {
         for (int i = 0; i < 4 && (x + i) < output_width; i++) {
-            output[output_offset + lid_y * output_fs_pitch + i * output_x_pitch + lid_x] = dst[i];
+            output[output_offset + lid_y * output_b_pitch + i * output_x_pitch + lid_x] = (FLOAT)dst[i];
         }
     }
 #if SLM_DIV_FACTOR > 1
@@ -490,6 +492,7 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
     __private const int output_width,
     __private const int output_height,
     __private const int output_channel,
+    __private const int batch,
     __private const int x_blocks,
     __private const int input_pad_left, 
     __private const int input_pad_right,
@@ -524,10 +527,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
     const uint output_x_pitch = 4;
     const uint output_y_pitch = output_x_pitch * output_width;
     const uint output_fs_pitch = output_y_pitch * output_height;
-    const uint output_b_pitch = output_fs_pitch *  ((output_channel + 3) / 4);
+    const uint output_b_pitch = output_fs_pitch * batch;
 
-    const uint output_offset = b * output_b_pitch +
-                               (feature_block << 2) * output_fs_pitch +
+    const uint output_offset = b * output_fs_pitch +
+                               (feature_block << 2) * output_b_pitch +
                                y * output_y_pitch +
                                x * output_x_pitch;
 
@@ -540,19 +543,19 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
     const uint filter_offset = feature_block * filter_os_pitch;
 
 #if SLM_DIV_FACTOR == 1
-    FLOAT8 dst = (FLOAT8)(GROUP_READ(biases, feature_block * 16));
+    COMPUTE_FLOAT8 dst = (COMPUTE_FLOAT8)(GROUP_READ(biases, feature_block * 16));
 #else
-    FLOAT8 dst;
+    COMPUTE_FLOAT8 dst;
 
     if (feature_sub_block == 0) {
-        dst = (FLOAT8)(GROUP_READ(biases, feature_block * 16));
+        dst = (COMPUTE_FLOAT8)(GROUP_READ(biases, feature_block * 16));
     } else {
-        dst = (FLOAT8)0;
+        dst = (COMPUTE_FLOAT8)0;
     }
 #endif 
 
 #if SLM_DIV_FACTOR > 1
-    __local FLOAT8 sum[WORK_GROUP_SIZE];
+    __local COMPUTE_FLOAT8 sum[WORK_GROUP_SIZE];
 #endif
 
 
@@ -571,10 +574,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
                 {
                     int xb = 0;
                     for (; xb + 8 <= INPUT_LINE_SIZE; xb += 8) {
-                        FLOAT8 tmp = GROUP_READ8(input, input_offset +
+                        COMPUTE_FLOAT8 tmp = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -586,10 +589,10 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
                         line_cache[xb + 7] = tmp[7];
                     }
                     for (; xb + 4 <= INPUT_LINE_SIZE; xb += 4) {
-                        FLOAT4 tmp = GROUP_READ4(input, input_offset +
+                        COMPUTE_FLOAT4 tmp = CONVERT_COMPUTE_FLOAT4(GROUP_READ4(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -597,7 +600,7 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
                         line_cache[xb + 3] = tmp[3];
                     }
                     for (; xb < INPUT_LINE_SIZE; xb++) {
-                        line_cache[xb] = GROUP_READ(input, input_offset +
+                        line_cache[xb] = (COMPUTE_FLOAT)GROUP_READ(input, input_offset +
                                                              icb * input_fs_pitch +
                                                              kh * DILATION_HEIGHT * input_y_pitch +
                                                              xb * input_x_pitch);
@@ -615,31 +618,31 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
                         src[i] = line_cache[kw * DILATION_WIDTH + STRIDE_WIDTH * i];
 #endif
                     }
-                    FLOAT8 weight0 = GROUP_READ8(weights, filter_offset +
+                    COMPUTE_FLOAT8 weight0 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
-                                                                    kw * filter_x_pitch);
-                    FLOAT8 weight1 = GROUP_READ8(weights, filter_offset +
+                                                                    kw * filter_x_pitch));
+                    COMPUTE_FLOAT8 weight1 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
                                                                     kw * filter_x_pitch +
-                                                                    8 * filter_isv_pitch);
-                    const FLOAT8 src0  = GROUP_SHUFFLE8(src, 0);
-                    const FLOAT8 src1  = GROUP_SHUFFLE8(src, 1);
-                    const FLOAT8 src2  = GROUP_SHUFFLE8(src, 2);
-                    const FLOAT8 src3  = GROUP_SHUFFLE8(src, 3);
-                    const FLOAT8 src4  = GROUP_SHUFFLE8(src, 4);
-                    const FLOAT8 src5  = GROUP_SHUFFLE8(src, 5);
-                    const FLOAT8 src6  = GROUP_SHUFFLE8(src, 6);
-                    const FLOAT8 src7  = GROUP_SHUFFLE8(src, 7);
-                    const FLOAT8 src8  = GROUP_SHUFFLE8(src, 8);
-                    const FLOAT8 src9  = GROUP_SHUFFLE8(src, 9);
-                    const FLOAT8 src10 = GROUP_SHUFFLE8(src, 10);
-                    const FLOAT8 src11 = GROUP_SHUFFLE8(src, 11);
-                    const FLOAT8 src12 = GROUP_SHUFFLE8(src, 12);
-                    const FLOAT8 src13 = GROUP_SHUFFLE8(src, 13);
-                    const FLOAT8 src14 = GROUP_SHUFFLE8(src, 14);
-                    const FLOAT8 src15 = GROUP_SHUFFLE8(src, 15);
+                                                                    8 * filter_isv_pitch));
+                    const COMPUTE_FLOAT8 src0  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 0));
+                    const COMPUTE_FLOAT8 src1  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 1));
+                    const COMPUTE_FLOAT8 src2  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 2));
+                    const COMPUTE_FLOAT8 src3  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 3));
+                    const COMPUTE_FLOAT8 src4  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 4));
+                    const COMPUTE_FLOAT8 src5  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 5));
+                    const COMPUTE_FLOAT8 src6  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 6));
+                    const COMPUTE_FLOAT8 src7  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 7));
+                    const COMPUTE_FLOAT8 src8  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 8));
+                    const COMPUTE_FLOAT8 src9  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 9));
+                    const COMPUTE_FLOAT8 src10 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 10));
+                    const COMPUTE_FLOAT8 src11 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 11));
+                    const COMPUTE_FLOAT8 src12 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 12));
+                    const COMPUTE_FLOAT8 src13 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 13));
+                    const COMPUTE_FLOAT8 src14 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 14));
+                    const COMPUTE_FLOAT8 src15 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 15));
 
                     dst = mad(weight0.s0, src0,  dst);
                     dst = mad(weight0.s1, src1,  dst);
@@ -671,11 +674,11 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
 #endif
 
 #ifdef RELU
-    dst = fmax(dst, (FLOAT8)0);
+    dst = fmax(dst, (COMPUTE_FLOAT8)0);
 #endif
 
 #ifdef RELU6
-    dst = clamp(dst, (FLOAT8)0, (FLOAT8)6);
+    dst = clamp(dst, (COMPUTE_FLOAT8)0, (COMPUTE_FLOAT8)6);
 #endif
 
     const uint lid_x = sglid % 4;
@@ -684,13 +687,13 @@ __kernel void conv_2d_buf_subgroup_c16_c4_b8(
     if ((feature_block+1)*16 >= output_channel) {
         for (int i = 0; i < 8 && (x + i) < output_width; i++) {
             if ((feature_block*16 + lid_y * 4 + lid_x < output_channel))
-                output[output_offset + lid_y * output_fs_pitch + i * output_x_pitch + lid_x] = dst[i];
+                output[output_offset + lid_y * output_b_pitch + i * output_x_pitch + lid_x] = (FLOAT)dst[i];
         }
     }
     else
     {
         for (int i = 0; i < 8 && (x + i) < output_width; i++) {
-            output[output_offset + lid_y * output_fs_pitch + i * output_x_pitch + lid_x] = dst[i];
+            output[output_offset + lid_y * output_b_pitch + i * output_x_pitch + lid_x] = (FLOAT)dst[i];
         }
     }
 #if SLM_DIV_FACTOR > 1
@@ -711,6 +714,7 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
     __private const int output_width,
     __private const int output_height,
     __private const int output_channel,
+    __private const int batch,
     __private const int x_blocks,
     __private const int input_pad_left, 
     __private const int input_pad_right,
@@ -761,19 +765,19 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
     const uint filter_offset = feature_block * filter_os_pitch;
 
 #if SLM_DIV_FACTOR == 1
-    FLOAT2 dst = (FLOAT2)(GROUP_READ(biases, feature_block * 16));
+    COMPUTE_FLOAT2 dst = (COMPUTE_FLOAT2)(GROUP_READ(biases, feature_block * 16));
 #else
-    FLOAT2 dst;
+    COMPUTE_FLOAT2 dst;
 
     if (feature_sub_block == 0) {
-        dst = (FLOAT2)(GROUP_READ(biases, feature_block * 16));
+        dst = (COMPUTE_FLOAT2)(GROUP_READ(biases, feature_block * 16));
     } else {
-        dst = (FLOAT2)0;
+        dst = (COMPUTE_FLOAT2)0;
     }
 #endif 
 
 #if SLM_DIV_FACTOR > 1
-    __local FLOAT2 sum[WORK_GROUP_SIZE];
+    __local COMPUTE_FLOAT2 sum[WORK_GROUP_SIZE];
 #endif
 
 
@@ -792,10 +796,10 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
                 {
                     int xb = 0;
                     for (; xb + 8 <= INPUT_LINE_SIZE; xb += 8) {
-                        FLOAT8 tmp = GROUP_READ8(input, input_offset +
+                        COMPUTE_FLOAT8 tmp = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -807,10 +811,10 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
                         line_cache[xb + 7] = tmp[7];
                     }
                     for (; xb + 4 <= INPUT_LINE_SIZE; xb += 4) {
-                        FLOAT4 tmp = GROUP_READ4(input, input_offset +
+                        COMPUTE_FLOAT4 tmp = CONVERT_COMPUTE_FLOAT4(GROUP_READ4(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -818,7 +822,7 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
                         line_cache[xb + 3] = tmp[3];
                     }
                     for (; xb < INPUT_LINE_SIZE; xb++) {
-                        line_cache[xb] = GROUP_READ(input, input_offset +
+                        line_cache[xb] = (COMPUTE_FLOAT)GROUP_READ(input, input_offset +
                                                              icb * input_fs_pitch +
                                                              kh * DILATION_HEIGHT * input_y_pitch +
                                                              xb * input_x_pitch);
@@ -836,31 +840,31 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
                         src[i] = line_cache[kw * DILATION_WIDTH + STRIDE_WIDTH * i];
 #endif
                     }
-                    FLOAT8 weight0 = GROUP_READ8(weights, filter_offset +
+                    COMPUTE_FLOAT8 weight0 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
-                                                                    kw * filter_x_pitch);
-                    FLOAT8 weight1 = GROUP_READ8(weights, filter_offset +
+                                                                    kw * filter_x_pitch));
+                    COMPUTE_FLOAT8 weight1 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
                                                                     kw * filter_x_pitch +
-                                                                    8 * filter_isv_pitch);
-                    const FLOAT2 src0  = GROUP_SHUFFLE2(src, 0);
-                    const FLOAT2 src1  = GROUP_SHUFFLE2(src, 1);
-                    const FLOAT2 src2  = GROUP_SHUFFLE2(src, 2);
-                    const FLOAT2 src3  = GROUP_SHUFFLE2(src, 3);
-                    const FLOAT2 src4  = GROUP_SHUFFLE2(src, 4);
-                    const FLOAT2 src5  = GROUP_SHUFFLE2(src, 5);
-                    const FLOAT2 src6  = GROUP_SHUFFLE2(src, 6);
-                    const FLOAT2 src7  = GROUP_SHUFFLE2(src, 7);
-                    const FLOAT2 src8  = GROUP_SHUFFLE2(src, 8);
-                    const FLOAT2 src9  = GROUP_SHUFFLE2(src, 9);
-                    const FLOAT2 src10 = GROUP_SHUFFLE2(src, 10);
-                    const FLOAT2 src11 = GROUP_SHUFFLE2(src, 11);
-                    const FLOAT2 src12 = GROUP_SHUFFLE2(src, 12);
-                    const FLOAT2 src13 = GROUP_SHUFFLE2(src, 13);
-                    const FLOAT2 src14 = GROUP_SHUFFLE2(src, 14);
-                    const FLOAT2 src15 = GROUP_SHUFFLE2(src, 15);
+                                                                    8 * filter_isv_pitch));
+                    const COMPUTE_FLOAT2 src0  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 0));
+                    const COMPUTE_FLOAT2 src1  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 1));
+                    const COMPUTE_FLOAT2 src2  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 2));
+                    const COMPUTE_FLOAT2 src3  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 3));
+                    const COMPUTE_FLOAT2 src4  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 4));
+                    const COMPUTE_FLOAT2 src5  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 5));
+                    const COMPUTE_FLOAT2 src6  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 6));
+                    const COMPUTE_FLOAT2 src7  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 7));
+                    const COMPUTE_FLOAT2 src8  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 8));
+                    const COMPUTE_FLOAT2 src9  = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 9));
+                    const COMPUTE_FLOAT2 src10 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 10));
+                    const COMPUTE_FLOAT2 src11 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 11));
+                    const COMPUTE_FLOAT2 src12 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 12));
+                    const COMPUTE_FLOAT2 src13 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 13));
+                    const COMPUTE_FLOAT2 src14 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 14));
+                    const COMPUTE_FLOAT2 src15 = CONVERT_COMPUTE_FLOAT2(GROUP_SHUFFLE2(src, 15));
 
                     dst = mad(weight0.s0, src0,  dst);
                     dst = mad(weight0.s1, src1,  dst);
@@ -903,26 +907,26 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b2(
 #endif
 
 #ifdef RELU
-    dst = fmax(dst, (FLOAT2)0);
+    dst = fmax(dst, (COMPUTE_FLOAT2)0);
 #endif
 
 #ifdef RELU6
-    dst = clamp(dst, (FLOAT2)0, (FLOAT2)6);
+    dst = clamp(dst, (COMPUTE_FLOAT2)0, (COMPUTE_FLOAT2)6);
 #endif
 
     if ((feature_block+1)*16 >= output_channel) {
         for (int i = 0; i < 2; i++) {
             if ((feature_block*16 + sglid < output_channel) && (x + i) < output_width)
-                output[output_offset + i * output_x_pitch + sglid] = dst[i];
+                output[output_offset + i * output_x_pitch + sglid] = (FLOAT)dst[i];
         }
     }
     else
     {
         if (x + 2 <= output_width || output_width % 2 == 0) {
-            GROUP_WRITE2(output, output_offset, dst);
+            GROUP_WRITE2(output, output_offset, CONVERT_FLOAT2(dst));
         }else{
             for (int i = 0; i < output_width % 2; i++) {
-                output[output_offset + i * output_x_pitch + sglid] = dst[i];
+                output[output_offset + i * output_x_pitch + sglid] = (FLOAT)dst[i];
             }
         }
     }
@@ -944,6 +948,7 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
     __private const int output_width,
     __private const int output_height,
     __private const int output_channel,
+    __private const int batch,
     __private const int x_blocks,
     __private const int input_pad_left, 
     __private const int input_pad_right,
@@ -994,19 +999,19 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
     const uint filter_offset = feature_block * filter_os_pitch;
 
 #if SLM_DIV_FACTOR == 1
-    FLOAT4 dst = (FLOAT4)(GROUP_READ(biases, feature_block * 16));
+    COMPUTE_FLOAT4 dst = (COMPUTE_FLOAT4)(GROUP_READ(biases, feature_block * 16));
 #else
-    FLOAT4 dst;
+    COMPUTE_FLOAT4 dst;
 
     if (feature_sub_block == 0) {
-        dst = (FLOAT4)(GROUP_READ(biases, feature_block * 16));
+        dst = (COMPUTE_FLOAT4)(GROUP_READ(biases, feature_block * 16));
     } else {
-        dst = (FLOAT4)0;
+        dst = (COMPUTE_FLOAT4)0;
     }
 #endif 
 
 #if SLM_DIV_FACTOR > 1
-    __local FLOAT4 sum[WORK_GROUP_SIZE];
+    __local COMPUTE_FLOAT4 sum[WORK_GROUP_SIZE];
 #endif
 
 
@@ -1025,10 +1030,10 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
                 {
                     int xb = 0;
                     for (; xb + 8 <= INPUT_LINE_SIZE; xb += 8) {
-                        FLOAT8 tmp = GROUP_READ8(input, input_offset +
+                        COMPUTE_FLOAT8 tmp = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -1040,10 +1045,10 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
                         line_cache[xb + 7] = tmp[7];
                     }
                     for (; xb + 4 <= INPUT_LINE_SIZE; xb += 4) {
-                        FLOAT4 tmp = GROUP_READ4(input, input_offset +
+                        COMPUTE_FLOAT4 tmp = CONVERT_COMPUTE_FLOAT4(GROUP_READ4(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -1051,7 +1056,7 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
                         line_cache[xb + 3] = tmp[3];
                     }
                     for (; xb < INPUT_LINE_SIZE; xb++) {
-                        line_cache[xb] = GROUP_READ(input, input_offset +
+                        line_cache[xb] = (COMPUTE_FLOAT)GROUP_READ(input, input_offset +
                                                              icb * input_fs_pitch +
                                                              kh * DILATION_HEIGHT * input_y_pitch +
                                                              xb * input_x_pitch);
@@ -1069,31 +1074,31 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
                         src[i] = line_cache[kw * DILATION_WIDTH + STRIDE_WIDTH * i];
 #endif
                     }
-                    FLOAT8 weight0 = GROUP_READ8(weights, filter_offset +
+                    COMPUTE_FLOAT8 weight0 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
-                                                                    kw * filter_x_pitch);
-                    FLOAT8 weight1 = GROUP_READ8(weights, filter_offset +
+                                                                    kw * filter_x_pitch));
+                    COMPUTE_FLOAT8 weight1 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
                                                                     kw * filter_x_pitch +
-                                                                    8 * filter_isv_pitch);
-                    const FLOAT4 src0  = GROUP_SHUFFLE4(src, 0);
-                    const FLOAT4 src1  = GROUP_SHUFFLE4(src, 1);
-                    const FLOAT4 src2  = GROUP_SHUFFLE4(src, 2);
-                    const FLOAT4 src3  = GROUP_SHUFFLE4(src, 3);
-                    const FLOAT4 src4  = GROUP_SHUFFLE4(src, 4);
-                    const FLOAT4 src5  = GROUP_SHUFFLE4(src, 5);
-                    const FLOAT4 src6  = GROUP_SHUFFLE4(src, 6);
-                    const FLOAT4 src7  = GROUP_SHUFFLE4(src, 7);
-                    const FLOAT4 src8  = GROUP_SHUFFLE4(src, 8);
-                    const FLOAT4 src9  = GROUP_SHUFFLE4(src, 9);
-                    const FLOAT4 src10 = GROUP_SHUFFLE4(src, 10);
-                    const FLOAT4 src11 = GROUP_SHUFFLE4(src, 11);
-                    const FLOAT4 src12 = GROUP_SHUFFLE4(src, 12);
-                    const FLOAT4 src13 = GROUP_SHUFFLE4(src, 13);
-                    const FLOAT4 src14 = GROUP_SHUFFLE4(src, 14);
-                    const FLOAT4 src15 = GROUP_SHUFFLE4(src, 15);
+                                                                    8 * filter_isv_pitch));
+                    const COMPUTE_FLOAT4 src0  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 0));
+                    const COMPUTE_FLOAT4 src1  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 1));
+                    const COMPUTE_FLOAT4 src2  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 2));
+                    const COMPUTE_FLOAT4 src3  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 3));
+                    const COMPUTE_FLOAT4 src4  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 4));
+                    const COMPUTE_FLOAT4 src5  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 5));
+                    const COMPUTE_FLOAT4 src6  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 6));
+                    const COMPUTE_FLOAT4 src7  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 7));
+                    const COMPUTE_FLOAT4 src8  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 8));
+                    const COMPUTE_FLOAT4 src9  = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 9));
+                    const COMPUTE_FLOAT4 src10 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 10));
+                    const COMPUTE_FLOAT4 src11 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 11));
+                    const COMPUTE_FLOAT4 src12 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 12));
+                    const COMPUTE_FLOAT4 src13 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 13));
+                    const COMPUTE_FLOAT4 src14 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 14));
+                    const COMPUTE_FLOAT4 src15 = CONVERT_COMPUTE_FLOAT4(GROUP_SHUFFLE4(src, 15));
 
                     dst = mad(weight0.s0, src0,  dst);
                     dst = mad(weight0.s1, src1,  dst);
@@ -1136,26 +1141,26 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b4(
 #endif
 
 #ifdef RELU
-    dst = fmax(dst, (FLOAT4)0);
+    dst = fmax(dst, (COMPUTE_FLOAT4)0);
 #endif
 
 #ifdef RELU6
-    dst = clamp(dst, (FLOAT4)0, (FLOAT4)6);
+    dst = clamp(dst, (COMPUTE_FLOAT4)0, (COMPUTE_FLOAT4)6);
 #endif
 
     if ((feature_block+1)*16 >= output_channel) {
         for (int i = 0; i < 4; i++) {
             if ((feature_block*16 + sglid < output_channel) && (x + i) < output_width)
-                output[output_offset + i * output_x_pitch + sglid] = dst[i];
+                output[output_offset + i * output_x_pitch + sglid] = (FLOAT)dst[i];
         }
     }
     else
     {
         if (x + 4 <= output_width || output_width % 4 == 0) {
-            GROUP_WRITE4(output, output_offset, dst);
+            GROUP_WRITE4(output, output_offset, CONVERT_FLOAT4(dst));
         }else{
             for (int i = 0; i < output_width % 4; i++) {
-                output[output_offset + i * output_x_pitch + sglid] = dst[i];
+                output[output_offset + i * output_x_pitch + sglid] = (FLOAT)dst[i];
             }
         }
     }
@@ -1177,6 +1182,7 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
     __private const int output_width,
     __private const int output_height,
     __private const int output_channel,
+    __private const int batch,
     __private const int x_blocks,
     __private const int input_pad_left, 
     __private const int input_pad_right,
@@ -1227,19 +1233,19 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
     const uint filter_offset = feature_block * filter_os_pitch;
 
 #if SLM_DIV_FACTOR == 1
-    FLOAT8 dst = (FLOAT8)(GROUP_READ(biases, feature_block * 16));
+    COMPUTE_FLOAT8 dst = (COMPUTE_FLOAT8)(GROUP_READ(biases, feature_block * 16));
 #else
-    FLOAT8 dst;
+    COMPUTE_FLOAT8 dst;
 
     if (feature_sub_block == 0) {
-        dst = (FLOAT8)(GROUP_READ(biases, feature_block * 16));
+        dst = (COMPUTE_FLOAT8)(GROUP_READ(biases, feature_block * 16));
     } else {
-        dst = (FLOAT8)0;
+        dst = (COMPUTE_FLOAT8)0;
     }
 #endif 
 
 #if SLM_DIV_FACTOR > 1
-    __local FLOAT8 sum[WORK_GROUP_SIZE];
+    __local COMPUTE_FLOAT8 sum[WORK_GROUP_SIZE];
 #endif
 
 
@@ -1258,10 +1264,10 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
                 {
                     int xb = 0;
                     for (; xb + 8 <= INPUT_LINE_SIZE; xb += 8) {
-                        FLOAT8 tmp = GROUP_READ8(input, input_offset +
+                        COMPUTE_FLOAT8 tmp = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -1273,10 +1279,10 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
                         line_cache[xb + 7] = tmp[7];
                     }
                     for (; xb + 4 <= INPUT_LINE_SIZE; xb += 4) {
-                        FLOAT4 tmp = GROUP_READ4(input, input_offset +
+                        COMPUTE_FLOAT4 tmp = CONVERT_COMPUTE_FLOAT4(GROUP_READ4(input, input_offset +
                                                                   icb * input_fs_pitch +
                                                                   kh * DILATION_HEIGHT * input_y_pitch +
-                                                                  xb * input_x_pitch);
+                                                                  xb * input_x_pitch));
                     
                         line_cache[xb + 0] = tmp[0];
                         line_cache[xb + 1] = tmp[1];
@@ -1284,7 +1290,7 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
                         line_cache[xb + 3] = tmp[3];
                     }
                     for (; xb < INPUT_LINE_SIZE; xb++) {
-                        line_cache[xb] = GROUP_READ(input, input_offset +
+                        line_cache[xb] = (COMPUTE_FLOAT)GROUP_READ(input, input_offset +
                                                              icb * input_fs_pitch +
                                                              kh * DILATION_HEIGHT * input_y_pitch +
                                                              xb * input_x_pitch);
@@ -1302,31 +1308,31 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
                         src[i] = line_cache[kw * DILATION_WIDTH + STRIDE_WIDTH * i];
 #endif
                     }
-                    FLOAT8 weight0 = GROUP_READ8(weights, filter_offset +
+                    COMPUTE_FLOAT8 weight0 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
-                                                                    kw * filter_x_pitch);
-                    FLOAT8 weight1 = GROUP_READ8(weights, filter_offset +
+                                                                    kw * filter_x_pitch));
+                    COMPUTE_FLOAT8 weight1 = CONVERT_COMPUTE_FLOAT8(GROUP_READ8(weights, filter_offset +
                                                                     icb * filter_is_pitch +
                                                                     kh * filter_y_pitch +
                                                                     kw * filter_x_pitch +
-                                                                    8 * filter_isv_pitch);
-                    const FLOAT8 src0  = GROUP_SHUFFLE8(src, 0);
-                    const FLOAT8 src1  = GROUP_SHUFFLE8(src, 1);
-                    const FLOAT8 src2  = GROUP_SHUFFLE8(src, 2);
-                    const FLOAT8 src3  = GROUP_SHUFFLE8(src, 3);
-                    const FLOAT8 src4  = GROUP_SHUFFLE8(src, 4);
-                    const FLOAT8 src5  = GROUP_SHUFFLE8(src, 5);
-                    const FLOAT8 src6  = GROUP_SHUFFLE8(src, 6);
-                    const FLOAT8 src7  = GROUP_SHUFFLE8(src, 7);
-                    const FLOAT8 src8  = GROUP_SHUFFLE8(src, 8);
-                    const FLOAT8 src9  = GROUP_SHUFFLE8(src, 9);
-                    const FLOAT8 src10 = GROUP_SHUFFLE8(src, 10);
-                    const FLOAT8 src11 = GROUP_SHUFFLE8(src, 11);
-                    const FLOAT8 src12 = GROUP_SHUFFLE8(src, 12);
-                    const FLOAT8 src13 = GROUP_SHUFFLE8(src, 13);
-                    const FLOAT8 src14 = GROUP_SHUFFLE8(src, 14);
-                    const FLOAT8 src15 = GROUP_SHUFFLE8(src, 15);
+                                                                    8 * filter_isv_pitch));
+                    const COMPUTE_FLOAT8 src0  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 0));
+                    const COMPUTE_FLOAT8 src1  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 1));
+                    const COMPUTE_FLOAT8 src2  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 2));
+                    const COMPUTE_FLOAT8 src3  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 3));
+                    const COMPUTE_FLOAT8 src4  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 4));
+                    const COMPUTE_FLOAT8 src5  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 5));
+                    const COMPUTE_FLOAT8 src6  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 6));
+                    const COMPUTE_FLOAT8 src7  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 7));
+                    const COMPUTE_FLOAT8 src8  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 8));
+                    const COMPUTE_FLOAT8 src9  = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 9));
+                    const COMPUTE_FLOAT8 src10 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 10));
+                    const COMPUTE_FLOAT8 src11 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 11));
+                    const COMPUTE_FLOAT8 src12 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 12));
+                    const COMPUTE_FLOAT8 src13 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 13));
+                    const COMPUTE_FLOAT8 src14 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 14));
+                    const COMPUTE_FLOAT8 src15 = CONVERT_COMPUTE_FLOAT8(GROUP_SHUFFLE8(src, 15));
 
                     dst = mad(weight0.s0, src0,  dst);
                     dst = mad(weight0.s1, src1,  dst);
@@ -1369,11 +1375,11 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
 #endif
 
 #ifdef RELU
-    dst = fmax(dst, (FLOAT8)0);
+    dst = fmax(dst, (COMPUTE_FLOAT8)0);
 #endif
 
 #ifdef RELU6
-    dst = clamp(dst, (FLOAT8)0, (FLOAT8)6);
+    dst = clamp(dst, (COMPUTE_FLOAT8)0, (COMPUTE_FLOAT8)6);
 #endif
 
 
@@ -1381,16 +1387,16 @@ __kernel void conv_2d_buf_subgroup_c16_c16_b8(
     if ((feature_block+1)*16 >= output_channel) {
         for (int i = 0; i < 8; i++) {
             if ((feature_block*16 + sglid < output_channel) && (x + i) < output_width)
-                output[output_offset + i * output_x_pitch + sglid] = dst[i];
+                output[output_offset + i * output_x_pitch + sglid] = (FLOAT)dst[i];
         }
     }
     else
     {
         if (x + 8 <= output_width || output_width % 8 == 0) {
-            GROUP_WRITE8(output, output_offset, dst);
+            GROUP_WRITE8(output, output_offset, CONVERT_FLOAT8(dst));
         }else{
             for (int i = 0; i < output_width % 8; i++) {
-                output[output_offset + i * output_x_pitch + sglid] = dst[i];
+                output[output_offset + i * output_x_pitch + sglid] = (FLOAT)dst[i];
             }
         }
     }

@@ -20,16 +20,27 @@ class MetalConvolutionCommon : public MetalExecution {
 public:
     MetalConvolutionCommon(Backend *backend, const MNN::Op *op, std::shared_ptr<MNN::Tensor> bias);
     virtual ~MetalConvolutionCommon() = default;
-    virtual void onEncode(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs, id<MTLComputeCommandEncoder> encoder) override;
 
 protected:
-    void loadWeight(const MNN::Convolution2D *conv, bool loadWeightInt8 = false);
+    void loadWeight(const MNN::Op *op, bool loadWeightInt8 = false);
 
-    virtual void onFloat(const Tensor *input, const Tensor *output, id<MTLComputeCommandEncoder> encoder)     = 0;
     virtual std::shared_ptr<MNN::Tensor> weightTransform(int group, int oc, int ic, int kh, int kw, const float *src, bool int8Weight = false, bool int4Weight = false);
 
-private:
-
+protected:
+    struct Param {
+        int input_size;
+        int input_slice;
+        int output_width;
+        int output_height;
+        int output_size;
+        int output_slice;
+        int output_channel;
+        int batch;
+        int block_size;
+        int activation;
+        float scale_coef;
+    };
+    
 protected:
     int mKernelX        = 0;
     int mKernelY        = 0;
@@ -42,9 +53,9 @@ protected:
 
     std::shared_ptr<MNN::Tensor> mWeight;
     std::shared_ptr<MNN::Tensor> mBias;
-    std::shared_ptr<MNN::Tensor> mDequantScale;
-    std::shared_ptr<MNN::Tensor> mDequantZero;
+    std::shared_ptr<MNN::Tensor> mDequantScaleBias;
     int mDequantBits;
+    float mScaleCoef;
     id<MTLBuffer> mConstBuffer = nil;
 };
 

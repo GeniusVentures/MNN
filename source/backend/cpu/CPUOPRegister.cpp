@@ -34,6 +34,7 @@ extern void ___CPUROIAlignCreator__OpType_ROIAlign__();
 extern void ___CPUROIPoolingCreator__OpType_ROIPooling__();
 extern void ___CPUTopKV2Creator__OpType_TopKV2__();
 extern void ___CPUUnaryCreator__OpType_UnaryOp__();
+extern void ___CPUStftCreator__OpType_Stft__();
 extern void ___CPUReductionCreator__OpType_Reduction__();
 extern void ___CPUReluCreator__OpType_ReLU__();
 extern void ___CPUReluCreator__OpType_PReLU__();
@@ -75,6 +76,9 @@ extern void ___CPURasterAndInterpolateCreator__OpType_RasterAndInterpolate__();
 extern void ___CPURasterDiffCreator__OpType_RasterDiff__();
 extern void ___CPUTextureCreator__OpType_Texture__();
 #endif
+#ifdef MNN_SUPPORT_TRANSFORMER_FUSE
+extern void ___CPUAttentionCreator__OpType_Attention__();
+#endif
 void registerCPUOps() {
 ___CPUCropAndResizeCreator__OpType_CropAndResize__();
 ___CPUArgMaxCreator__OpType_ArgMax__();
@@ -110,6 +114,7 @@ ___CPUROIAlignCreator__OpType_ROIAlign__();
 ___CPUROIPoolingCreator__OpType_ROIPooling__();
 ___CPUTopKV2Creator__OpType_TopKV2__();
 ___CPUUnaryCreator__OpType_UnaryOp__();
+___CPUStftCreator__OpType_Stft__();
 ___CPUReductionCreator__OpType_Reduction__();
 ___CPUReluCreator__OpType_ReLU__();
 ___CPUReluCreator__OpType_PReLU__();
@@ -149,6 +154,9 @@ ___CPUExternalConstCreator__OpType_TrainableParam__();
 ___CPURasterAndInterpolateCreator__OpType_RasterAndInterpolate__();
 ___CPURasterDiffCreator__OpType_RasterDiff__();
 ___CPUTextureCreator__OpType_Texture__();
+#endif
+#ifdef MNN_SUPPORT_TRANSFORMER_FUSE
+___CPUAttentionCreator__OpType_Attention__();
 #endif
 }
 }

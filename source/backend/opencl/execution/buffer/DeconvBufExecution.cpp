@@ -35,7 +35,7 @@ DeconvBufExecution::DeconvBufExecution(const std::vector<Tensor *> &inputs, cons
     const float* filterDataPtr = nullptr;
     int weightSize = 0;
     std::shared_ptr<ConvolutionCommon::Int8Common> quanCommon;
-    ConvolutionCommon::getConvParameters(&quanCommon, backend, conv2dParams, &filterDataPtr, &weightSize);
+    ConvolutionCommon::getConvParameters(&quanCommon, backend, op, &filterDataPtr, &weightSize);
 
     int inputChannel  = weightSize / (kernelWidth * kernelHeight * outputChannel);
     std::vector<int> filterShape{outputChannel, inputChannel, kernelHeight, kernelWidth};
@@ -48,24 +48,13 @@ DeconvBufExecution::DeconvBufExecution(const std::vector<Tensor *> &inputs, cons
     std::shared_ptr<Tensor> filterBuffer(
         Tensor::createDevice<float>({outputChannel, inputChannel, kernelHeight, kernelWidth}));
         
-    int buffer_size = filterBuffer->elementSize();
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()) {
-        buffer_size *= sizeof(half_float::half);
-    } else {
-        buffer_size *= sizeof(float);
-    }
+    size_t buffer_size = filterBuffer->elementSize() * sizeof(float);
     cl::Buffer filterBufferCL(mOpenCLBackend->getOpenCLRuntime()->context(), CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, buffer_size);
     filterBuffer->buffer().device = (uint64_t)(&filterBufferCL);
     cl_int error;
     auto ptrCL = mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(filterBufferCL, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
     if(ptrCL != nullptr && error == CL_SUCCESS){
-        if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()){
-            for(int i=0; i<filterBuffer->elementSize(); i++) {
-                ((half_float::half*)ptrCL)[i] = (half_float::half)(filterDataPtrTransformed[i]);
-            }
-        }else{
-            ::memcpy(ptrCL, filterDataPtrTransformed.data(), filterBuffer->size());
-        }
+        ::memcpy(ptrCL, filterDataPtrTransformed.data(), filterBuffer->size());
     }else{
         MNN_ERROR("Map error ptrCL == nullptr \n");
     }
@@ -75,10 +64,7 @@ DeconvBufExecution::DeconvBufExecution(const std::vector<Tensor *> &inputs, cons
     mOpenCLBackend->onAcquireBuffer(mResource->mFilter.get(), Backend::STATIC);
     MNN::OpenCL::BufferConvertor bufferConvertor{mOpenCLBackend->getOpenCLRuntime()};
     
-    bool needTrans = false;
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf() == false){
-        needTrans = true;
-    }
+    bool needTrans = true;
     bufferConvertor.convertToNC4HW4Buffer(filterBuffer.get(), MNN::OpenCL::CONV2D_FILTER, mResource->mFilter.get(), needTrans);
     mResource->mBuildOptions.emplace("-DBIAS");
     if (conv2dCommonParams->relu() == true) {
@@ -167,6 +153,7 @@ ErrorCode DeconvBufExecution::onEncode(const std::vector<Tensor *> &inputs, cons
     unit.kernel->get().setArg(idx++, openCLBuffer(mResource->mFilter.get()));
     unit.kernel->get().setArg(idx++, openCLBuffer(mResource->mBias.get()));
     unit.kernel->get().setArg(idx++, openCLBuffer(output));
+    unit.kernel->get().setArg(idx++, static_cast<int32_t>(outputBatch));
     unit.kernel->get().setArg(idx++, sizeof(inputImageShape), inputImageShape);
     unit.kernel->get().setArg(idx++, sizeof(outputImageShape), outputImageShape);
     unit.kernel->get().setArg(idx++, sizeof(strideShape), strideShape);

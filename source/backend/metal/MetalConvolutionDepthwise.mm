@@ -15,7 +15,7 @@
 namespace MNN {
 MetalConvolutionDepthwise::MetalConvolutionDepthwise(Backend *backend, const MNN::Op *op)
     : MetalConvolutionCommon(backend, op, nullptr) {
-    loadWeight(op->main_as_Convolution2D());
+    loadWeight(op);
 }
 
 ErrorCode MetalConvolutionDepthwise::onResize(const std::vector<Tensor *> &inputs,
@@ -60,20 +60,26 @@ ErrorCode MetalConvolutionDepthwise::onResize(const std::vector<Tensor *> &input
     mConstBuffer = backend->getConstBuffer(sizeof(constants));
 
     ::memcpy(mConstBuffer.contents, constants, sizeof(constants));
-    
+
     auto context = (__bridge MNNMetalContext *)backend->context();
     mPipeline = [context pipelineWithName:@"conv_depthwise" fp16:backend->useFp16InsteadFp32()];
-            
+
     NSUInteger gid_x = ow;
     NSUInteger gid_y = oh;
     NSUInteger gid_z = oc_4*ob;
-            
+
     NSArray *arr = [NSArray arrayWithObjects:(id<MTLBuffer>)((MetalRuntimeAllocator::MetalBufferAlloc *)input->deviceId())->getBuffer(),
                     (id<MTLBuffer>)(((MetalRuntimeAllocator::MetalBufferAlloc *)output->deviceId()))->getBuffer(),
                     mConstBuffer, (id<MTLBuffer>)(((MetalRuntimeAllocator::MetalBufferAlloc *)mWeight->deviceId()))->getBuffer(), ((MetalRuntimeAllocator::MetalBufferAlloc *)mBias->deviceId())->getBuffer(), nil];
     const Tensor* weight = mWeight.get();
     const Tensor* bias = mBias.get();
-    int buffer_offset[] = {TensorUtils::getDescribe(input)->extra.offset, TensorUtils::getDescribe(output)->extra.offset, TensorUtils::getDescribe(weight)->extra.offset, TensorUtils::getDescribe(bias)->extra.offset, 0};
+    int buffer_offset[] = {
+        TensorUtils::getDescribe(input)->extra.offset,
+        TensorUtils::getDescribe(output)->extra.offset,
+        0,
+        TensorUtils::getDescribe(weight)->extra.offset,
+        TensorUtils::getDescribe(bias)->extra.offset
+    };
 
     std::string name = "conv_depthwise";
     MetalRuntime *rt = (MetalRuntime *)backend->runtime();
@@ -82,12 +88,10 @@ ErrorCode MetalConvolutionDepthwise::onResize(const std::vector<Tensor *> &input
     return NO_ERROR;
 }
 
-void MetalConvolutionDepthwise::onFloat(const Tensor *input, const Tensor *output, id<MTLComputeCommandEncoder> encoder) {
+void MetalConvolutionDepthwise::onEncode(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs, id<MTLComputeCommandEncoder> encoder) {
     [encoder setComputePipelineState:mPipeline];
-    [encoder setBuffer:(id<MTLBuffer>)((MetalRuntimeAllocator::MetalBufferAlloc *)input->deviceId())->getBuffer() offset: TensorUtils::getDescribe(input)->extra.offset
-atIndex:0];
-    [encoder setBuffer:(id<MTLBuffer>)((MetalRuntimeAllocator::MetalBufferAlloc *)output->deviceId())->getBuffer() offset: TensorUtils::getDescribe(output)->extra.offset
-atIndex:1];
+    MetalBackend::setTensor(inputs[0], encoder, 0);
+    MetalBackend::setTensor(outputs[0], encoder, 1);
     [encoder setBuffer:mConstBuffer offset:0 atIndex:2];
     MetalBackend::setTensor(mWeight.get(), encoder, 3);
     MetalBackend::setTensor(mBias.get(), encoder, 4);

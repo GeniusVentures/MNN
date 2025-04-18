@@ -13,17 +13,28 @@
 
 #if MNN_METAL_ENABLED
 namespace MNN {
-
+struct TransformBuffer {
+    int inputSize[4];
+    int outputSize[4];
+    int padX;
+    int padY;
+    int unitWidth;
+    int unitHeight;
+    int unit;
+    int activation;
+    int remain[2];
+};
 class MetalConvolutionWinograd : public MetalConvolutionCommon {
 public:
-    static bool isValid(const Convolution2D *conv, const Tensor *input, const Tensor* output);
+    static bool isValid(Backend *backend, const Convolution2D *conv, const Tensor *input, const Tensor* output);
     MetalConvolutionWinograd(Backend *backend, const MNN::Op *op);
     virtual ~MetalConvolutionWinograd() = default;
     virtual ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
+
     virtual bool onClone(Backend* bn, const Op* op, Execution** dst) override;
 
 protected:
-    virtual void onFloat(const Tensor *input, const Tensor *output, id<MTLComputeCommandEncoder> encoder) override;
+    virtual void onEncode(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs, id<MTLComputeCommandEncoder> encoder) override;
     virtual std::shared_ptr<MNN::Tensor> weightTransform(int group, int oc, int ic, int kh, int kw, const float *src, bool int8Weight=false, bool int4Weight=false) override;
 
 private:
@@ -41,6 +52,7 @@ private:
     MTLSize mInputTransformThreads;
     MTLSize mMatMulThreads;
     MTLSize mOutputTransformThreads;
+    int mSplitNum = 1;
 };
 
 } // namespace MNN

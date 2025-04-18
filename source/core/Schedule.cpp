@@ -36,7 +36,7 @@ void Schedule::OpResizeCache::addContentIndex(int index) {
     mNeedCompareContent.emplace_back(index);
 }
 
-bool Schedule::OpResizeCache::match(const std::vector<Tensor*>& inputs) {
+bool Schedule::OpResizeCache::match(const std::vector<Tensor*>& inputs, bool& compared) {
     if (!mCanCache) {
         return mPass;
     }
@@ -46,6 +46,7 @@ bool Schedule::OpResizeCache::match(const std::vector<Tensor*>& inputs) {
     if (mInputInfos.size() != inputs.size()) {
         return false;
     }
+    compared = true;
     for (int u=0; u<mInputInfos.size(); ++u) {
         auto des = TensorUtils::getDescribe(inputs[u]);
         if (mInputInfos[u].order != des->dimensionFormat) {
@@ -55,12 +56,10 @@ bool Schedule::OpResizeCache::match(const std::vector<Tensor*>& inputs) {
             return false;
         }
         if (mInputInfos[u].dim.size() != inputs[u]->dimensions()) {
-            mCanCache = false;
             return false;
         }
         for (int v=0; v<mInputInfos[u].dim.size(); ++v) {
             if (mInputInfos[u].dim[v] != inputs[u]->length(v)) {
-                mCanCache = false;
                 return false;
             }
         }
@@ -72,7 +71,6 @@ bool Schedule::OpResizeCache::match(const std::vector<Tensor*>& inputs) {
         auto t = inputs[dim];
         auto& s = mInputInfos[dim];
         if (0 != ::memcmp(s.buffer.data(), t->host<void>(), s.buffer.size())) {
-            mCanCache = false;
             return false;
         }
     }
@@ -110,21 +108,21 @@ void Schedule::OpResizeCache::insert(const std::vector<Tensor*>& inputs) {
     }
 }
 
-
-MNNForwardType Schedule::getApprociateType(const ScheduleConfig& config) {
+MNNForwardType Schedule::getAppropriateType(const ScheduleConfig& config) {
     MNNForwardType type = config.type;
     // FIXME: Support Auto determine
     if (MNN_FORWARD_AUTO == config.type) {
-	//Define Auto choose priority
-        std::vector<MNNForwardType> priorityList;
-        priorityList.push_back(MNN_FORWARD_USER_0); //HIAI
-        priorityList.push_back(MNN_FORWARD_NN);     //CoreML
-        priorityList.push_back(MNN_FORWARD_USER_1); //TensoRT
-        priorityList.push_back(MNN_FORWARD_CUDA);   //CUDA
-        priorityList.push_back(MNN_FORWARD_OPENCL); //OpenCL
-        priorityList.push_back(MNN_FORWARD_METAL);  //METAL
-        priorityList.push_back(MNN_FORWARD_VULKAN); //Vulkan
-        priorityList.push_back(MNN_FORWARD_CPU);    //CPU
+        //Define Auto choose priority
+        std::array<MNNForwardType, 8> priorityList {
+            MNN_FORWARD_USER_0, //HIAI
+            MNN_FORWARD_NN,     //CoreML
+            MNN_FORWARD_USER_1, //TensoRT
+            MNN_FORWARD_CUDA,   //CUDA
+            MNN_FORWARD_OPENCL, //OpenCL
+            MNN_FORWARD_METAL,  //METAL
+            MNN_FORWARD_VULKAN, //Vulkan
+            MNN_FORWARD_CPU,    //CPU
+        };
 
         for (auto bn : priorityList) {
             if (MNNGetExtraRuntimeCreator(bn) != nullptr) {
@@ -144,9 +142,13 @@ MNNForwardType Schedule::getApprociateType(const ScheduleConfig& config) {
                 Backend::Info info;
                 info.type = type;
                 std::shared_ptr<Runtime> bn(creator->onCreate(info));
-                bool isSupportLowPower = bn->onGetRuntimeStatus(RuntimeStatus::STATUS_SUPPORT_POWER_LOW);
-                if(!isSupportLowPower) {
-                    MNN_PRINT("type=%d backend don't Support Low Power, use %d instead\n", type, config.backupType);
+                if (nullptr != bn.get()) {
+                    bool isSupportLowPower = bn->onGetRuntimeStatus(RuntimeStatus::STATUS_SUPPORT_POWER_LOW);
+                    if(!isSupportLowPower) {
+                        MNN_PRINT("type=%d backend don't Support Low Power, use %d instead\n", type, config.backupType);
+                        type = config.backupType;
+                    }
+                } else{
                     type = config.backupType;
                 }
             }
@@ -311,7 +313,7 @@ bool Schedule::schedule(ScheduleInfo& scheduleInfo, const Net* net, const std::v
 
     for (auto& config : configs) {
         Backend::Info compute;
-        compute.type      = getApprociateType(config);
+        compute.type      = getAppropriateType(config);
         compute.numThread = config.numThread;
         if(config.type == MNN_FORWARD_AUTO) {
             if(compute.type == MNN_FORWARD_OPENCL || compute.type == MNN_FORWARD_METAL) {

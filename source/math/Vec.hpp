@@ -9,19 +9,10 @@
 #ifndef Vec_hpp
 #define Vec_hpp
 #include "core/Macro.h"
+#include "core/SimdHeader.h"
 #include <array>
 #include <algorithm>  // supply std::max and std::min
 #include <math.h>
-#ifdef MNN_USE_NEON
-#include <arm_neon.h>
-#endif
-#ifdef MNN_USE_SSE
-#if defined(_MSC_VER)
-#include <intrin.h>
-#else
-#include <x86intrin.h>
-#endif
-#endif
 namespace MNN {
 namespace Math {
 
@@ -234,11 +225,7 @@ struct Vec<int32_t, 4> {
         value = std::move(lr.value);
     }
     float operator[](size_t i) {
-#if defined(_MSC_VER)
-        return value.n128_i32[i];
-#else
         return value[i];
-#endif
     }
     static VecType load(const float* addr) {
         VecType v = { (int32x4_t)(vld1q_f32(addr)) };
@@ -296,10 +283,10 @@ struct Vec<int32_t, 4> {
         vec1.value = m0m1.val[1];
         vec2.value = m2m3.val[0];
         vec3.value = m2m3.val[1];
-        vec0.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64(m2m3.val[0], 0), vec0.value, 1));
-        vec1.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64(m2m3.val[1], 0), vec1.value, 1));
-        vec2.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64(m0m1.val[0], 1), vec2.value, 0));
-        vec3.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64(m0m1.val[1], 1), vec3.value, 0));
+        vec0.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64((int64x2_t)m2m3.val[0], 0), (int64x2_t)vec0.value, 1));
+        vec1.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64((int64x2_t)m2m3.val[1], 0), (int64x2_t)vec1.value, 1));
+        vec2.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64((int64x2_t)m0m1.val[0], 1), (int64x2_t)vec2.value, 0));
+        vec3.value = (int32x4_t)(vsetq_lane_s64(vgetq_lane_s64((int64x2_t)m0m1.val[1], 1), (int64x2_t)vec3.value, 0));
 #endif
     }
 
@@ -400,11 +387,7 @@ struct Vec<float, 4> {
         value = std::move(lr.value);
     }
     float operator[](size_t i) {
-#if defined(_MSC_VER)
-        return value.n128_f32[i];
-#else
         return value[i];
-#endif
     }
     static VecType load(const float* addr) {
         VecType v = { vld1q_f32(addr) };

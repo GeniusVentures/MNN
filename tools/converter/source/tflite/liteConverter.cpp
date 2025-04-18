@@ -7,7 +7,7 @@
 //
 
 #include <iostream>
-
+#include <functional>
 #include "logkit.h"
 
 #include "liteConverter.hpp"
@@ -69,21 +69,61 @@ static void _converteConstantDataToMNNConstantNode(
     MNNNetT->tensorName.emplace_back(mnnConstantOp->name);
     MNNNetT->oplists.emplace_back(std::move(mnnConstantOp));
 }
+template<typename SRC, typename DST>
+void convert(const SRC* s, DST* d, size_t sizeInBytes) {
+    auto size = sizeInBytes / sizeof(SRC);
+    for (size_t i=0; i<size; ++i) {
+        d[i] = s[i];
+    }
+}
 
+
+static std::function<void(const void*, void*, size_t size)>  _getConvertFunction(tflite::TensorType type) {
+    switch (type) {
+        case tflite::TensorType_FLOAT64:
+            return [](const void* s, void* d, size_t size) {
+                convert((double*)s, (float*)d, size);
+            };
+        case tflite::TensorType_UINT64:
+            return [](const void* s, void* d, size_t size) {
+                convert((uint64_t*)s, (int32_t*)d, size);
+            };
+        case tflite::TensorType_INT16:
+            return [](const void* s, void* d, size_t size) {
+                convert((int16_t*)s, (int32_t*)d, size);
+            };
+        case tflite::TensorType_INT64:
+            return [](const void* s, void* d, size_t size) {
+                convert((int64_t*)s, (int32_t*)d, size);
+            };
+        default:
+            break;
+    }
+    return nullptr;
+}
 static MNN::DataType _convertType(tflite::TensorType type) {
     if (type == tflite::TensorType_FLOAT32) {
+        return MNN::DataType_DT_FLOAT;
+    }
+    if (type == tflite::TensorType_FLOAT64) {
         return MNN::DataType_DT_FLOAT;
     }
     if (type == tflite::TensorType_INT8) {
         return MNN::DataType_DT_INT8;
     }
     if (type == tflite::TensorType_INT16) {
-        return MNN::DataType_DT_INT16;
+        return MNN::DataType_DT_INT32;
+    }
+    if (type == tflite::TensorType_INT32) {
+        return MNN::DataType_DT_INT32;
+    }
+    if (type == tflite::TensorType_INT64) {
+        return MNN::DataType_DT_INT32;
     }
     if (type == tflite::TensorType_UINT8) {
         return MNN::DataType_DT_UINT8;
     }
-    if (type == tflite::TensorType_INT32) {
+    if (type == tflite::TensorType_UINT64) {
         return MNN::DataType_DT_INT32;
     }
     if (type == tflite::TensorType_FLOAT16) {
@@ -234,7 +274,12 @@ int tflite2MNNNet(const std::string inputModel, const std::string bizCode,
                         default:
                             break;
                     }
-                    ::memcpy(dst, buffer->data.data(), buffer->data.size());
+                    auto func = _getConvertFunction(tensor->type);
+                    if (nullptr == func) {
+                        ::memcpy(dst, buffer->data.data(), buffer->data.size());
+                    } else {
+                        func(buffer->data.data(), dst, buffer->data.size());
+                    }
                     MNNNetT->oplists.emplace_back(std::move(newOp));
                 }
             }
@@ -260,8 +305,6 @@ int tflite2MNNNet(const std::string inputModel, const std::string bizCode,
             op->type      = creator->opType(quantizedModel);
             op->main.type = creator->type(quantizedModel);
             // set default input output index
-            op->inputIndexes.resize(ops[j]->inputs.size());
-            op->outputIndexes.resize(ops[j]->outputs.size());
             auto insertQuantinfo = [&](int idx) {
                 if (quantizedModel != 2) {
                     return;
@@ -282,12 +325,19 @@ int tflite2MNNNet(const std::string inputModel, const std::string bizCode,
                 tensorDescribe->quantInfo->zero = quant->zero_point[0];
                 MNNNetT->extraTensorDescribe.emplace_back(std::move(tensorDescribe));
             };
+            op->inputIndexes.clear();
+            op->outputIndexes.clear();
+
             for (int i = 0; i < ops[j]->inputs.size(); i++) {
-                op->inputIndexes[i] = ops[j]->inputs[i];
+                if (ops[j]->inputs[i] >= 0) {
+                    op->inputIndexes.emplace_back(ops[j]->inputs[i]);
+                }
             }
             for (int i = 0; i < ops[j]->outputs.size(); i++) {
-                op->outputIndexes[i] = ops[j]->outputs[i];
-                insertQuantinfo(ops[j]->outputs[i]);
+                if (ops[j]->outputs[i] >= 0) {
+                    op->outputIndexes.emplace_back(ops[j]->outputs[i]);
+                    insertQuantinfo(ops[j]->outputs[i]);
+                }
             }
             // Run actual conversion
             creator->run(op, ops[j], tensors, tfliteModelBuffer, tfliteOpSet, quantizedModel);

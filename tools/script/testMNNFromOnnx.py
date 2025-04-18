@@ -122,7 +122,7 @@ class TestModel():
         if not os.path.exists(mnnconvert_name):
             print("./MNNConvert not exist in this path. Use pymnn instead of C++ to test")
             mnnconvert_name = 'mnnconvert'
-        convert = mnnconvert_name + ' -f ONNX --bizCode MNN --modelFile onnx/test.onnx --MNNModel convert_cache.mnn --keepInputFormat --testdir onnx'
+        convert = mnnconvert_name + ' -f ONNX --bizCode MNN --modelFile onnx/test.onnx --MNNModel convert_cache.mnn --keepInputFormat=1 --testdir onnx'
         result = os.popen(convert).read()
         print(result)
         return result
@@ -151,6 +151,8 @@ class TestModel():
             else:
                 # Float
                 inputs[inputVar.name] = np.random.uniform(0.1, 1.2, shapes).astype(np.float32)
+            if inputVar.type.find("float16") >= 0:
+                inputs[inputVar.name] = inputs[inputVar.name].astype(np.float16)
             jsonDict['inputs'].append(inp)
         print([output.name for output in self.model.graph.output])
         for output in self.model.graph.output:
@@ -182,9 +184,16 @@ class TestModel():
     def __test_specify_output(self, specify_output_name):
         while len(self.model.graph.output) > 0:
             self.model.graph.output.pop()
-        new_output = onnx.helper.ValueInfoProto()
-        new_output.name = specify_output_name
-        self.model.graph.output.append(new_output)
+        if isinstance(specify_output_name, list):
+            print(specify_output_name)
+            for specify_output_name_enum in specify_output_name:
+                new_output = onnx.helper.ValueInfoProto()
+                new_output.name = specify_output_name_enum
+                self.model.graph.output.append(new_output)
+        else:
+            new_output = onnx.helper.ValueInfoProto()
+            new_output.name = specify_output_name
+            self.model.graph.output.append(new_output)
         onnx.save(self.model, self.modelName)
         res = self.Test()
         is_right = ('TEST_SUCCESS' in res or 'Can\'t find var' in res)
@@ -281,7 +290,9 @@ if __name__ == '__main__':
                 print('Debug Mode: ', debugMode)
                 t.Debug()
         else:
-            specifyOpName = sys.argv[2]
-            t.TestName(specifyOpName)
+            names = []
+            for i in range(2, len(sys.argv)):
+                names.append(sys.argv[i])
+            t.TestName(names)
     else:
         t.Test()

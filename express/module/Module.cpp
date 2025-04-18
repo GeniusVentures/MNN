@@ -15,7 +15,7 @@
 #include "MNN_generated.h"
 #include "Utils.hpp"
 #include "RuntimeAttr.hpp"
-
+#include "ModuleInside.hpp"
 #include <MNN/AutoTime.hpp>
 #ifdef MNN_INTERNAL_ENABLED
 #include "internal/auth/ModelAuth.hpp"
@@ -32,8 +32,10 @@ static MNN::Express::Executor::RuntimeManager* _createDefaultRuntimeManager(cons
         sche_config.backendConfig = config->backend->config;
     } else {
         auto exe = ExecutorScope::Current();
-        sche_config.type = exe->getAttr()->firstType.first;
-        sche_config.mode = exe->getAttr()->firstType.second;
+        auto attr = exe->getAttr();
+        sche_config.type = attr->firstType;
+        sche_config.numThread = attr->numThread;
+        sche_config.backendConfig = &attr->config;
     }
     return Executor::RuntimeManager::createRuntimeManager(sche_config);
 }
@@ -165,7 +167,7 @@ public:
         setType("Net");
 #ifdef MNN_INTERNAL_ENABLED
         if (nullptr != net) {
-            mLogInfo = getBasicLoggingData();
+            mLogInfo = logBasicInfo();
             std::string uuid = std::string(net->mnn_uuid() ? net->mnn_uuid()->c_str() : "");
             mLogInfo.emplace("UUID", uuid);
             mLogInfo.emplace("ModelVersion", info->version);
@@ -174,7 +176,7 @@ public:
             int mode = 1;
             if (info->runTimeManager.get() != nullptr) {
                 auto attr = info->runTimeManager->getInside();
-                mode = attr->mNumberThread;
+                mode = attr->mContent->mNumberThread;
                 int backendTypes[MNN_FORWARD_ALL];
                 info->runTimeManager->getInfo(Interpreter::BACKENDS, &backendTypes);
                 backend = backendTypes[0];
@@ -206,10 +208,11 @@ public:
 
     virtual std::vector<Express::VARP> onForward(const std::vector<Express::VARP>& inputs) override {
         auto mModule = mChildren[0];
-
+        // Reset resize staus
+        mInfo->runTimeManager->getInside()->mResizeStatus = 0;
 #ifdef MNN_INTERNAL_ENABLED
-        auto glo = ExecutorScope::Current();
         Timer _time;
+        auto glo = ExecutorScope::Current();
         glo->getDebugTools()->flops = 0.0f;
 #endif
         auto outputs = mModule->onForward(inputs);
@@ -235,16 +238,27 @@ public:
                 metrics.emplace("Memory", std::to_string(memory));
             }
             logAsync(metrics);
+            MNN_PRINT("Cost time with log: %f\n", (float)_time.durationInUs() / 1000.0f);
         } while(false);
 #endif
+
         mModule->clearCache();
         return outputs;
     }
     virtual Module* clone(CloneContext* ctx) const override {
         auto mModule = mChildren[0];
+        auto origin = mInfo->runTimeManager->getInside();
+        ScheduleConfig config;
+        config.type = origin->mRuntime.first.begin()->first;
+        config.numThread = origin->mContent->mNumberThread;
+        std::shared_ptr<Executor::RuntimeManager> newRt (Executor::RuntimeManager::createRuntimeManager(config));
+        const_cast<RuntimeAttr*>(newRt->getInside())->mContent = origin->mContent;
+        std::shared_ptr<Module::Info> newInfo(new Module::Info);
+        *newInfo = *mInfo;
+        ctx->pRuntimeManager = newRt;
+        newInfo->runTimeManager = newRt;
         std::shared_ptr<Module> submodule(mModule->clone(ctx));
-
-        NetModule* module(new NetModule(submodule, mInfo, nullptr, 0, 0.0f));
+        NetModule* module(new NetModule(submodule, newInfo, nullptr, 0, 0.0f));
 #ifdef MNN_INTERNAL_ENABLED
         module->mLogInfo = mLogInfo;
 #endif
@@ -328,11 +342,17 @@ Module* Module::load(const std::vector<std::string>& inputs, const std::vector<s
     if (nullptr == rtMgr.get()) {
         rtMgr.reset(_createDefaultRuntimeManager(config));
     }
-    if (rtMgr->getInside()->mExternalFile.empty()) {
+    bool needReset = false;
+    if (rtMgr->getInside()->mContent->mExternalFile.empty()) {
         // Set Default externalFile
         rtMgr->setExternalFile(std::string(fileName) + ".weight");
+        needReset = true;
     }
-    return loadInternal(inputs, outputs, buffer.get(), buffer.size(), rtMgr, config);
+    auto res = loadInternal(inputs, outputs, buffer.get(), buffer.size(), rtMgr, config);
+    if (needReset) {
+        rtMgr->setExternalFile("");
+    }
+    return res;
 }
 
 Module* Module::load(const std::vector<std::string>& inputs, const std::vector<std::string>& outputs, const uint8_t* buffer, size_t length, const std::shared_ptr<MNN::Express::Executor::RuntimeManager> _rtMgr, const Module::Config* config) {
@@ -351,7 +371,7 @@ static Module* loadInternal(const std::vector<std::string>& inputs, const std::v
     }
     bool checkMNNBuffer = true;
     if (nullptr != _rtMgr) {
-        checkMNNBuffer = _rtMgr->getInside()->checkNetBuffer;
+        checkMNNBuffer = _rtMgr->getInside()->mContent->modes.checkNetBuffer;
     }
     if (checkMNNBuffer) {
         flatbuffers::Verifier verify(buffer, length);
@@ -368,8 +388,26 @@ static Module* loadInternal(const std::vector<std::string>& inputs, const std::v
     }
     Timer _time;
     std::shared_ptr<Module::Info> info(new Module::Info);
-    if (net->extraInfo() && net->extraInfo()->version()) {
-        info->version = net->extraInfo()->version()->str();
+    if (net->extraInfo()) {
+        if (net->extraInfo()->version()) {
+            info->version = net->extraInfo()->version()->str();
+        }
+        // Get Meta
+        if (net->extraInfo()->buffer()) {
+            auto extra = flatbuffers::GetRoot<Extra>(net->extraInfo()->buffer()->data());
+            if (nullptr != extra->attr()) {
+                for (int i=0; i<extra->attr()->size(); ++i) {
+                    auto attr = extra->attr()->GetAs<Attribute>(i);
+                    if (nullptr != attr->key() && nullptr != attr->s()) {
+                        // The model may be incomplete, avoid crash
+                        info->metaData.insert(std::make_pair(attr->key()->str(), attr->s()->str()));
+                    }
+                }
+            }
+        }
+    }
+    if (net->bizCode()) {
+        info->bizCode = net->bizCode()->str();
     }
     auto rtMgr = _rtMgr;
     Module::Config defaultConfig;
@@ -384,7 +422,8 @@ static Module* loadInternal(const std::vector<std::string>& inputs, const std::v
         std::shared_ptr<Module> m(PipelineModule::load(inputs, outputs, buffer, length, rtMgr, config));
         return new NetModule(m, info, net, length, (float)_time.durationInUs() / 1000.0f);
     }
-    std::set<int> inputIdx, outputIdx, realInput, realOutput;
+    std::set<int> inputIdx, outputIdx, realOutput;
+    std::vector<int> realInput;
     for (int i=0; i< net->oplists()->size(); ++i) {
         auto op = net->oplists()->GetAs<Op>(i);
         if (nullptr != op->inputIndexes()) {
@@ -400,7 +439,7 @@ static Module* loadInternal(const std::vector<std::string>& inputs, const std::v
             for (int j=0; j<size; ++j) {
                 outputIdx.insert(data[j]);
                 if (op->type() == OpType_Input) {
-                    realInput.insert(data[j]);
+                    realInput.emplace_back(data[j]);
                 }
             }
         }
@@ -479,10 +518,18 @@ Module* Module::extract(std::vector<Express::VARP> inputs, std::vector<Express::
     return new PipelineModule(inputs, outputs);
 }
 int Module::traceOrOptimize(Interpreter::SessionMode stage) {
-    for (auto& m : mChildren) {
-        m->traceOrOptimize(stage);
+    auto code = this->onOptimize(stage);
+    if (code != 0) {
+        // Has Error
+        return code;
     }
-    return this->onOptimize(stage);
+    for (auto& m : mChildren) {
+        code = m->traceOrOptimize(stage);
+        if (code != 0) {
+            return code;
+        }
+    }
+    return code;
 }
 
 

@@ -35,7 +35,7 @@ public:
     };
     class OpResizeCache {
     public:
-        bool match(const std::vector<Tensor*>& inputs);
+        bool match(const std::vector<Tensor*>& inputs, bool& compared);
         void insert(const std::vector<Tensor*>& inputs);
         void close(bool pass = false);
         void open();
@@ -43,6 +43,9 @@ public:
         bool needExecuteConst = false;
         void addContentIndex(int index);
         void copyImmutable(const OpResizeCache& cache);
+        bool canCache() const {
+            return mCanCache;
+        }
     private:
         struct ShapeInfo {
             int order;
@@ -75,6 +78,9 @@ public:
         
         std::map<const Op*, std::shared_ptr<Execution>> executionCache;
         OpResizeCache computeCache;
+        
+        /** For CONSTANT info, can release indexes after resize*/
+        std::vector<int> releaseAbleInputs;
     };
 
     // Backend, Tensor, shape-dirty, content-dirty
@@ -86,6 +92,7 @@ public:
         bool needComputeShape = true;
         bool needComputeGeometry = true;
         bool reportError = true;
+        bool inputBackendChange = false;
         std::map<Tensor*, TENSORCACHE> inputTensorCopyCache;
     };
     typedef std::pair<BackendCache, std::vector<OpCacheInfo>> PipelineInfo;
@@ -119,7 +126,7 @@ public:
      * @return schedule info.
      */
     static bool schedule(ScheduleInfo& result, const Net* net, const std::vector<ScheduleConfig>& config, const RuntimeInfo& runtimeInfo);
-    static MNNForwardType getApprociateType(const ScheduleConfig& config);
+    static MNNForwardType getAppropriateType(const ScheduleConfig& config);
 };
 } // namespace MNN
 
