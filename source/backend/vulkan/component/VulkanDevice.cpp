@@ -78,7 +78,7 @@ VulkanDevice::VulkanDevice(std::shared_ptr<VulkanInstance> instance)
     };
     VkPhysicalDeviceFeatures mDeviceFeature;
     ::memset(&mDeviceFeature, 0, sizeof(mDeviceFeature));
-    mDeviceFeature.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+    //mDeviceFeature.shaderStorageImageWriteWithoutFormat = VK_TRUE;
     //vkGetPhysicalDeviceFeatures(mPhysicalDevice, &mDeviceFeature);
 
     // Set device extensions.
