@@ -21,6 +21,11 @@ make
 ./build_tool.sh
 ```
 
+or for Windows
+```bash
+cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DMNN_BUILD_SHARED_LIBS=OFF -DCMAKE_TOOLCHAIN_FILE="path/to/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static -DMNN_BUILD_CONVERTER=ON -DMNN_BUILD_PROTOBUFFER=OFF -DCMAKE_CXX_STANDARD=17 -DMNN_WIN_RUNTIME_MT=ON --fresh
+```
+
 ## Usage Of Model Converter Command
 
 ```bash
