@@ -1,0 +1,17 @@
+{
+  "name": "mnn-converter",
+  "version-string": "0.1.0",
+  "builtin-baseline": "89dc8be6dbcf18482a5a1bf86a2f4615c939b0fb",
+  "dependencies": [
+    {
+      "name": "protobuf",
+      "version>=": "3.19.4"
+    }
+  ],
+  "overrides": [
+    { 
+        "name": "protobuf", 
+        "version": "3.19.4"
+    }
+	]
+}
