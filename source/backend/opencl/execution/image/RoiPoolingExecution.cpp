@@ -37,7 +37,8 @@ RoiPooling::RoiPooling(const std::vector<Tensor *> &inputs, const MNN::Op *op, B
     }else if(roiChannels == 5){
         buildOptions.emplace("-DROI_C5H1W1");
     }
-    unit.kernel            = mOpenCLBackend->getOpenCLRuntime()->buildKernel("roi_pooling", kernelName, buildOptions);
+    unit.kernel            = mOpenCLBackend->getOpenCLRuntime()->buildKernel("roi_pooling", kernelName, buildOptions, mOpenCLBackend->getPrecision());
+    OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     mMaxWorkGroupSize      = static_cast<uint32_t>(mOpenCLBackend->getOpenCLRuntime()->getMaxWorkGroupSize(unit.kernel));
 #ifdef LOG_VERBOSE
     MNN_PRINT("end RoiPooling init !\n");

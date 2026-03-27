@@ -27,7 +27,8 @@ PoolBufExecution::PoolBufExecution(const std::vector<Tensor *> &inputs, const MN
     mPaddings[0] = mPoolParams->padY() * 2;
     mPaddings[1] = mPoolParams->padX() * 2;
     mPadType     = mPoolParams->padType();
-    auto kernel = mOpenCLBackend->getOpenCLRuntime()->buildKernel("pooling_buf", "global_pooling_buf", {"-DLOCAL_SIZE=512"});
+    auto kernel = mOpenCLBackend->getOpenCLRuntime()->buildKernel("pooling_buf", "global_pooling_buf", {"-DLOCAL_SIZE=512"}, mOpenCLBackend->getPrecision());
+    OPENCL_CHECK_KERNEL_CTOR(kernel);
     mMaxWorkGroupSize = static_cast<uint32_t>(mOpenCLBackend->getOpenCLRuntime()->getMaxWorkGroupSize(kernel));
 }
 
@@ -118,7 +119,7 @@ ErrorCode PoolBufExecution::onEncode(const std::vector<Tensor *> &inputs, const 
         buildOptions.emplace("-DRETURN_REDICE");
     }
     
-    unit.kernel       = runtime->buildKernel("pooling_buf", kernelName, buildOptions);
+    unit.kernel       = runtime->buildKernel("pooling_buf", kernelName, buildOptions, mOpenCLBackend->getPrecision());
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
     
     mGlobalWorkSize = {
@@ -159,12 +160,12 @@ ErrorCode PoolBufExecution::onEncode(const std::vector<Tensor *> &inputs, const 
     ret |= unit.kernel->get().setArg(idx++, sizeof(kernelShape), kernelShape);
     ret |= unit.kernel->get().setArg(idx++, openCLBuffer(output));
     ret |= unit.kernel->get().setArg(idx++, openCLBuffer(redice));
-    ret |= unit.kernel->get().setArg(idx++, channelBlocks);
+    ret |= unit.kernel->get().setArg(idx++, batch);
     MNN_CHECK_CL_SUCCESS(ret, "setArg PoolBufExecution");
     
     std::string kernelNameTune = "pooling_buf";
     if (!mPoolParams->isGlobal()){
-        mLocalWorkSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), kernelNameTune, unit.kernel).first;
+        mLocalWorkSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), kernelNameTune, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "pooling_buf").first;
     }
     
     mOpenCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalWorkSize);
@@ -268,7 +269,7 @@ ErrorCode PoolBufExecution::SubgrouponResize(const std::vector<Tensor *> &inputs
     buildOptions.emplace("-DKERNEL_Y=" + std::to_string(kernelShape[0]));
     buildOptions.emplace("-DKERNEL_X=" + std::to_string(kernelShape[1]));
     
-    unit.kernel       = runtime->buildKernel("pooling_subgroup_buf", KernelName, buildOptions);
+    unit.kernel       = runtime->buildKernel("pooling_subgroup_buf", KernelName, buildOptions, mOpenCLBackend->getPrecision());
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
     mGlobalWorkSize = {
@@ -296,6 +297,7 @@ ErrorCode PoolBufExecution::SubgrouponResize(const std::vector<Tensor *> &inputs
     ret |= unit.kernel->get().setArg(idx++, openCLBuffer(output));
     ret |= unit.kernel->get().setArg(idx++, openCLBuffer(redice));
     ret |= unit.kernel->get().setArg(idx++, channels);
+    ret |= unit.kernel->get().setArg(idx++, batch);
     ret |= unit.kernel->get().setArg(idx++, in_channel_block);
     ret |= unit.kernel->get().setArg(idx++, out_channel_block);
     ret |= unit.kernel->get().setArg(idx++, static_cast<uint32_t>(inputpad.left));
@@ -308,7 +310,7 @@ ErrorCode PoolBufExecution::SubgrouponResize(const std::vector<Tensor *> &inputs
     if (input_c_pack == 16) {
         mLocalWorkSize = {16, 1, 1};
     } else {
-        mLocalWorkSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), kernelNameTune, unit.kernel).first;
+        mLocalWorkSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), kernelNameTune, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "pooling_subgroup_buf").first;
     }
     mOpenCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalWorkSize);
     unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1], mGlobalWorkSize[2]};
@@ -326,13 +328,15 @@ public:
     virtual ~PoolBufCreator() = default;
     virtual Execution *onCreate(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs,
                                 const MNN::Op *op, Backend *backend) const override {
+#ifdef MNN_SUPPORT_INTEL_SUBGROUP
         for (int i = 0; i < inputs.size(); ++i) {
             int channel = inputs[i]->channel();
             if (channel >= 16 && static_cast<OpenCLBackend *>(backend)->getOpenCLRuntime()->isSupportedIntelSubgroup()) {
                 TensorUtils::setTensorChannelPack(inputs[i], 16);
             }
         }
-        return new PoolBufExecution(inputs, op, backend); 
+#endif /* MNN_SUPPORT_INTEL_SUBGROUP */
+        OPENCL_CREATOR_CHECK(new PoolBufExecution(inputs, op, backend));
     }
 };
 

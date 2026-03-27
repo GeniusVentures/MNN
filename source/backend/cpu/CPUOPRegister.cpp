@@ -34,6 +34,7 @@ extern void ___CPUROIAlignCreator__OpType_ROIAlign__();
 extern void ___CPUROIPoolingCreator__OpType_ROIPooling__();
 extern void ___CPUTopKV2Creator__OpType_TopKV2__();
 extern void ___CPUUnaryCreator__OpType_UnaryOp__();
+extern void ___CPUStftCreator__OpType_Stft__();
 extern void ___CPUReductionCreator__OpType_Reduction__();
 extern void ___CPUReluCreator__OpType_ReLU__();
 extern void ___CPUReluCreator__OpType_PReLU__();
@@ -42,7 +43,6 @@ extern void ___CPUUniqueCreator__OpType_Unique__();
 extern void ___CPUImageProcessCreator__OpType_ImageProcess__();
 extern void ___CPUDepthwiseConvInt8Creator__OpType_DepthwiseConvInt8__();
 extern void ___CPUOneHotCreator__OpType_OneHot__();
-extern void ___CPUPoolInt8Creator__OpType_PoolInt8__();
 extern void ___CPUMatrixBandPartCreator__OpType_MatrixBandPart__();
 extern void ___CPUQuantizedAddCreator__OpType_QuantizedAdd__();
 extern void ___CPUDeconvolutionDepthwiseCreator__OpType_DeconvolutionDepthwise__();
@@ -74,6 +74,10 @@ extern void ___CPUExternalConstCreator__OpType_TrainableParam__();
 extern void ___CPURasterAndInterpolateCreator__OpType_RasterAndInterpolate__();
 extern void ___CPURasterDiffCreator__OpType_RasterDiff__();
 extern void ___CPUTextureCreator__OpType_Texture__();
+#endif
+#ifdef MNN_SUPPORT_TRANSFORMER_FUSE
+extern void ___CPUAttentionCreator__OpType_Attention__();
+extern void ___CPULinearAttentionCreator__OpType_LinearAttention__();
 #endif
 void registerCPUOps() {
 ___CPUCropAndResizeCreator__OpType_CropAndResize__();
@@ -110,6 +114,7 @@ ___CPUROIAlignCreator__OpType_ROIAlign__();
 ___CPUROIPoolingCreator__OpType_ROIPooling__();
 ___CPUTopKV2Creator__OpType_TopKV2__();
 ___CPUUnaryCreator__OpType_UnaryOp__();
+___CPUStftCreator__OpType_Stft__();
 ___CPUReductionCreator__OpType_Reduction__();
 ___CPUReluCreator__OpType_ReLU__();
 ___CPUReluCreator__OpType_PReLU__();
@@ -118,7 +123,6 @@ ___CPUUniqueCreator__OpType_Unique__();
 ___CPUImageProcessCreator__OpType_ImageProcess__();
 ___CPUDepthwiseConvInt8Creator__OpType_DepthwiseConvInt8__();
 ___CPUOneHotCreator__OpType_OneHot__();
-___CPUPoolInt8Creator__OpType_PoolInt8__();
 ___CPUMatrixBandPartCreator__OpType_MatrixBandPart__();
 ___CPUQuantizedAddCreator__OpType_QuantizedAdd__();
 ___CPUDeconvolutionDepthwiseCreator__OpType_DeconvolutionDepthwise__();
@@ -149,6 +153,10 @@ ___CPUExternalConstCreator__OpType_TrainableParam__();
 ___CPURasterAndInterpolateCreator__OpType_RasterAndInterpolate__();
 ___CPURasterDiffCreator__OpType_RasterDiff__();
 ___CPUTextureCreator__OpType_Texture__();
+#endif
+#ifdef MNN_SUPPORT_TRANSFORMER_FUSE
+___CPUAttentionCreator__OpType_Attention__();
+___CPULinearAttentionCreator__OpType_LinearAttention__();
 #endif
 }
 }

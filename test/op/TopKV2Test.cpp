@@ -6,6 +6,7 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
+#include <MNN/AutoTime.hpp>
 #include <MNN/expr/Expr.hpp>
 #include <MNN/expr/ExprCreator.hpp>
 #include "MNNTestSuite.h"
@@ -168,9 +169,9 @@ public:
 
     virtual bool run(int precision) {
         // set params
-        const int K = 10;
+        const int K = 300;
         const int numRow = 180;
-        
+
         const int lengthRow = 21491;
 
         // set input
@@ -178,16 +179,15 @@ public:
         VARP input1 = _Input({1}, NCHW, halide_type_of<int>());
         RandomInitFloat(input0->writeMap<float>(), numRow * lengthRow);
         SetK(input1->writeMap<int>(), K);
+        MNN::Timer _t;
 
-        auto timeStart = getTimeInUs();
         // calculate gotOutput
         auto res = _TopKV2(input0, input1);
         VARP output0 = res[0];
         VARP output1 = res[1];
         auto gotOutput0                        = output0->readMap<float>();
         auto gotOutput1                        = output1->readMap<int>();
-        auto timeEnd = getTimeInUs();
-        auto timeCost = timeEnd - timeStart;
+        auto timeCost = _t.durationInUs();
 
         // calculate expectedOutput
         std::vector<float> expectedOutput0(numRow * K);

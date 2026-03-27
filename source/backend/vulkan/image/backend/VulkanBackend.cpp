@@ -22,9 +22,14 @@
 #ifdef MNN_USE_NEON
 #include <arm_neon.h>
 #endif
-//#define MNN_OP_SUPPORT_LOG
+// #define MNN_OP_SUPPORT_LOG
 //#define MNN_VULKAN_DUMP_MEMORY_USAGE
 #define MNN_VULKAN_MAX_CACHE_CONVSIZE 50
+
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+#include <chrono>
+#endif
+
 namespace MNN {
 
 static std::map<OpType, VulkanBackend::Creator*>* gCreator = nullptr;
@@ -55,13 +60,16 @@ static void _copyTensorToBuffer(const Tensor* source, const VulkanBuffer* dest) 
     dest->unmap();
 }
 
-VulkanBackend::VulkanBackend(const VulkanRuntime* runtime, const Backend::Info& info) : Backend(MNN_FORWARD_VULKAN) {
+VulkanBackend::VulkanBackend(const VulkanRuntime* runtime) : Backend(MNN_FORWARD_VULKAN) {
     mRuntime = runtime;
-    mDirect = Backend::Info::INDIRECT != info.mode;
+    mDirect = (mRuntime->mGpuMode & MNNGpuMode::MNN_GPU_RECORD_BATCH) == 0;
     mDynamicMemoryPool.reset(new VulkanMemoryPool(runtime->mMemoryPool.get()));
 
     auto& dev              = device();
     mFence                 = std::make_shared<VulkanFence>(dev);
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    mTimeProfiler = std::make_shared<VulkanTimeProfiler>(dev);
+#endif
     if (!mDirect) {
         mCmdBuffer.reset(runtime->mCmdPool->allocBuffer());
     }
@@ -88,10 +96,11 @@ const VulkanPipeline* VulkanBackend::getPipeline(const std::string& key, const s
     return mRuntime->mPipelineFactory->getPipeline(key, types, localSize);
 }
 
+SharedPtr<VulkanPipeline> VulkanBackend::getPrivatePipeline(const std::string& key, const std::vector<VkDescriptorType>& types) {
+    return mRuntime->mPipelineFactory->getPrivatePipeline(key, types);
+}
+
 bool VulkanBackend::_supportImageSize(const Tensor* MTensor) {
-    if (MTensor->getType().code != halide_type_float) {
-        return false;
-    }
     auto format = TensorUtils::getDescribe(MTensor)->dimensionFormat;
     if (format != MNN_DATA_FORMAT_NC4HW4) {
         return true;
@@ -109,6 +118,11 @@ bool VulkanBackend::_supportImageSize(const Tensor* MTensor) {
     return true;
 }
 void VulkanBackend::onResizeBegin() {
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    if (mTimeProfiler) {
+        mTimeProfiler->reset();
+    }
+#endif
     mInitBuffer->begin(0);
     if (!mDirect) {
         mCmdBuffer->begin(0);
@@ -229,6 +243,11 @@ Execution* VulkanBackend::onCreate(const std::vector<Tensor*>& inputs, const std
 #endif
         return nullptr;
     }
+
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    originExecution->setName(EnumNameOpType(op->type()));
+#endif
+
     if (mDirect) {
         return new VulkanBasicExecutionDirect(std::shared_ptr<VulkanBasicExecution>(originExecution));
     }
@@ -241,7 +260,23 @@ void VulkanBackend::onExecuteBegin() const {
     }
     // FUNC_PRINT_ALL(mDynamicMemoryPool->computeSize(), f);
 }
+
 void VulkanBackend::onExecuteEnd() const {
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    auto startTime = std::chrono::high_resolution_clock::now();
+    _finish();
+    auto endTime = std::chrono::high_resolution_clock::now();
+    float totalTime = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startTime).count() / (1e6f);
+    if (mTimeProfiler) {
+        mTimeProfiler->printTimeProfile();
+    }
+    MNN_PRINT("Total time calculated by CPU is %6.2f ms.\n", totalTime);
+#else
+    _finish();
+#endif
+}
+
+void VulkanBackend::finish() {
     _finish();
 }
 void VulkanBackend::_finish() const {
@@ -301,6 +336,10 @@ void VulkanBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTenso
         mHostBuffer->unmap();
         auto key    = std::make_tuple(TensorUtils::getDescribe(dstTensor), true, format);
         auto iter   = mConverters.find(key);
+        if (iter != mConverters.end() && std::get<2>(iter->second).lock() == nullptr) {
+            mConverters.erase(iter);
+            iter = mConverters.end();
+        }
         if (iter == mConverters.end()) {
             if (mConverters.size() > MNN_VULKAN_MAX_CACHE_CONVSIZE) {
                 mConverters.clear();
@@ -320,10 +359,13 @@ void VulkanBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTenso
                 vkTensor->image(i)->barrierRead(convertorBuffer->get());
             }
             convertorBuffer->end();
-            mConverters.insert(std::make_pair(key, std::make_pair(converter, convertorBuffer)));
+            mConverters.insert(std::make_pair(key, std::make_tuple(converter, convertorBuffer, std::weak_ptr<Tensor::InsideDescribe::NativeInsideDescribe>(TensorUtils::getDescribeOrigin(dstTensor)->mContent))));
             iter = mConverters.find(key);
         }
-        mCmdBuffers.push_back(iter->second.second->get());
+        mCmdBuffers.push_back(std::get<1>(iter->second)->get());
+        if (TensorUtils::getDescribe(srcTensor)->isMutable == false) {
+            _finish();
+        }
     } else if (dstTensor->host<void>() != nullptr) {
         // gpu->host
         auto size = VulkanTensor::getAlignSize(srcTensor) * sizeof(float);
@@ -333,6 +375,10 @@ void VulkanBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTenso
         auto key    = std::make_tuple(TensorUtils::getDescribe(srcTensor), false, format);
 
         auto iter = mConverters.find(key);
+        if (iter != mConverters.end() && std::get<2>(iter->second).lock() == nullptr) {
+            mConverters.erase(iter);
+            iter = mConverters.end();
+        }
         if (iter == mConverters.end()) {
             if (mConverters.size() > MNN_VULKAN_MAX_CACHE_CONVSIZE) {
                 mConverters.clear();
@@ -345,10 +391,10 @@ void VulkanBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTenso
                                             format,
                                             convertorBuffer.get());
             convertorBuffer->end();
-            mConverters.insert(std::make_pair(key, std::make_pair(converter, convertorBuffer)));
+            mConverters.insert(std::make_pair(key, std::make_tuple(converter, convertorBuffer, std::weak_ptr<Tensor::InsideDescribe::NativeInsideDescribe>(TensorUtils::getDescribeOrigin(srcTensor)->mContent))));
             iter = mConverters.find(key);
         }
-        mCmdBuffers.push_back(iter->second.second->get());
+        mCmdBuffers.push_back(std::get<1>(iter->second)->get());
         _finish();
         std::shared_ptr<Tensor> tempTensor(new Tensor);
         TensorUtils::copyShape(srcTensor, tempTensor.get(), true);
@@ -488,5 +534,113 @@ void VulkanBackend::copyBufferToImage(const VulkanBuffer* buffer, const VulkanIm
     mRuntime->mCmdPool->submitAndWait(cmdbuffer->get());
 }
 
+float VulkanBackend::getPipelineTime(const VulkanPipeline* pipeline, std::shared_ptr<VulkanLayout::DescriptorSet> des, std::vector<uint32_t> groupSize) {
+    std::shared_ptr<VulkanCommandPool::Buffer> cmd;
+    cmd.reset(const_cast<VulkanCommandPool::Buffer *>(mRuntime->mCmdPool->allocBuffer()));
+    cmd->begin(0);
+    mRuntime->mQueryPool->VulkanCmdResetQueryPool(cmd.get()->get());
+    mRuntime->mQueryPool->VulkanCmdWriteTimestamp(cmd.get()->get(), 0);
+    pipeline->bind(cmd.get()->get(), des->get());
+    vkCmdDispatch(cmd.get()->get(), groupSize[0], groupSize[1], groupSize[2]);
+    mRuntime->mQueryPool->VulkanCmdWriteTimestamp(cmd.get()->get(), 1);
+    cmd->end();
+    mRuntime->mCmdPool->submitAndWait(cmd.get()->get());
+    float time = mRuntime->mQueryPool->VulkanGetQueryPoolResults();
+    return time;
+}
 
+
+std::vector<uint32_t> VulkanBackend::autoTunePipeline(SharedPtr<VulkanPipeline> pipeline, std::shared_ptr<VulkanLayout::DescriptorSet> des, const std::vector<uint32_t> gws, const uint32_t tuneDimension, std::vector<uint32_t> defaultLws,float * const minCostPtr) {
+    bool isPrivate = !(pipeline->mTuneName.empty());
+    MNN_ASSERT(isPrivate);
+    if (mRuntime->mGpuMode & MNNGpuMode::MNN_GPU_TUNING_NONE) {
+        MNN_ASSERT(defaultLws.size() == 3);
+        MNN_ASSERT(minCostPtr == nullptr);
+        pipeline->changePipeline(defaultLws);
+        return defaultLws;
+    }
+    MNN_ASSERT(tuneDimension > 0 && tuneDimension <= 3);
+
+    std::unordered_map<VKTuneKey, VKTuneValue, VkTuneHash> & tuneMap = mRuntime->mTuneMap;
+    VKTuneKey tuneKey = {pipeline->mTuneName, {gws[0], gws[1], gws[2]}};
+    if (tuneMap.find(tuneKey) != tuneMap.end()) {
+        VKTuneValue tuneValue = tuneMap[tuneKey];
+        if (minCostPtr) {
+            *minCostPtr = tuneValue.optimalCost;
+        }
+        pipeline->changePipeline({tuneValue.optimalLws[0], tuneValue.optimalLws[1], tuneValue.optimalLws[2]});
+        return {tuneValue.optimalLws[0], tuneValue.optimalLws[1], tuneValue.optimalLws[2]};
+    }
+
+    std::vector<uint32_t> workGroupCount(3, 1);
+    std::vector<uint32_t> lwsOptimal(3, 1);
+    float minCost = -1.0f;
+
+    std::vector<int> maxLocalWorkGroupSize(3, 1);
+    int maxNumInvocation = mRuntime->mDevice->getMaxComputeWorkGroupInvocations();
+    mRuntime->mDevice->getMaxComputeWorkGroupSize(maxLocalWorkGroupSize);
+    uint32_t subgroupSize = mRuntime->mDevice->getSubgroupSize();
+
+    uint32_t minLocalSize, maxLocalX, maxLocalY, maxLocalZ;
+    minLocalSize = 1;
+    maxLocalX = ALIMIN(maxLocalWorkGroupSize[0], gws[0] << 1);
+    maxLocalY = ALIMIN(maxLocalWorkGroupSize[1], gws[1] << 1);
+    maxLocalZ = ALIMIN(maxLocalWorkGroupSize[2], gws[2] << 1);
+
+    std::pair<uint32_t, uint32_t> localSizeRangeX = std::pair<uint32_t, uint32_t>(minLocalSize, maxLocalX);
+    std::pair<uint32_t, uint32_t> localSizeRangeY = (tuneDimension > 1) ? std::pair<uint32_t, uint32_t>(minLocalSize, maxLocalY) : std::pair<uint32_t, uint32_t>(1, 1);
+    std::pair<uint32_t, uint32_t> localSizeRangeZ = (tuneDimension > 2) ? std::pair<uint32_t, uint32_t>(minLocalSize, maxLocalZ) : std::pair<uint32_t, uint32_t>(1, 1);
+
+    bool tuneWideFlag = (mRuntime->mGpuMode & MNNGpuMode::MNN_GPU_TUNING_WIDE);
+
+    for (uint32_t z = localSizeRangeZ.first; z <= localSizeRangeZ.second; z = z << 1) {
+        for (uint32_t y = localSizeRangeY.first; y <= localSizeRangeY.second; y = y << 1) {
+            for (uint32_t x = localSizeRangeX.first; x <= localSizeRangeX.second; x = x << 1) {
+                if (x * y * z > maxNumInvocation) {
+                    continue;
+                }
+                if (x * y * z <= 16) {
+                    continue;
+                }
+                if (tuneWideFlag) { // MNN_GPU_TUNING_WIDE
+                    if (x * y * z > 4 * subgroupSize || x > 128 || y > 128 || z > 128) {
+                        continue;
+                    }
+                } else { // MNN_GPU_TUNING_HEAVY
+                    if (x * y * z > 16 * subgroupSize) {
+                        continue;
+                    }
+                }
+
+                workGroupCount[0] = UP_DIV(gws[0], x);
+                workGroupCount[1] = UP_DIV(gws[1], y);
+                workGroupCount[2] = UP_DIV(gws[2], z);
+                pipeline->changePipeline({x, y, z});
+                auto costTime = getPipelineTime(pipeline.get(), des, {workGroupCount[0], workGroupCount[1], workGroupCount[2]});
+                // MNN_PRINT("LWS[%4u,%4u,%4u]---Time[%4.2f]ms\n", x, y, z, costTime);
+                if(costTime < minCost || minCost < 0.0f) {
+                    minCost = costTime;
+                    lwsOptimal[0] = x;
+                    lwsOptimal[1] = y;
+                    lwsOptimal[2] = z;
+                }
+
+            }
+        }
+    }
+
+    // MNN_PRINT("Optimal LWS[%4u, %4u, %4u]. GWS[%4u, %4u, %4u]. Time[%4.2f]ms\n", lwsOptimal[0], lwsOptimal[1], lwsOptimal[2],
+    //                                                                              gws[0], gws[1], gws[2],
+    //                                                                              minCost);
+
+    pipeline->changePipeline(lwsOptimal);
+
+    if (minCostPtr) {
+        *minCostPtr = minCost;
+    }
+
+    tuneMap[tuneKey] = {{lwsOptimal[0], lwsOptimal[1], lwsOptimal[2]}, minCost};
+
+    return lwsOptimal;
+}
 } // namespace MNN

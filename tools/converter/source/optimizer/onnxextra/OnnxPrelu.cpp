@@ -27,9 +27,40 @@ public:
             res->setName(expr->outputName(0));
             return res->expr().first;
         }
-
-        const int slopeSize = slopeInfo->size;
-
+        auto config = Global<modelConfig>::Get();
+        auto dimSize = slopeInfo->dim.size();
+        const int slopeSize = (int)slopeInfo->size;
+        if (1 == slopeSize) {
+            auto res = _Relu(inputs[0], slopeData[0]);
+            res->setName(expr->outputName(0));
+            return res->expr().first;
+        }
+        bool needPermute = false;
+        std::vector<int> permuteDims;
+        int slopAxis = -1;
+        for (int i=0; i<dimSize; ++i) {
+            if (slopeInfo->dim[i] == slopeSize) {
+                slopAxis = i;
+                break;
+            }
+        }
+        auto input = inputs[0];
+        if (dimSize >= 2 && 1 != slopAxis) {
+            if (config->optimizeLevel < 2 || slopAxis == -1) {
+                auto k = _Select(_Less(inputs[0], _Scalar<float>(0)), slope, _Scalar<float>(1));
+                auto res = _Multiply(inputs[0], k);
+                res->setName(expr->outputName(0));
+                return res->expr().first;
+            }
+            needPermute = true;
+            permuteDims.resize(dimSize);
+            for (int i=0; i<dimSize; ++i) {
+                permuteDims[i] = i;
+            }
+            permuteDims[1] = slopAxis;
+            permuteDims[slopAxis] = 1;
+            input = _Transpose(input, permuteDims);
+        }
         std::unique_ptr<PReluT> preluParam(new PReluT);
 
         preluParam->slopeCount = slopeSize;
@@ -43,7 +74,11 @@ public:
         mergedOp->type       = OpType_PReLU;
         mergedOp->main.type  = OpParameter_PRelu;
         mergedOp->main.value = preluParam.release();
-        auto newExpr         = Expr::create(mergedOp.get(), {inputs[0]});
+        auto newExpr         = Expr::create(mergedOp.get(), {input});
+        if (needPermute) {
+            auto output = _Transpose(Variable::create(newExpr), permuteDims);
+            newExpr = output->expr().first;
+        }
         newExpr->setName(expr->name());
         return newExpr;
     }
@@ -134,7 +169,7 @@ public:
         }
         auto k = (inputs.size() == 2 ? inputs[1] : _Scalar<int>(0));
         auto mask = (upper ? _GreaterEqual(rangeW, rangeH + k) : _GreaterEqual(rangeH, rangeW - k));
-        mask = _Reshape(mask, _Concat({_Fill(_Size(shape) - _Scalar<int>(2), oneV), _Shape(mask)}, 0));
+        mask = _Reshape(mask, _Concat({_Fill(_Unsqueeze(_Size(shape) - _Scalar<int>(2), {0}), oneV), _Shape(mask)}, 0));
         auto res = _Select(mask, inputs[0], zero);
         res->setName(expr->outputName(0));
         return res->expr().first;

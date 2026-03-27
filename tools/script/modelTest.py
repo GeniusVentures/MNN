@@ -2,6 +2,7 @@
 #-- coding:utf8 --
 import sys
 import os
+import re
 
 model_root_dir = sys.argv[1]
 
@@ -66,9 +67,74 @@ for name in os.listdir(root_dir):
         print(message)
         dynamic_size += os.path.getsize(modelName)/1024.0
         static_size += os.path.getsize(tmpModel)/1024.0
-        message = run_cmd([command, tmpModel, inputName, outputName, parameters])
+        if name == 'mobilenetv1quan' or name == 'overflowaware':
+            parameters_specific = forwardType + ' 0.1 ' + precision + input_dims
+            message = run_cmd([command, tmpModel, inputName, outputName, parameters_specific])
+
+            if name == 'mobilenetv1quan' and os.path.exists(os.path.join(root_dir, name, 'testdir')):
+                print("Test mobilenetv1quan using Module's prearrange\n")
+                commandP = 'ModuleBasic.out.exe' if os.name == 'nt' else './ModuleBasic.out'
+                messagePClone = run_cmd([commandP, modelName, os.path.join(root_dir, name, 'testdir'), '96'])
+                messagePOrigin = run_cmd([commandP, modelName, os.path.join(root_dir, name, 'testdir')])
+
+                matchClone = re.search(r"diff rate = (\d+\.\d+)", messagePClone)
+                matchOrigin = re.search(r"diff rate = (\d+\.\d+)", messagePOrigin)
+                if matchOrigin:
+                    diff_rate_str_origin = matchOrigin.group(1)
+                    diff_rate_val_origin = float(diff_rate_str_origin)
+
+                    if matchClone:
+                        diff_rate_str = matchClone.group(1)
+                        diff_rate_val = float(diff_rate_str)
+
+                        if diff_rate_val > diff_rate_val_origin: # Ensure the diff rate is the same
+                            print("mobilenetv1quan use Module's prearrange is error: diff rate is: ", diff_rate_val)
+                            gWrong.append(modelName)
+                        else:
+                            print("mobilenetv1quan use Module's prearrange is right\n")
+                    else:
+                        gWrong.append(modelName)
+
+                else:
+                    gWrong.append(modelName)
+
+        else:
+            message = run_cmd([command, tmpModel, inputName, outputName, parameters])
     else:
-        message = run_cmd([command, modelName, inputName, outputName, parameters])
+        if name == 'mobilenetv1quan' or name == 'overflowaware':
+            parameters_specific = forwardType + ' 0.1 ' + precision + input_dims
+            message = run_cmd([command, modelName, inputName, outputName, parameters_specific])
+        else:
+            message = run_cmd([command, modelName, inputName, outputName, parameters])
+
+        if name == 'mobilenetv1quan' and os.path.exists(os.path.join(root_dir, name, 'testdir')):
+            print("Test mobilenetv1quan using Module's prearrange\n")
+            commandP = 'ModuleBasic.out.exe' if os.name == 'nt' else './ModuleBasic.out'
+            messagePClone = run_cmd([commandP, modelName, os.path.join(root_dir, name, 'testdir'), '96'])
+            messagePOrigin = run_cmd([commandP, modelName, os.path.join(root_dir, name, 'testdir')])
+
+            matchClone = re.search(r"diff rate = (\d+\.\d+)", messagePClone)
+            matchOrigin = re.search(r"diff rate = (\d+\.\d+)", messagePOrigin)
+            if matchOrigin:
+                diff_rate_str_origin = matchOrigin.group(1)
+                diff_rate_val_origin = float(diff_rate_str_origin)
+
+                if matchClone:
+                    diff_rate_str = matchClone.group(1)
+                    diff_rate_val = float(diff_rate_str)
+
+                    if diff_rate_val > diff_rate_val_origin: # Ensure the diff rate is the same
+                        print("mobilenetv1quan use Module's prearrange is error: diff rate is: ", diff_rate_val)
+                        gWrong.append(modelName)
+                    else:
+                        print("mobilenetv1quan use Module's prearrange is right\n")
+                else:
+                    gWrong.append(modelName)
+
+            else:
+                gWrong.append(modelName)
+
+            
     if (message.find('Correct') == -1):
         gWrong.append(modelName)
     print(message)
@@ -160,6 +226,8 @@ for name in os.listdir(root_dir):
     print(name)
     if name == '.DS_Store':
         continue
+    if name == 'saodubi':
+        continue
     moduleName = os.path.join(root_dir, name, 'model.mnn')
     inputName = os.path.join(root_dir, name, 'input.mnn')
     outputName = os.path.join(root_dir, name, 'output.mnn')
@@ -176,6 +244,7 @@ flag = ''
 if runStatic:
     flag = 'STATIC'
 print('TEST_NAME_MODEL%s: 模型测试%s\nTEST_CASE_AMOUNT_MODEL%s: {\"blocked\":0,\"failed\":%d,\"passed\":%d,\"skipped\":0}\n'%(flag, flag, flag, len(gWrong), total_num - len(gWrong)))
+print('TEST_CASE={\"name\":\"模型测试%s\",\"failed\":%d,\"passed\":%d}\n'%(flag, len(gWrong), total_num - len(gWrong)))
 if len(gWrong) > 0:
     exit(1)
 

@@ -17,12 +17,15 @@ namespace MNN {
 class MetalConvolutionDepthwise : public MetalConvolutionCommon {
 public:
     MetalConvolutionDepthwise(Backend *backend, const MNN::Op *op);
+    MetalConvolutionDepthwise(Backend *backend, const MNN::Op *op, std::shared_ptr<MNN::Tensor> weight,
+                              std::shared_ptr<MNN::Tensor> bias);
     virtual ~MetalConvolutionDepthwise() = default;
     virtual ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
+    virtual bool onClone(Backend* bn, const Op* op, Execution** dst) override;
 
 protected:
-    virtual void onFloat(const Tensor *input, const Tensor *output, id<MTLComputeCommandEncoder> encoder) override;
-    virtual std::shared_ptr<MNN::Tensor> weightTransform(int group, int oc, int ic, int kh, int kw, const float *src, bool int8Weight=false, bool int4Weight=false) override;
+    virtual void onEncode(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs, id<MTLComputeCommandEncoder> encoder) override;
+    virtual std::shared_ptr<MNN::Tensor> weightTransform(int group, int oc, int ic, int kh, int kw, const float *src, bool int8Weight=false, bool int4Weight=false, id<MTLBuffer> srcGpuBuffer=nil) override;
 private:
     id<MTLComputePipelineState> mPipeline;
     std::pair<MTLSize, MTLSize> mThreads;

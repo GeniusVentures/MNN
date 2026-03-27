@@ -11,6 +11,7 @@ def run_cmd(args):
     cmd = args[0]
     for i in range(1, len(args)):
         cmd += ' ' + args[i]
+    print(cmd)
     stdout = os.popen(cmd).read()
     return stdout
 
@@ -25,7 +26,7 @@ def parseRes(res):
         point = float(item[splitIdx+1:])
         idxs.add(idx)
         avgp += point
-    avgp /= len(items) 
+    avgp /= len(items)
     return idxs, avgp
 
 def compare(origin, quant, jsonFile):
@@ -38,7 +39,7 @@ def compare(origin, quant, jsonFile):
         quantIdx, quantPoint = parseRes(quant_res)
         print(originIdx, originPoint)
         print(quantIdx, quantPoint)
-        idxRate = len(originIdx & quantIdx) / max(len(originIdx), len(quantIdx))    
+        idxRate = len(originIdx & quantIdx) / max(len(originIdx), len(quantIdx))
         pointRate = quantPoint / originPoint
         print(name, idxRate, pointRate)
         if idxRate < 0.5:
@@ -94,6 +95,10 @@ def testacc(modelpath, imagepath, path, labelpath):
     with open(jsonFile) as f:
         jsonObj = json.loads(f.read())
     originModel = modelpath + jsonObj['model']
+    jsonObj['path'] = imagepath
+    jsonFile = './__quantized.json'
+    with open(jsonFile, 'w', encoding='utf-8') as fp:
+        json.dump(jsonObj, fp, ensure_ascii=False, indent=4)
     quantModel  = './__quantModel.mnn'
     message = run_cmd(['./quantized.out', originModel, quantModel, jsonFile])
     res = True
@@ -110,7 +115,7 @@ if __name__ == '__main__':
     model_root_dir = sys.argv[1]
     root_dir = os.path.join(model_root_dir, 'TestPTQ')
     print('root: ' + root_dir + '\n')
-    
+
     gWrong = []
     for name in os.listdir(root_dir + '/json'):
         if '.DS_Store' in name:
@@ -123,6 +128,7 @@ if __name__ == '__main__':
     for w in gWrong:
         print(w)
     print('TEST_NAME_PTQ: PTQ测试\nTEST_CASE_AMOUNT_PTQ: {\"blocked\":0,\"failed\":%d,\"passed\":%d,\"skipped\":0}\n'%(len(gWrong), total_num - len(gWrong)))
+    print('TEST_CASE={\"name\":\"PTQ测试\",\"failed\":%d,\"passed\":%d}\n'%(len(gWrong), total_num - len(gWrong)))
     if len(gWrong) > 0:
         exit(1)
 
@@ -139,5 +145,6 @@ if __name__ == '__main__':
     for w in gWrong:
         print(w)
     print('BATCH_TEST_NAME_PTQ: PTQ测试\nTEST_CASE_AMOUNT_PTQ: {\"blocked\":0,\"failed\":%d,\"passed\":%d,\"skipped\":0}\n'%(len(gWrong), total_num - len(gWrong)))
+    print('TEST_CASE={\"name\":\"BATCH-PTQ测试\",\"failed\":%d,\"passed\":%d}\n'%(len(gWrong), total_num - len(gWrong)))
     if len(gWrong) > 0:
         exit(1)

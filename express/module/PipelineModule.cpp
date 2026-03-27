@@ -13,10 +13,12 @@
 #include "IfModule.hpp"
 #include "WhileModule.hpp"
 #include "NMSModule.hpp"
+#include "MoEModule.hpp"
 #include "Utils.hpp"
 #include "core/Backend.hpp"
 #include "core/WrapExecution.hpp"
 #include "core/FileLoader.hpp"
+#include "core/OpCommonUtils.hpp"
 #include "utils/InitNet.hpp"
 #include "RuntimeAttr.hpp"
 #include "geometry/GeometryComputer.hpp"
@@ -92,12 +94,8 @@ std::vector<VARP> ExprModule::onForward(const std::vector<VARP>& inputs) {
 }
 
 Module* ExprModule::clone(CloneContext* ctx) const {
-    ExprModule* module(new ExprModule(ctx->getOrClone(mExpr)));
-    for (const VARP& var : mInputs) {
-        module->mInputs.push_back(ctx->getOrClone(var));
-    }
-    module->mInputIndexes = mInputIndexes;
-    return this->cloneBaseTo(ctx, module);
+    MNN_ERROR("Don't support clone for Expr Module\n");
+    return nullptr;
 }
 
 PipelineModule::PipelineModule(std::vector<VARP> inputs, std::vector<VARP> outputs, const Transformer& transformFunction) {
@@ -197,8 +195,27 @@ std::vector<int> PipelineModule::countOutputReference(std::vector<int> outputInd
     }
     return countResult;
 }
+int PipelineModule::onOptimize(Interpreter::SessionMode stage) {
+    if (stage == Interpreter::Module_Forward_Separate) {
+        if (mSubModules.size() == 1 && std::get<0>(mSubModules[0])->type() == "StaticModule") {
+            mSeperate = true;
+            return 0;
+        }
+        return NOT_SUPPORT;
+    } else if (stage == Interpreter::Module_Forward_Combine) {
+        mSeperate = false;
+    }
+    return 0;
+}
 
 std::vector<VARP> PipelineModule::onForward(const std::vector<VARP>& inputs) {
+    if (mSeperate && inputs.empty()) {
+        for (int index = 0; index < mSubModules.size(); ++index) {
+            auto& m = mSubModules[index];
+            std::get<0>(m)->onForward(inputs);
+        }
+        return {};
+    }
     std::vector<VARP> mStack(mStackSize);
     for (int i = 0; i < mInitVars.size(); ++i) {
         mStack[i + mInputSize] = mInitVars[i];
@@ -322,7 +339,8 @@ static bool isBreakOp(const Op* op) {
     if (op->type() == OpType_While && op->main_as_WhileParam() != nullptr) {
         isWhileControlflow = true;
     }
-    if (op->type() == OpType_If || isWhileControlflow || op->type() == OpType_Where || op->type() == OpType_Segment || op->type() == OpType_Unique || op->type() == OpType_NonMaxSuppressionV2) {
+    if (op->type() == OpType_If || isWhileControlflow || op->type() == OpType_Where || op->type() == OpType_Segment ||
+        op->type() == OpType_Unique || op->type() == OpType_NonMaxSuppressionV2 || op->type() == OpType_MoE) {
         return true;
     }
     return false;
@@ -386,10 +404,98 @@ static std::vector<int> _collectNeededOps(const MNN::Net* net, const std::set<in
     return ops;
 }
 
-static std::vector<SubModuleInfo> _createSubModuleInfo(std::shared_ptr<BufferStorage> bufferStorage, const std::set<int>& inputIndexes, const std::set<int>& outputIndexes, const std::set<int>& noComputeIndexes, std::shared_ptr<Schedule::ScheduleInfo> sharedConst) {
+static std::vector<int> _findBreakIndex(const SubModuleInfo& info, const Net* net, std::shared_ptr<Schedule::ScheduleInfo> sharedConst) {
+    // 0: not used, 1: const, 2: output
+    std::vector<uint8_t> constMask(sharedConst->allTensors.size(), 0);
+    for (int i=0; i<sharedConst->allTensors.size(); ++i) {
+        if(sharedConst->allTensors[i].get() != nullptr) {
+            constMask[i] = 1;
+        }
+    }
+    for (int v = 0; v < info.opList.size(); ++v) {
+        auto op = net->oplists()->GetAs<Op>(info.opList[v]);
+        if (nullptr == op->outputIndexes()) {
+            continue;
+        }
+        bool isConst = true;
+        if (nullptr != op->inputIndexes()) {
+            for (int i=0; i<op->inputIndexes()->size(); ++i) {
+                auto index = op->inputIndexes()->data()[i];
+                if (constMask[index]) {
+                    continue;
+                }
+                if (OpCommonUtils::opNeedContent(op, i)) {
+                    isConst = false;
+                    break;
+                }
+            }
+        }
+        if (isConst) {
+            for (int i=0; i<op->outputIndexes()->size(); ++i) {
+                auto index = op->outputIndexes()->data()[i];
+                constMask[index] = 1;
+            }
+        }
+    }
+    std::vector<int> res;
+    // Check Break Index
+    for (int v = 0; v < info.opList.size(); ++v) {
+        auto op = net->oplists()->GetAs<Op>(info.opList[v]);
+        if (nullptr == op->outputIndexes() || nullptr == op->inputIndexes()) {
+            continue;
+        }
+        int inputNum = op->inputIndexes()->size();
+        auto dims = SizeComputer::needInputContent(op, inputNum);
+        for (auto index : dims) {
+            if (index < inputNum) {
+                if (constMask[op->inputIndexes()->data()[index]] != 1) {
+                    res.emplace_back(v);
+                    break;
+                }
+            }
+        }
+    }
+    return res;
+}
+static std::vector<SubModuleInfo> _splitSubModuleForShapeConst(const std::vector<SubModuleInfo>& origin, const Net* net, std::shared_ptr<Schedule::ScheduleInfo> sharedConst) {
+    std::vector<SubModuleInfo> res;
+    for (auto& m : origin) {
+        if (m.isBreak) {
+            res.emplace_back(std::move(m));
+            continue;
+        }
+        auto breakIndexes = _findBreakIndex(m, net, sharedConst);
+        if (breakIndexes.size() > 0) {
+            int current = 0;
+            for (auto breakIndex : breakIndexes) {
+                // Split
+                if (breakIndex > current) {
+                    SubModuleInfo m0;
+                    m0.opList.insert(m0.opList.begin(), m.opList.begin() + current, m.opList.begin() + breakIndex);
+                    res.emplace_back(std::move(m0));
+                }
+                SubModuleInfo m1;
+                m1.opList = {m.opList[breakIndex]};
+                res.emplace_back(std::move(m1));
+                current = breakIndex + 1;
+            }
+            if (current < m.opList.size()) {
+                SubModuleInfo m2;
+                m2.opList.insert(m2.opList.begin(), m.opList.begin() + current, m.opList.end());
+                res.emplace_back(std::move(m2));
+            }
+        } else {
+            res.emplace_back(std::move(m));
+        }
+    }
+    return res;
+}
+
+static std::vector<SubModuleInfo> _createSubModuleInfo(std::shared_ptr<BufferStorage> bufferStorage, const std::set<int>& inputIndexes, const std::set<int>& outputIndexes, const std::set<int>& noComputeIndexes, std::shared_ptr<Schedule::ScheduleInfo> sharedConst, bool& success) {
     std::vector<SubModuleInfo> submodule;
     auto net = flatbuffers::GetRoot<Net>(bufferStorage->buffer());
     auto selectOps = _collectNeededOps(net, inputIndexes, outputIndexes);
+    success = true;
 
     // Separate the graph to serveral submodule
     SubModuleInfo current;
@@ -400,8 +506,6 @@ static std::vector<SubModuleInfo> _createSubModuleInfo(std::shared_ptr<BufferSto
             // TODO: Don't need split segment
             if (current.opList.size() > 0) {
                 // Not empty
-                // Init tensormask
-                _computeTensorMask(current, net);
                 submodule.emplace_back(std::move(current));
             }
             SubModuleInfo controlOp;
@@ -421,13 +525,14 @@ static std::vector<SubModuleInfo> _createSubModuleInfo(std::shared_ptr<BufferSto
         current.opList.emplace_back(i);
     }
     if (!current.opList.empty()) {
-        _computeTensorMask(current, net);
         submodule.emplace_back(std::move(current));
     }
+    submodule = _splitSubModuleForShapeConst(submodule, net, sharedConst);
     for (int moduleIndex=0; moduleIndex < submodule.size(); ++moduleIndex) {
         auto& m = submodule[moduleIndex];
         // Compute input / output
         if (!m.isBreak) {
+            _computeTensorMask(m, net);
             for (int i=0; i<m.tensorMask.size(); ++i) {
                 if (0 == m.tensorMask[i]) {
                     continue;
@@ -494,8 +599,9 @@ static std::vector<SubModuleInfo> _createSubModuleInfo(std::shared_ptr<BufferSto
                 if (net->tensorName() != nullptr) {
                     MNN_PRINT("%d tensor [ %s ] is input but not found\n", index, net->tensorName()->GetAsString(index)->c_str());
                 }
+                success = false;
+                return std::vector<SubModuleInfo>{};
             }
-            MNN_ASSERT(find);
         }
     }
     for (auto& m : submodule) {
@@ -506,7 +612,7 @@ static std::vector<SubModuleInfo> _createSubModuleInfo(std::shared_ptr<BufferSto
 
 struct ModuleRuntimeConfig {
     bool needGeometry;
-    RuntimeInfo rt;
+    std::shared_ptr<Executor::RuntimeManager> rt;
     Backend::Info compute;
     const BackendConfig* userConfig = nullptr;
     Session::ModeGroup modes;
@@ -526,6 +632,9 @@ static Module* _createSubModule(std::shared_ptr<BufferStorage> bufferStorage, co
         if (OpType_NonMaxSuppressionV2 == op->type()) {
             return NMSModule::create(op);
         }
+        if (OpType_MoE == op->type()) {
+            return MoEModule::create(op, subs, runtimeConfig.rt, config);
+        }
         // MNN_ASSERT(false);
     }
     Schedule::ScheduleInfo scheduleInfo;
@@ -533,7 +642,7 @@ static Module* _createSubModule(std::shared_ptr<BufferStorage> bufferStorage, co
     scheduleInfo.defaultBackend = sharedConst->defaultBackend;
     scheduleInfo.constReplaceBackend = sharedConst->constReplaceBackend;
     scheduleInfo.allTensors = sharedConst->allTensors;
-    scheduleInfo.validForResize = initTensors(scheduleInfo.allTensors, net);
+    scheduleInfo.validForResize = initTensors(scheduleInfo.allTensors, net, info.opList.data(), info.opList.size());
     std::vector<Schedule::OpCacheInfo> oplists;
     std::vector<const Op*> ops;
     ops.reserve(info.opList.size());
@@ -606,6 +715,7 @@ Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::
 
 Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::vector<std::string>& outputs, std::shared_ptr<BufferStorage> bufferStorage, std::shared_ptr<MNN::Express::Executor::RuntimeManager> rtMgr, const Module::Config* config, std::map<std::string, SubGraph>& subGraphMap) {
     MNN_ASSERT(nullptr != rtMgr);
+    MNN_ASSERT(nullptr != config);
     std::shared_ptr<Schedule::ScheduleInfo> sharedConst;
     auto buffer = bufferStorage->buffer();
     auto length = bufferStorage->size();
@@ -614,12 +724,14 @@ Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::
     // Extra Const Tensors
     sharedConst.reset(new Schedule::ScheduleInfo);
     auto curExe = ExecutorScope::Current();
-    bool permitCodeGen = false;
+    bool preReplaceConstTensor = true;
     std::shared_ptr<ModuleRuntimeConfig> modRuntimeCfgPtr(new ModuleRuntimeConfig);
-    if (!rtMgr->getInside()->mExternalFile.empty()) {
-        modRuntimeCfgPtr->externalFile = rtMgr->getInside()->mExternalFile;
+    if (!rtMgr->getInside()->mContent->mExternalFile.empty()) {
+        modRuntimeCfgPtr->externalFile = rtMgr->getInside()->mContent->mExternalFile;
     }
-    permitCodeGen = rtMgr->getInside()->modes.codegenMode == Interpreter::Session_Codegen_Enable;
+    if (rtMgr->getInside()->mContent->modes.codegenMode == Interpreter::Session_Codegen_Enable || (!config->shapeMutable)) {
+        preReplaceConstTensor = false;
+    }
     std::shared_ptr<Backend> defaultBackend = curExe->getAttr()->constantBackend;
     std::vector<std::shared_ptr<Tensor>> allTensors;
     sharedConst->allTensors.resize(net->tensorName()->size());
@@ -627,21 +739,15 @@ Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::
     ModuleRuntimeConfig& modRuntime = *modRuntimeCfgPtr;
     modRuntime.needGeometry = needGeometry;
     {
-        modRuntime.modes = rtMgr->getInside()->modes;
-        modRuntime.rt = rtMgr->getInside()->mRuntime;
-        modRuntime.externalFile = rtMgr->getInside()->mExternalFile;
-        modRuntime.userConfig = &rtMgr->getInside()->mConfig;
-        modRuntime.compute.type      = modRuntime.rt.first.begin()->first;
-        modRuntime.compute.numThread = 1;
-        // set allocator type
-        modRuntime.rt.first.begin()->second->setAllocatorType(rtMgr->getInside()->modes.memoryAllocatorType);
-        modRuntime.rt.second->setAllocatorType(rtMgr->getInside()->modes.memoryAllocatorType);
-        // set winograd memory type
-        modRuntime.rt.first.begin()->second->setWinogradMemoryLevel(rtMgr->getInside()->modes.winogradMemoryUsed);
-        modRuntime.rt.second->setWinogradMemoryLevel(rtMgr->getInside()->modes.winogradMemoryUsed);
+        modRuntime.modes = rtMgr->getInside()->mContent->modes;
+        modRuntime.rt = rtMgr;
+        rtMgr->getInside()->mRuntime.first.begin()->second->setRuntimeHint(rtMgr->getInside()->mContent->modes.runtimeHint);
+        modRuntime.externalFile = rtMgr->getInside()->mContent->mExternalFile;
+        modRuntime.userConfig = &rtMgr->getInside()->mContent->mConfig;
+        modRuntime.compute.type = rtMgr->getInside()->mRuntime.first.begin()->first;
     }
-    auto& rt = modRuntime.rt;
-    auto firstRt = rt.first[modRuntime.compute.type];
+    auto& rt = modRuntime.rt->getInside()->mRuntime;
+    auto firstRt = rt.first.find(modRuntime.compute.type)->second;
     sharedConst->constReplaceBackend.reset(firstRt->onCreate(modRuntime.userConfig));
     ErrorCode code = NO_ERROR;
     std::set<int> noneedComputeIndexes;
@@ -664,6 +770,10 @@ Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::
     std::set<int> outputIndexes;
     std::map<int, int> stackMap;
     std::map<std::string, int> outputIndexesMap;
+    std::set<std::string> outputNameSet;
+    for (auto name : outputs) {
+        outputIndexesMap.insert(std::make_pair(name, -1));
+    }
     for (int i=0; i<net->tensorName()->size(); ++i) {
         auto tname = net->tensorName()->GetAsString(i)->str();
         for (int j=0; j<inputs.size(); ++j) {
@@ -673,31 +783,78 @@ Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::
                 break;
             }
         }
-        for (int j=0; j<outputs.size(); ++j) {
-            if (tname == outputs[j]) {
-                outputIndexes.emplace(i);
-                outputIndexesMap.insert(std::make_pair(tname, i));
-                break;
-            }
+        auto outputIter = outputIndexesMap.find(tname);
+        if (outputIter != outputIndexesMap.end()) {
+            outputIndexes.emplace(i);
+            outputIter->second = i;
         }
     }
-    if (outputIndexesMap.size() != outputs.size()) {
-        MNN_ERROR("PipelineModule:: Can't find enough output from the model, finded is:\n");
-        for (auto& iter : outputIndexesMap) {
-            MNN_ERROR("[ %s ] ", iter.first.c_str());
+    bool valid = true;
+    for (auto& iter : outputIndexesMap) {
+        if (iter.second == -1) {
+            MNN_ERROR("PipelineModule:: Can't find output %s from the model:\n", iter.first.c_str());
+            valid = false;
         }
-        MNN_ERROR("\n");
+    }
+    if (!valid) {
         return nullptr;
+    }
+    bool divideSuccess = true;
+    auto subModulesInfo = _createSubModuleInfo(bufferStorage, inputIndexes, outputIndexes, noneedComputeIndexes, sharedConst, divideSuccess);
+    if (!divideSuccess) {
+        MNN_ERROR("Create module error\n");
+        return nullptr;
+    }
+    std::vector<std::shared_ptr<Module>> subModules(subModulesInfo.size());
+    for (int i=0; i<subModulesInfo.size(); ++i) {
+        subModules[i].reset(_createSubModule(bufferStorage, subModulesInfo[i], subGraphMap, sharedConst, *config, modRuntime));
+    }
+    bool needReplaceBackend = false;
+    if (preReplaceConstTensor) {
+        // Prereplace const tensor
+        auto curBackend = sharedConst->constReplaceBackend.get();
+        if (sharedConst->constReplaceBackend->type() != sharedConst->defaultBackend->type()) {
+            for (auto& t : sharedConst->allTensors) {
+                if (nullptr == t.get()) {
+                    continue;
+                }
+                auto des = TensorUtils::getDescribe(t.get());
+                if (des->isMutable) {
+                    continue;
+                }
+                if (!WrapExecution::needWrap(t.get(), curBackend)) {
+                    continue;
+                }
+                if (des->stageMask & Tensor::InsideDescribe::GEOMETRY_STAGE) {
+                    continue;
+                }
+                if (des->stageMask & Tensor::InsideDescribe::CONVERTED_STAGE) {
+                    continue;
+                }
+                std::shared_ptr<Tensor> wrapTensor = WrapExecution::makeCopyTensor(t.get(), curBackend);
+                auto outDes = TensorUtils::getDescribe(wrapTensor.get());
+                outDes->usage = des->usage;
+                auto tempRes = WrapExecution::allocAndCopy(curBackend, t.get(), wrapTensor.get());
+                if (!tempRes) {
+                    continue;
+                }
+                needReplaceBackend = true;
+                outDes->stageMask |= Tensor::InsideDescribe::CONVERTED_STAGE;
+                WrapExecution::copyReplaceTensor(wrapTensor.get(), t.get());
+            }
+        }
+        // Clear CPU Const memory
+        rt.second->onGabageCollect(0);
     }
     for (auto index : noneedComputeIndexes) {
         auto tensor = Tensor::clone(sharedConst->allTensors[index].get());
         auto constVar = Variable::create(Expr::create(tensor, true));
+        auto back = TensorUtils::getDescribeOrigin(tensor)->getBackend();
+        auto x =sharedConst->constReplaceBackend.get();
+        if (needReplaceBackend && TensorUtils::getDescribeOrigin(tensor)->getBackend() == sharedConst->constReplaceBackend.get()) {
+            constVar->expr().first->inside()->mHoldBackend = sharedConst->constReplaceBackend;
+        }
         initVars.insert(std::make_pair(index, constVar));
-    }
-    auto subModulesInfo = _createSubModuleInfo(bufferStorage, inputIndexes, outputIndexes, noneedComputeIndexes, sharedConst);
-    std::vector<std::shared_ptr<Module>> subModules(subModulesInfo.size());
-    for (int i=0; i<subModulesInfo.size(); ++i) {
-        subModules[i].reset(_createSubModule(bufferStorage, subModulesInfo[i], subGraphMap, sharedConst, *config, modRuntime));
     }
     auto result = new PipelineModule;
     result->mInputSize = inputs.size();
@@ -753,39 +910,6 @@ Module* PipelineModule::load(const std::vector<std::string>& inputs, const std::
     }
     result->registerModel(subModules);
     result->mSharedConst = sharedConst;
-    if (!permitCodeGen) {
-        // Prereplace const tensor
-        auto curBackend = sharedConst->constReplaceBackend.get();
-        if (sharedConst->constReplaceBackend->type() != sharedConst->defaultBackend->type()) {
-            for (auto& t : sharedConst->allTensors) {
-                if (nullptr == t.get()) {
-                    continue;
-                }
-                auto des = TensorUtils::getDescribe(t.get());
-                if (des->isMutable) {
-                    continue;
-                }
-                if (!WrapExecution::needWrap(t.get(), curBackend)) {
-                    continue;
-                }
-                if (des->stageMask & Tensor::InsideDescribe::GEOMETRY_STAGE) {
-                    continue;
-                }
-                if (des->stageMask & Tensor::InsideDescribe::CONVERTED_STAGE) {
-                    continue;
-                }
-                std::shared_ptr<Tensor> wrapTensor = WrapExecution::makeCopyTensor(t.get(), curBackend);
-                auto outDes = TensorUtils::getDescribe(wrapTensor.get());
-                outDes->usage = des->usage;
-                auto tempRes = WrapExecution::allocAndCopy(curBackend, t.get(), wrapTensor.get());
-                if (!tempRes) {
-                    continue;
-                }
-                outDes->stageMask |= Tensor::InsideDescribe::CONVERTED_STAGE;
-                WrapExecution::copyReplaceTensor(wrapTensor.get(), t.get());
-            }
-        }
-    }
     return result;
 }
 

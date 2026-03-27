@@ -58,7 +58,19 @@ ErrorCode VulkanBasicExecutionDirect::onResize(const std::vector<Tensor *> &inpu
     auto initCmdBuffer = static_cast<VulkanBackend*>(backend())->getInitCommandBuffer();
     _initLayout(inputs, outputs, initCmdBuffer);
     mCmdBuffer->begin(0);
+
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    auto vkBn = static_cast<VulkanBackend*>(backend());
+    ErrorCode code = NO_ERROR;
+    {
+        VulkanTimeProfileScope scope(vkBn->timeProfiler(), mCmdBuffer->get(), mEncoder->getName().c_str(),
+                                     VulkanTimeProfiler::Kind::Execution);
+        code = mEncoder->onEncode(inputs, outputs, mCmdBuffer.get());
+    }
+#else
     auto code = mEncoder->onEncode(inputs, outputs, mCmdBuffer.get());
+#endif
+
     for (auto output : outputs) {
         auto vkTensor = reinterpret_cast<VulkanTensor*>(output->deviceId());
         for (int i=0; i<vkTensor->imageSize(); ++i) {
@@ -67,6 +79,7 @@ ErrorCode VulkanBasicExecutionDirect::onResize(const std::vector<Tensor *> &inpu
         }
     }
     _postTreat(outputs, mCmdBuffer.get());
+
     mCmdBuffer->end();
 #ifdef MNN_VULKAN_DEBUG
 #ifdef MNN_VULKAN_DEBUG_EAGER
@@ -85,7 +98,15 @@ ErrorCode VulkanBasicExecutionInDirect::onResize(const std::vector<Tensor *> &in
     auto initCmdBuffer = static_cast<VulkanBackend*>(backend())->getInitCommandBuffer();
     _initLayout(inputs, outputs, initCmdBuffer);
     auto mCmdBuffer = extra->getSingleCommand();
-    auto code = mEncoder->onEncode(inputs, outputs, mCmdBuffer.get());
+    auto vkBn = static_cast<VulkanBackend*>(backend());
+    ErrorCode code = NO_ERROR;
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    VulkanTimeProfileScope scope(vkBn->timeProfiler(), mCmdBuffer->get(), mEncoder->getName().c_str(),
+                                 VulkanTimeProfiler::Kind::Execution);
+    code = mEncoder->onEncode(inputs, outputs, mCmdBuffer.get());
+#else
+    code = mEncoder->onEncode(inputs, outputs, mCmdBuffer.get());
+#endif
     _postTreat(outputs, mCmdBuffer.get());
     return code;
 }

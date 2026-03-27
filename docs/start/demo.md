@@ -1,12 +1,12 @@
 # 示例工程
 
 ## C++ Demo
-[从源码编译](../compile/tools.html#id7)
+[从源码编译](../compile/other.md)
 ### 姿态检测
 代码位置：`demo/exec/multiPose.cpp`
 
 1. 下载原始的Tensorflow模型 [pose model](https://github.com/czy2014hust/posenet-python/raw/master/models/model-mobilenet_v1_075.pb)
-2. 使用 [模型转换工具](../tools/convert.md) 转换为 MNN 模型
+2. 使用 [模型转换工具](../tools/convert.md) 转换为 MNN 模型，转换时加上参数 --keepInputFormat=0 【把输入由NHWC转换为NC4HW4布局】
 3. 执行姿态检测
     ```bash
     ./multiPose.out model.mnn input.png pose.png
@@ -20,8 +20,10 @@
 ### 图像实例分割
 代码位置：`demo/exec/segment.cpp`
 
-下载 deeplabv3 分割模型并转换到 mnn 模型
+下载 deeplabv3 分割模型
 [https://storage.googleapis.com/download.tensorflow.org/models/tflite/gpu/deeplabv3_257_mv_gpu.tflite](https://storage.googleapis.com/download.tensorflow.org/models/tflite/gpu/deeplabv3_257_mv_gpu.tflite)
+
+使用 [模型转换工具](../tools/convert.md) 转换为 MNN 模型，转换时加上参数 --keepInputFormat=0 【把输入由NHWC转换为NC4HW4布局】
 
 ```bash
 ./segment.out model.mnn input.png result.png
@@ -114,21 +116,6 @@ output belong to class: 983
 $ python mobilenet_demo.py mobilenet_demo/mobilenet_v1.mnn mobilenet_demo/ILSVRC2012_val_00049999.JPEG
 expect 983
 output belong to class: 983
-```
-### 模型量化
-代码位置：`pymnn/examples/MNNQuant`
-
-离线量化工具，[用法参考](https://github.com/alibaba/MNN/tree/master/tools/MNNPythonOfflineQuant)，
-资源文件下载
-示例：
-```bash
-$ python test_mnn_offline_quant.py  --mnn_model quant_demo/mobilenet_v2_tfpb_train_withBN.mnn \
-            --quant_imgs quant_demo/quant_imgs \
-            --quant_model ./quant_model.mnn
-output names:	 MobilenetV2/Predictions/Reshape_1
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:46<00:00, 23.29s/it]
-Epoch cost: 46.618 s.
-quantized model save to ./quant_model.mnn
 ```
 
 ### 模型训练
@@ -240,3 +227,4 @@ sh ../tools/script/get_model.sh
 - [视频抠图](https://github.com/DefTruth/RobustVideoMatting.lite.ai.toolkit)
 - [SuperGlue关键点匹配](https://github.com/Hanson0910/MNNSuperGlue)
 - [OCR](https://github.com/DayBreak-u/chineseocr_lite/tree/onnx/android_projects/OcrLiteAndroidMNN)
+- [Bert-VITS2-MNN](https://github.com/Voine/Bert-VITS2-MNN)

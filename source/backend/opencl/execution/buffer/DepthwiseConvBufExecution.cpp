@@ -17,6 +17,10 @@ namespace OpenCL {
 
 DepthwiseConvBufExecution::DepthwiseConvBufExecution(const std::vector<Tensor *> &inputs, const MNN::Op *op, Backend *backend)
     : ConvBufCommonExecution(op->main_as_Convolution2D(), backend), CommonExecution(backend, op) {
+    if (!mConvComValid) {
+        mValid = false;
+        return;
+    }
     mOpenCLBackend      = static_cast<OpenCLBackend *>(backend);
     mResource->mConv2dParams       = op->main_as_Convolution2D();
     mResource->mConv2dCommonParams = mResource->mConv2dParams->common();
@@ -28,49 +32,34 @@ DepthwiseConvBufExecution::DepthwiseConvBufExecution(const std::vector<Tensor *>
     int outputChannel = mResource->mConv2dCommonParams->outputCount();
 
     std::vector<int> filterShape{1, outputChannel, kernelHeight, kernelWidth};
-    std::vector<int> filterImageShape{(int)kernelHeight * kernelWidth, (int)UP_DIV(outputChannel, 4)};
+    int filterImageShape[2] = {(int)kernelHeight * kernelWidth, (int)UP_DIV(outputChannel, 4)};
 
         
     const float* filterDataPtr = nullptr;
     int filterDataSize   = 0;
     std::shared_ptr<ConvolutionCommon::Int8Common> quanCommon;
-    ConvolutionCommon::getConvParameters(&quanCommon, backend, mResource->mConv2dParams, &filterDataPtr, &filterDataSize);
+    ConvolutionCommon::getConvParameters(&quanCommon, backend, op, &filterDataPtr, &filterDataSize);
 
     mResource->mFilter.reset(Tensor::createDevice<float>({1, ROUND_UP(filterImageShape[1], 2)/*for kernel C8 read*/, 1, 4 * filterImageShape[0]}));
-    std::shared_ptr<Tensor> filterBuffer(Tensor::createDevice<float>(filterShape));
-        
-    int buffer_size = filterBuffer->elementSize();
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()) {
-        buffer_size *= sizeof(half_float::half);
-    } else {
-        buffer_size *= sizeof(float);
-    }
-    cl::Buffer filterBufferCL(mOpenCLBackend->getOpenCLRuntime()->context(), CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, buffer_size);
-    filterBuffer->buffer().device = (uint64_t)(&filterBufferCL);
-    cl_int error;
-    auto ptrCL = mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(filterBufferCL, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
-    if(ptrCL != nullptr && error == CL_SUCCESS){
-        if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()){
-            for (int i = 0; i < filterBuffer->elementSize(); i++) {
-                ((half_float::half *)ptrCL)[i] = (half_float::half)(filterDataPtr[i]);
-            }
-        } else {
-            ::memcpy(ptrCL, filterDataPtr, filterBuffer->size());
-        }
-    }else{
-        MNN_ERROR("Map error ptrCL == nullptr \n");
-    }
-    mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueUnmapMemObject(filterBufferCL, ptrCL);
-
-    mOpenCLBackend->onAcquireBuffer(mResource->mFilter.get(), Backend::STATIC);
-    MNN::OpenCL::BufferConvertor bufferConvertor{mOpenCLBackend->getOpenCLRuntime()};
-        
-    bool needTrans = false;
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf() == false){
-        needTrans = true;
-    }
-    bufferConvertor.convertToNC4HW4Buffer(filterBuffer.get(), MNN::OpenCL::DW_CONV2D_FILTER, mResource->mFilter.get(), needTrans);
+    OPENCL_CHECK_ALLOC_CTOR(mOpenCLBackend->onAcquireBuffer(mResource->mFilter.get(), Backend::STATIC));
     
+    if (mOpenCLBackend->getRuntime()->hint().useCachedMmap <= 1){
+        std::shared_ptr<Tensor> filterBuffer(Tensor::createDevice<float>(filterShape));
+        size_t buffer_size = filterBuffer->elementSize() * sizeof(float);
+        cl::Buffer filterBufferCL(mOpenCLBackend->getOpenCLRuntime()->context(), CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, buffer_size);
+        filterBuffer->buffer().device = (uint64_t)(&filterBufferCL);
+        cl_int error;
+        auto ptrCL = mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(filterBufferCL, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
+        if(ptrCL != nullptr && error == CL_SUCCESS){
+            ::memcpy(ptrCL, filterDataPtr, filterBuffer->size());
+        }else{
+            MNN_ERROR("Map error ptrCL == nullptr \n");
+        }
+        mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueUnmapMemObject(filterBufferCL, ptrCL);
+        MNN::OpenCL::BufferConvertor bufferConvertor{mOpenCLBackend->getOpenCLRuntime()};
+        bool needTrans = true;
+        bufferConvertor.convertToNC4HW4Buffer(filterBuffer.get(), MNN::OpenCL::DW_CONV2D_FILTER, mResource->mFilter.get(), mOpenCLBackend->getPrecision(), needTrans);
+    }
     if (mResource->mConv2dCommonParams->relu() == true) {
         mResource->mBuildOptions.emplace("-DRELU");
     } else if (mResource->mConv2dCommonParams->relu6() == true) {
@@ -122,7 +111,8 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
     const int outputHeight = outputShape.at(1);
     const int outputWidth  = outputShape.at(2);
     const int outputChannel  = outputShape.at(3);
-
+    
+    const int batch         = inputShape.at(0);
     const int inputHeight   = inputShape.at(1);
     const int inputWidth    = inputShape.at(2);
     const int inputChannels = inputShape.at(3);
@@ -138,6 +128,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
     int kernelShape[2]      = {filterHeight, filterWidth};
     int dilationShape[2]    = {mResource->mDilations[0], mResource->mDilations[1]};
     
+    std::string info = std::to_string(inputChannels) + "_" + std::to_string(outputChannel) + "_" + std::to_string(filterHeight) + "_" + std::to_string(filterWidth) + "_" + std::to_string(mResource->mStrides[0]) + "_" + std::to_string(mResource->mStrides[1]) + "_" + std::to_string(mResource->mDilations[0]) + "_" + std::to_string(mResource->mDilations[1]);
     if(mStride_1) {
         // {"depthwise_conv2d_s1_c4h1w4", "depthwise_conv2d_s1_c8h1w4", "depthwise_conv2d_s1_c8h1w2"};
         const int total_kernel = 3;
@@ -163,7 +154,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
             itemH[1]      = 2;
         }
         
-        if(mOpenCLBackend->getOpenCLRuntime()->getCLTuneLevel() == Normal || mOpenCLBackend->getOpenCLRuntime()->getCLTuneLevel() == Fast || mOpenCLBackend->getOpenCLRuntime()->getCLTuneLevel() == None) {
+        if(mOpenCLBackend->getCLTuneLevel() == Normal || mOpenCLBackend->getCLTuneLevel() == Fast || mOpenCLBackend->getCLTuneLevel() == None) {
             actual_kernel = 1;
         }
 
@@ -172,7 +163,11 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         std::vector<uint32_t> localWorkSize[total_kernel];
         std::pair<int, int> min_cost(INT_MAX, 0);//(min_time, min_index)
         for(int knl_idx = 0; knl_idx < actual_kernel; knl_idx++) {
-            kernel[knl_idx]        = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[knl_idx], mResource->mBuildOptions);
+            std::set<std::string> buildOption = mResource->mBuildOptions;
+            if(itemC[knl_idx] == 8 && outputShape.at(3) % itemC[knl_idx] > 0 && outputShape.at(3) % itemC[knl_idx] <= 4){
+                buildOption.emplace("-DCHANNEL_BOUNDARY_PROTECT");
+            }
+            kernel[knl_idx]        = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[knl_idx], buildOption, mOpenCLBackend->getPrecision());
             uint32_t maxWorkGroupSize = static_cast<uint32_t>(mOpenCLBackend->getOpenCLRuntime()->getMaxWorkGroupSize(kernel[knl_idx]));
                         
             globalWorkSize[knl_idx] = {static_cast<uint32_t>(UP_DIV(outputShape.at(3), itemC[knl_idx]) * UP_DIV(outputShape.at(2), itemW[knl_idx])), static_cast<uint32_t>(outputShape.at(0) * UP_DIV(outputShape.at(1), itemH[knl_idx]))};
@@ -186,7 +181,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
             ret |= kernel[knl_idx]->get().setArg(idx++, openCLBuffer(mResource->mBias.get()));
             ret |= kernel[knl_idx]->get().setArg(idx++, openCLBuffer(output));
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(inputImageShape), inputImageShape);
-            ret |= kernel[knl_idx]->get().setArg(idx++, static_cast<int>(inputChannels));
+            ret |= kernel[knl_idx]->get().setArg(idx++, static_cast<int>(batch));
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(outputImageShape), outputImageShape);
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(kernelShape), kernelShape);
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(paddingShape), paddingShape);
@@ -197,7 +192,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
             MNN_CHECK_CL_SUCCESS(ret, "setArg DepthwiseConvBufExecution Stride_1 Kernel Select");
 
             std::pair<std::vector<uint32_t>, int> retTune;
-            retTune = gws2dLwsTune(kernel[knl_idx], globalWorkSize[knl_idx], kernelName[knl_idx], maxWorkGroupSize);
+            retTune = localWS2DDefault(globalWorkSize[knl_idx], maxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), kernelName[knl_idx] + info, kernel[knl_idx], mOpenCLBackend->getCLTuneLevel(), "depthwise_conv2d_buf");
             //printf("depthwiseCovs1 %d, %d\n", knl_idx, retTune.second);
             if(min_cost.first > retTune.second) {
                 min_cost.first = retTune.second;
@@ -208,7 +203,11 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         int min_index  = min_cost.second;
         mGlobalWorkSize = {globalWorkSize[min_index][0], globalWorkSize[min_index][1]};
         
-        unit.kernel     = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[min_index], mResource->mBuildOptions);
+        std::set<std::string> buildOption = mResource->mBuildOptions;
+        if(itemC[min_index] == 8 && outputShape.at(3) % itemC[min_index] > 0 && outputShape.at(3) % itemC[min_index] <= 4){
+            buildOption.emplace("-DCHANNEL_BOUNDARY_PROTECT");
+        }
+        unit.kernel     = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[min_index], buildOption, mOpenCLBackend->getPrecision());
         
         uint32_t idx = 0;
         cl_int ret = CL_SUCCESS;
@@ -219,7 +218,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         ret |= unit.kernel->get().setArg(idx++, openCLBuffer(mResource->mBias.get()));
         ret |= unit.kernel->get().setArg(idx++, openCLBuffer(output));
         ret |= unit.kernel->get().setArg(idx++, sizeof(inputImageShape), inputImageShape);
-        ret |= unit.kernel->get().setArg(idx++, static_cast<int>(inputChannels));
+        ret |= unit.kernel->get().setArg(idx++, static_cast<int>(batch));
         ret |= unit.kernel->get().setArg(idx++, sizeof(outputImageShape), outputImageShape);
         ret |= unit.kernel->get().setArg(idx++, sizeof(kernelShape), kernelShape);
         ret |= unit.kernel->get().setArg(idx++, sizeof(paddingShape), paddingShape);
@@ -239,7 +238,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         int itemW[total_kernel] = {1, 4, 2};
         
         int actual_kernel = total_kernel;
-        if(mOpenCLBackend->getOpenCLRuntime()->getCLTuneLevel() == Normal || mOpenCLBackend->getOpenCLRuntime()->getCLTuneLevel() == Fast || mOpenCLBackend->getOpenCLRuntime()->getCLTuneLevel() == None) {
+        if(mOpenCLBackend->getCLTuneLevel() == Normal || mOpenCLBackend->getCLTuneLevel() == Fast || mOpenCLBackend->getCLTuneLevel() == None) {
             actual_kernel = 1;
         }
 
@@ -248,7 +247,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         std::vector<uint32_t> localWorkSize[total_kernel];
         std::pair<int, int> min_cost(INT_MAX, 0);//(min_time, min_index)
         for(int knl_idx = 0; knl_idx < actual_kernel; knl_idx++) {
-            kernel[knl_idx]        = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[knl_idx], mResource->mBuildOptions);
+            kernel[knl_idx]        = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[knl_idx], mResource->mBuildOptions, mOpenCLBackend->getPrecision());
             uint32_t maxWorkGroupSize = static_cast<uint32_t>(mOpenCLBackend->getOpenCLRuntime()->getMaxWorkGroupSize(kernel[knl_idx]));
                         
             globalWorkSize[knl_idx] = {static_cast<uint32_t>(UP_DIV(outputShape.at(3), itemC[knl_idx]) * UP_DIV(outputShape.at(2), itemW[knl_idx])), static_cast<uint32_t>(outputShape.at(0) * outputShape.at(1))};
@@ -262,7 +261,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
             ret |= kernel[knl_idx]->get().setArg(idx++, openCLBuffer(mResource->mBias.get()));
             ret |= kernel[knl_idx]->get().setArg(idx++, openCLBuffer(output));
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(inputImageShape), inputImageShape);
-            ret |= kernel[knl_idx]->get().setArg(idx++, static_cast<int>(inputChannels));
+            ret |= kernel[knl_idx]->get().setArg(idx++, static_cast<int>(batch));
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(outputImageShape), outputImageShape);
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(kernelShape), kernelShape);
             ret |= kernel[knl_idx]->get().setArg(idx++, sizeof(paddingShape), paddingShape);
@@ -273,7 +272,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
             MNN_CHECK_CL_SUCCESS(ret, "setArg DepthwiseConvBufExecution Kernel Select");
 
             std::pair<std::vector<uint32_t>, int> retTune;
-            retTune = gws2dLwsTune(kernel[knl_idx], globalWorkSize[knl_idx], kernelName[knl_idx], maxWorkGroupSize);
+            retTune = localWS2DDefault(globalWorkSize[knl_idx], maxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), kernelName[knl_idx] + info, kernel[knl_idx], mOpenCLBackend->getCLTuneLevel(), "depthwise_conv2d_buf");
             //printf("depthwiseCov!! %d, %d\n", knl_idx, retTune.second);
             if(min_cost.first > retTune.second) {
                 min_cost.first = retTune.second;
@@ -284,7 +283,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         int min_index  = min_cost.second;
         mGlobalWorkSize = {globalWorkSize[min_index][0], globalWorkSize[min_index][1]};
         
-        unit.kernel     = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[min_index], mResource->mBuildOptions);
+        unit.kernel     = mOpenCLBackend->getOpenCLRuntime()->buildKernel("depthwise_conv2d_buf", kernelName[min_index], mResource->mBuildOptions, mOpenCLBackend->getPrecision());
         
         
         uint32_t idx = 0;
@@ -296,7 +295,7 @@ ErrorCode DepthwiseConvBufExecution::onEncode(const std::vector<Tensor *> &input
         ret |= unit.kernel->get().setArg(idx++, openCLBuffer(mResource->mBias.get()));
         ret |= unit.kernel->get().setArg(idx++, openCLBuffer(output));
         ret |= unit.kernel->get().setArg(idx++, sizeof(inputImageShape), inputImageShape);
-        ret |= unit.kernel->get().setArg(idx++, static_cast<int>(inputChannels));
+        ret |= unit.kernel->get().setArg(idx++, static_cast<int>(batch));
         ret |= unit.kernel->get().setArg(idx++, sizeof(outputImageShape), outputImageShape);
         ret |= unit.kernel->get().setArg(idx++, sizeof(kernelShape), kernelShape);
         ret |= unit.kernel->get().setArg(idx++, sizeof(paddingShape), paddingShape);
@@ -334,7 +333,7 @@ public:
             auto pads = ConvolutionCommon::convolutionPadFull(inputs[0], outputs[0], conv2D->common());
             TensorUtils::setTensorChannelPack(inputs[0], 16);
             TensorUtils::setTensorPad(inputs[0], std::get<0>(pads), std::get<2>(pads), 0, 0);
-            return new DepthwiseConvSubgroupBufExecution(inputs, op, backend);
+            OPENCL_CREATOR_CHECK(new DepthwiseConvSubgroupBufExecution(inputs, op, backend));
         }
 #endif /* MNN_SUPPORT_INTEL_SUBGROUP */
         for (int i = 0; i < inputs.size(); ++i) {
@@ -343,7 +342,7 @@ public:
         for (int i = 0; i < outputs.size(); ++i) {
             TensorUtils::setTensorSupportPack(outputs[i], false);
         }
-        return new DepthwiseConvBufExecution(inputs, op, backend);
+        OPENCL_CREATOR_CHECK(new DepthwiseConvBufExecution(inputs, op, backend));
     }
 };
 

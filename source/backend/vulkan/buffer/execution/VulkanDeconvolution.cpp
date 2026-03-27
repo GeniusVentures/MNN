@@ -10,23 +10,28 @@
 #include "core/Macro.h"
 #include "core/TensorUtils.hpp"
 namespace MNN {
-static void _initKernelRegion() {
-    
-}
+
 VulkanDeconvolution::VulkanDeconvolution(Backend* bn) : VulkanBasicExecution(bn) {
     // Donthing
 }
 
-VulkanDeconvolution* VulkanDeconvolution::create(Backend* bn, const Convolution2D* conv, OpType type, bool multiInputs) {
+VulkanDeconvolution* VulkanDeconvolution::create(Backend* bn, const Op* op, OpType type, bool multiInputs) {
+    auto conv = op->main_as_Convolution2D();
     auto exeRes = new VulkanDeconvolution(bn);
     exeRes->mConvCommonOption = conv->common();
     auto vkBn         = (VulkanBackend*)bn;
     int outputC4      = UP_DIV(exeRes->mConvCommonOption->outputCount(), 4);
-    auto biasBuffer = std::make_shared<VulkanBuffer>(vkBn->getMemoryPool(), false, outputC4 * 4 * sizeof(float));
+    bool useFP16 = vkBn->useFP16();
+    size_t elementSize = useFP16 ? sizeof(int16_t) : sizeof(float);
+    auto biasBuffer = std::make_shared<VulkanBuffer>(vkBn->getMemoryPool(), false, outputC4 * 4 * elementSize);
     auto biasPtr    = biasBuffer->map();
-    ::memset(biasPtr, 0, outputC4 * 4 * sizeof(float));
+    ::memset(biasPtr, 0, outputC4 * 4 * elementSize);
     if (conv->bias() != nullptr) {
-        ::memcpy(biasPtr, conv->bias()->data(), conv->bias()->size() * sizeof(float));
+        if (useFP16) {
+            FLOAT_TO_HALF(conv->bias()->data(), (int16_t *)biasPtr, conv->bias()->size());
+        } else {
+            ::memcpy(biasPtr, conv->bias()->data(), conv->bias()->size() * sizeof(float));
+        }
     }
     biasBuffer->unmap();
     exeRes->mBias = biasBuffer;
@@ -45,7 +50,7 @@ VulkanDeconvolution* VulkanDeconvolution::create(Backend* bn, const Convolution2
     int tempWeightSize   = 0;
     std::shared_ptr<ConvolutionCommon::Int8Common> quanCommon;
     if (!multiInputs) {
-        ConvolutionCommon::getConvParameters(&quanCommon, bn, conv, &tempWeight, &tempWeightSize);
+        ConvolutionCommon::getConvParameters(&quanCommon, bn, op, &tempWeight, &tempWeightSize);
         MNN_ASSERT(nullptr != tempWeight);
         if (0 >= ci) {
             ci = tempWeightSize / co / kw / kh;
@@ -122,8 +127,20 @@ VulkanDeconvolution* VulkanDeconvolution::create(Backend* bn, const Convolution2
         if (!res) {
             return nullptr;
         }
-        auto tempWeightBuffer = reinterpret_cast<VulkanBuffer*>(tempWeightTensor->deviceId());
-        vkBn->copyToGPUBuffer(tempWeight, tempWeightBuffer->buffer(), tempWeightSize * sizeof(float), TensorUtils::getDescribe(tempWeightTensor.get())->extra.offset);
+        // FP32->FP16 and cp data from cpu to gpu
+        {
+            const void * tempWeightData;
+            std::vector<uint8_t> tempFP16Weight;
+            if (useFP16) {
+                tempFP16Weight.resize(tempWeightSize * elementSize);
+                FLOAT_TO_HALF(tempWeight, (int16_t *) tempFP16Weight.data(), tempWeightSize);
+                tempWeightData = (const void *) tempFP16Weight.data();
+            } else {
+                tempWeightData = (const void *)tempWeight;
+            }
+            auto tempWeightBuffer = reinterpret_cast<VulkanBuffer*>(tempWeightTensor->deviceId());
+            vkBn->copyToGPUBuffer(tempWeightData, tempWeightBuffer->buffer(), tempWeightSize * elementSize, TensorUtils::getDescribe(tempWeightTensor.get())->extra.offset);
+        }
         std::shared_ptr<VulkanCommandPool::Buffer> prearrangeCmd( vkBn->getPool().allocBuffer());
         for (auto& reg : des->regions) {
             reg.origin = tempWeightTensor.get();
@@ -132,7 +149,7 @@ VulkanDeconvolution* VulkanDeconvolution::create(Backend* bn, const Convolution2
         exeRes->mKernelReorder.exe->onEncode({}, {exeRes->mKernel.get()}, prearrangeCmd.get());
         prearrangeCmd->end();
         vkBn->pushCommand(prearrangeCmd->get());
-        vkBn->onExecuteEnd();
+        vkBn->finish();
         exeRes->mKernelReorder.exe = nullptr;
     }
     std::vector<VkDescriptorType> types{
@@ -142,14 +159,21 @@ VulkanDeconvolution* VulkanDeconvolution::create(Backend* bn, const Convolution2
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
     };
-    std::string macro = VulkanConvolutionCommon::getPostTreatMacro(exeRes->mConvCommonOption);
 
+    std::string pKey = "glsl_";
     if (type == OpType_Deconvolution) {
-        exeRes->mPipeline = vkBn->getPipeline("glsl_deconvolution_" + macro + "comp", types);
+        pKey += "deconvolution_";
     } else {
-        MNN_ASSERT(type == OpType_DeconvolutionDepthwise);
-        exeRes->mPipeline = vkBn->getPipeline("glsl_deconvolutionDepthwise_" + macro + "comp", types);
+        pKey += "deconvolutionDepthwise_";
     }
+    std::string macro = VulkanConvolutionCommon::getPostTreatMacro(exeRes->mConvCommonOption);
+    pKey += macro;
+    if (vkBn->useFP16()) {
+        pKey += "FP16_";
+    }
+    pKey += "comp";
+    MNN_ASSERT(type == OpType_Deconvolution || type == OpType_DeconvolutionDepthwise);
+    exeRes->mPipeline = vkBn->getPipeline(pKey, types);
     exeRes->mPipelineSet.reset(exeRes->mPipeline->createSet());
     return exeRes;
 }
@@ -212,7 +236,7 @@ class VulkanDeconvolutionCreator : public VulkanBackend::Creator {
 public:
     virtual VulkanBasicExecution* onCreate(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs, const MNN::Op* op,
                                 Backend* backend) const override {
-        return VulkanDeconvolution::create(backend, op->main_as_Convolution2D(), op->type(), inputs.size() > 1);
+        return VulkanDeconvolution::create(backend, op, op->type(), inputs.size() > 1);
     }
 };
 

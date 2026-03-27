@@ -26,9 +26,9 @@ struct ConvResource {
     const Convolution2DCommon *mConv2dCommonParams;
     std::shared_ptr<Tensor> mFilter;
     std::shared_ptr<Tensor> mBias;
+    std::shared_ptr<Tensor> mSlope;
     std::shared_ptr<cl::Buffer> mKernelBuffer;
-    std::shared_ptr<cl::Buffer> dequantScaleBuffer;
-    std::shared_ptr<cl::Buffer> dequantOffsetBuffer;
+    std::shared_ptr<cl::Buffer> dequantScaleOffset;
     std::vector<int> mStrides{1, 1};
     std::vector<int> mDilations{1, 1};
     std::set<std::string> mBuildOptions;
@@ -36,16 +36,21 @@ struct ConvResource {
     bool mConv1x1Opt = false;
     bool mWeightUseBuffer = false;
     bool gemmOpt = false;
+    int mBlockSize;
     int mKernelWidth;
     int mKernelHeight;
     int mOutputChannel;
     int mInputChannel;
+    bool mRelu = false;
+    bool mRelu6 = false;
+    bool mPrelu = false;
     uint32_t mMaxWorkGroupSize;
 };
 
 class ConvCommonExecution {
 public:
     ConvCommonExecution(const Convolution2D *op, Backend *backend);
+    ConvCommonExecution(const Op *op, Backend *backend, bool isExtra);
     ConvCommonExecution(Backend *backend) {
         mOpenCLBackend = static_cast<OpenCLBackend *>(backend);
     }
@@ -54,11 +59,12 @@ public:
 protected:
     std::shared_ptr<ConvResource> mResource;
     OpenCLBackend *mOpenCLBackend;
+    bool mConvComValid = true;
 };
 
 class ConvExecution : public ConvCommonExecution, public CommonExecution {
 public:
-    ConvExecution(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs, const MNN::Op *op, Backend *backend);
+    ConvExecution(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs, const MNN::Op *op, Backend *backend, bool isExtra = false);
     ConvExecution(std::shared_ptr<ConvResource> resource, const Op* op, Backend* backend);
     virtual ~ConvExecution();
 

@@ -30,11 +30,11 @@ jobs:
             python-version: '3.9'
       - name: prepare
         run: |
-            pip3 install numpy opencv-python torch
+            pip3 install numpy==1.25 opencv-python torch
       - name: build
         run: |
             cd pymnn/pip_package
-            python3 build_deps.py
+            python3 build_deps.py llm
             python3 setup.py install --version 1.0
       - name: test
         run: |

@@ -18,8 +18,7 @@
 namespace MNN {
 class VulkanDevice : public NonCopyable {
 public:
-    explicit VulkanDevice(std::shared_ptr<VulkanInstance> instance,
-                          const std::vector<const char*>& device_extensions = {});
+    explicit VulkanDevice(std::shared_ptr<VulkanInstance> instance);
     explicit VulkanDevice(std::shared_ptr<VulkanInstance> instance, VkPhysicalDevice physicalDevice, VkDevice device,
                           uint32_t queueFamilyIndex, VkQueue queue);
     virtual ~VulkanDevice();
@@ -163,6 +162,9 @@ public:
     const int getMaxComputeWorkGroupInvocations() const {
         return mDeviceProty.limits.maxComputeWorkGroupInvocations;
     }
+    const int32_t getLocalMemorySize() const {
+        return mLocalMemorySize;
+    }
     
     const void getMaxComputeWorkGroupSize(std::vector<int> &groups) const{
         if(groups.size() == 3){
@@ -172,9 +174,31 @@ public:
         }
     }
 
+    struct SubgroupInfo {
+        uint32_t size = 0;
+        VkShaderStageFlags stages = 0;
+        VkSubgroupFeatureFlags ops = 0;
+        VkBool32 quadAllStages = VK_FALSE;
+    };
+
+    const SubgroupInfo& getSubgroupInfo() const {
+        return mSubgroupInfo;
+    }
+
+    uint32_t getSubgroupSize() const {
+        return mSubgroupInfo.size;
+    }
+
+    bool getFP16Support() const {
+        return mFP16Info.supportFP16;
+    }
+
 private:
-    const VkResult enumerateDeviceExtensionProperties(const VkPhysicalDevice& dev,
-                                                      std::vector<VkExtensionProperties>& exts_props) const;
+    // Set mFP16Info
+    void checkFP16(const std::vector<VkExtensionProperties>& availableExts);
+    // Set mCoopMatInfo
+    void checkCoopMat(const std::vector<VkExtensionProperties>& availableExts);
+
 
 private:
     bool mOwner;
@@ -185,6 +209,37 @@ private:
     VkPhysicalDeviceProperties mDeviceProty;
     VkQueue mQueue;
     VkPhysicalDeviceMemoryProperties mMemoryProty;
+    SubgroupInfo mSubgroupInfo{};
+    uint32_t mLocalMemorySize = 0;
+
+// FP16 related
+private:
+struct FP16Info {
+    bool supportFP16{false};
+    bool FP16FromExtension{false};
+    VkPhysicalDeviceVulkan11Features enabledVulkan11Features{};
+    VkPhysicalDeviceVulkan12Features enabledVulkan12Features{};
+    VkPhysicalDeviceShaderFloat16Int8Features enabledShaderFloat16Int8Features{};
+    VkPhysicalDevice16BitStorageFeatures enabled16BitStorageFeatures{};
+};
+    FP16Info mFP16Info{};
+
+// CoopMat related
+public:
+    struct CoopMatInfo {
+        bool supportCoopMat{false};
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR enabledCoopMatFeatures{};
+        std::vector<std::vector<uint32_t>> fp32CoopMatShape;
+        std::vector<std::vector<uint32_t>> fp16CoopMatShape;
+        std::vector<uint32_t> selectedFP32CoopMatShape; // {M, N, K}
+        std::vector<uint32_t> selectedFP16CoopMatShape; // {M, N, K}
+    };
+private:
+    CoopMatInfo mCoopMatInfo{};
+public:
+    CoopMatInfo getCoopMatInfo() const {
+        return mCoopMatInfo;
+    }
 };
 } // namespace MNN
 #endif /* VulkanDevice_hpp */

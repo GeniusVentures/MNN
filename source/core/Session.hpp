@@ -33,15 +33,23 @@ public:
         Interpreter::SessionMode resizeMode = Interpreter::Session_Resize_Direct;
         Interpreter::SessionMode memoryUsageMode = Interpreter::Session_Memory_Collect;
         Interpreter::SessionMode codegenMode = Interpreter::Session_Codegen_Disable;
-        int memoryAllocatorType = 0;
         int maxTuningNumber = MNN_DEFAULT_TUNING_NUMBER;
-        int winogradMemoryUsed = 3;
+        int geometryMask = 0xFFFF;
+        bool checkNetBuffer = true;
+        RuntimeHint runtimeHint;
+        void setHint(Interpreter::HintMode hint, int value);
+        void setHint(Interpreter::HintMode hint, int* value, size_t size);
+        void setHintPtr(Interpreter::HintMode hint, int value);
+        void setMode(Interpreter::SessionMode mode);
+        void setExternalPath(std::string path, int type);
     };
     Session(Schedule::ScheduleInfo&& info, const ModeGroup& mode,
             RuntimeInfo&& runtime);
     ~Session();
 
     Session* clone(RuntimeInfo&& runtime, std::shared_ptr<Schedule::ScheduleInfo> sharedConst);
+    static void createPipelineBackend(Schedule::PipelineInfo& iter, RuntimeInfo& runtime);
+
 public:
     /**
      * @brief infer.
@@ -83,6 +91,9 @@ public:
 
     Runtime* getCPURuntime() {
         return mRuntime.second.get();
+    }
+    const RuntimeInfo& getRuntime() const {
+        return mRuntime;
     }
 
 public:
@@ -141,7 +152,6 @@ protected:
     }
 
 private:
-    void _clearCache();
     void _setUpTensorInfo(const Schedule::ScheduleInfo& info);
 
 private:

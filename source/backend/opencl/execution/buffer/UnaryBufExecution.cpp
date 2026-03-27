@@ -22,54 +22,47 @@ ErrorCode UnaryBufExecution::onEncode(const std::vector<Tensor*>& inputs, const 
     Tensor* output     = outputs[0];
     auto openCLBackend = static_cast<OpenCLBackend*>(backend());
     auto runtime       = openCLBackend->getOpenCLRuntime();
-    
-    auto dataType = inputs[0]->getType();
     std::set<std::string> buildOptions = mBuildOptions;
-    if (dataType.code == halide_type_int){
-        buildOptions.emplace("-DOPENCL_INPUT_INT");
-    }
 #ifdef MNN_SUPPORT_INTEL_SUBGROUP
-    if (runtime->isSupportedIntelSubgroup()) {
+    if (runtime->isSupportedIntelSubgroup() && MNN::MNN_DATA_FORMAT_NC4HW4 == TensorUtils::getDescribe(output)->dimensionFormat) {
         return SubgrouponResize(inputs, outputs);
     }
 #endif /* MNN_SUPPORT_INTEL_SUBGROUP */
-    unit.kernel = runtime->buildKernel("unary_buf", "unary_buf", buildOptions, input, output);
+
+    std::vector<int> outputShape = tensorShapeFormat(output);
+    int totalSize = 0;
+    if(MNN::MNN_DATA_FORMAT_NC4HW4 == TensorUtils::getDescribe(output)->dimensionFormat){
+        totalSize = outputShape[0] * outputShape[1] * outputShape[2] * ROUND_UP(outputShape[3], 4);
+    }else{
+        totalSize = outputShape[0] * outputShape[1] * outputShape[2] * outputShape[3];
+    }
+    if(totalSize % 4 != 0) {
+        buildOptions.emplace("-DPACK_LEAVE");
+    }
+    unit.kernel = runtime->buildKernel("unary_buf", "unary_buf", buildOptions, openCLBackend->getPrecision(), input, output);
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
-    std::vector<int> inputShape  = tensorShapeFormat(input);
-    std::vector<int> outputShape = tensorShapeFormat(output);
-
-    int batch        = outputShape.at(0);
-    int outputHeight = outputShape.at(1);
-    int outputWidth  = outputShape.at(2);
-    int channels     = outputShape.at(3);
-
-    int channelBlocks = (channels + 3) / 4;
-
     mGlobalWorkSize = {
-        static_cast<uint32_t>(channelBlocks),
-        static_cast<uint32_t>(outputWidth),
-        static_cast<uint32_t>(batch * outputHeight),
+        static_cast<uint32_t>(UP_DIV(totalSize, 4)),
+        static_cast<uint32_t>(1)
     };
 
     uint32_t idx = 0;
     cl_int ret = CL_SUCCESS;
     ret |= unit.kernel->get().setArg(idx++, mGlobalWorkSize[0]);
     ret |= unit.kernel->get().setArg(idx++, mGlobalWorkSize[1]);
-    ret |= unit.kernel->get().setArg(idx++, mGlobalWorkSize[2]);
     ret |= unit.kernel->get().setArg(idx++, openCLBuffer(input));
     ret |= unit.kernel->get().setArg(idx++, openCLBuffer(output));
-    ret |= unit.kernel->get().setArg(idx++, outputHeight);
+    ret |= unit.kernel->get().setArg(idx++, totalSize);
     MNN_CHECK_CL_SUCCESS(ret, "setArg UnaryBufExecution");
 
     std::string kernelName = "unary_buf";
-    mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel).first;
-    openCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalSize);
-    unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1], mGlobalWorkSize[2]};
-    unit.localWorkSize = {mLocalSize[0], mLocalSize[1], mLocalSize[2]};
+    mLocalSize = localWS2DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel, openCLBackend->getCLTuneLevel(), "unary_buf").first;
+    openCLBackend->recordKernel2d(unit.kernel, mGlobalWorkSize, mLocalSize);
+    unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1]};
+    unit.localWorkSize = {mLocalSize[0], mLocalSize[1]};
     return NO_ERROR;
 }
-
 #ifdef MNN_SUPPORT_INTEL_SUBGROUP
 ErrorCode UnaryBufExecution::SubgrouponResize(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) {
     auto &unit = mUnits[0];
@@ -120,7 +113,7 @@ ErrorCode UnaryBufExecution::SubgrouponResize(const std::vector<Tensor*>& inputs
             buildOptions.emplace("-DINTEL_SUB_GROUP_WRITE4=intel_sub_group_block_write4");
         }
     } else {
-        if(runtime->isSupportedFP16()){
+        if(openCLBackend->getPrecision() != BackendConfig::Precision_High){
             buildOptions.emplace("-DINTEL_DATA=ushort");
             buildOptions.emplace("-DAS_INPUT_DATA4=as_half4");
             buildOptions.emplace("-DAS_OUTPUT_DATA4=as_ushort4");
@@ -135,7 +128,7 @@ ErrorCode UnaryBufExecution::SubgrouponResize(const std::vector<Tensor*>& inputs
         }
     }
     std::string KernelName = "unary_buf_c" + std::to_string(input_c_pack) + "_c" + std::to_string(output_c_pack);
-    unit.kernel       = runtime->buildKernel("unary_subgroup_buf", KernelName, buildOptions, input, output);
+    unit.kernel       = runtime->buildKernel("unary_subgroup_buf", KernelName, buildOptions, openCLBackend->getPrecision(), input, output);
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
     int channelBlocks = (channels + 3) / 4;
@@ -162,6 +155,7 @@ ErrorCode UnaryBufExecution::SubgrouponResize(const std::vector<Tensor*>& inputs
     ret |= unit.kernel->get().setArg(idx++, outputWidth);
     ret |= unit.kernel->get().setArg(idx++, outputHeight);
     ret |= unit.kernel->get().setArg(idx++, channels);
+    ret |= unit.kernel->get().setArg(idx++, batch);
     ret |= unit.kernel->get().setArg(idx++, static_cast<uint32_t>(inputpad.left));
     ret |= unit.kernel->get().setArg(idx++, static_cast<uint32_t>(inputpad.right));
     ret |= unit.kernel->get().setArg(idx++, static_cast<uint32_t>(outputpad.left));
@@ -172,7 +166,7 @@ ErrorCode UnaryBufExecution::SubgrouponResize(const std::vector<Tensor*>& inputs
     if (runtime->isSupportedIntelSubgroup() && input_c_pack == 16) {
         mLocalSize = {16, 1, 1};
     } else {
-        mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel).first;
+        mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel, openCLBackend->getCLTuneLevel(), "unary_subgroup_buf").first;
     }
     openCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalSize);
     unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1], mGlobalWorkSize[2]};
@@ -185,85 +179,56 @@ class UnaryBufCreator : public OpenCLBackend::Creator {
 public:
     virtual Execution* onCreate(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                 const MNN::Op* op, Backend* backend) const override {
+#ifdef MNN_SUPPORT_INTEL_SUBGROUP
         for (int i = 0; i < inputs.size(); ++i) {
             int channel = inputs[i]->channel();
-            if (channel >= 16 && static_cast<OpenCLBackend *>(backend)->getOpenCLRuntime()->isSupportedIntelSubgroup()) {
+            if (channel >= 16 && static_cast<OpenCLBackend *>(backend)->getOpenCLRuntime()->isSupportedIntelSubgroup()
+                && MNN::MNN_DATA_FORMAT_NC4HW4 == TensorUtils::getDescribe(inputs[i])->dimensionFormat) {
                 TensorUtils::setTensorChannelPack(inputs[i], 16);
             }
         }
+#endif /* MNN_SUPPORT_INTEL_SUBGROUP */
         if (op->type() == OpType_UnaryOp) {
             switch (op->main_as_UnaryOp()->opType()) {
-                case UnaryOpOperation_ABS:
-                    return new UnaryBufExecution("fabs(convert_float4(in))", op, backend);
-                case UnaryOpOperation_SQUARE:
-                    return new UnaryBufExecution("in*in", op, backend);
-                case UnaryOpOperation_RSQRT:
-                    return new UnaryBufExecution("rsqrt(convert_float4(in)>(float4)(0.000001)?convert_float4(in):(float4)(0.000001))", op, backend);
-                case UnaryOpOperation_NEG:
-                    return new UnaryBufExecution("-(in)", op, backend);
-                case UnaryOpOperation_EXP:
-                    return new UnaryBufExecution("exp(convert_float4(in))", op, backend);
-                case UnaryOpOperation_COS:
-                    return new UnaryBufExecution("cos(convert_float4(in))", op, backend);
-                case UnaryOpOperation_SIN:
-                    return new UnaryBufExecution("sin(convert_float4(in))", op, backend);
-                case UnaryOpOperation_TAN:
-                    return new UnaryBufExecution("tan(convert_float4(in))", op, backend);
-                case UnaryOpOperation_ATAN:
-                    return new UnaryBufExecution("atan(convert_float4(in))", op, backend);
-                case UnaryOpOperation_SQRT:
-                    return new UnaryBufExecution("sqrt(convert_float4(in))", op, backend);
-                case UnaryOpOperation_CEIL:
-                    return new UnaryBufExecution("ceil(convert_float4(in))", op, backend);
-                case UnaryOpOperation_RECIPROCAL:
-                    return new UnaryBufExecution("native_recip(convert_float4(in))", op, backend);
-                case UnaryOpOperation_LOG1P:
-                    return new UnaryBufExecution("log1p(convert_float4(in))", op, backend);
-                case UnaryOpOperation_LOG:
-                    return new UnaryBufExecution("native_log(convert_float4(in)>(float4)(0.0000001)?convert_float4(in):(float4)(0.0000001))", op, backend);
-                case UnaryOpOperation_FLOOR:
-                    return new UnaryBufExecution("floor(convert_float4(in))", op, backend);
-                case UnaryOpOperation_BNLL:
-                    return new UnaryBufExecution("in>(float4)((float)0)?(in+native_log(exp(convert_float4(-(in)))+(float4)(1.0))):(native_log(exp(convert_float4(in))+(float4)(1.0)))", op, backend);
-                case UnaryOpOperation_ACOSH:
-                    return new UnaryBufExecution("acosh(convert_float4(in))", op, backend);
-                case UnaryOpOperation_SINH:
-                    return new UnaryBufExecution("sinh(convert_float4(in))", op, backend);
-                case UnaryOpOperation_ASINH:
-                    return new UnaryBufExecution("asinh(convert_float4(in))", op, backend);
-                case UnaryOpOperation_ATANH:
-                    return new UnaryBufExecution("atanh(convert_float4(in))", op, backend);
-                case UnaryOpOperation_SIGN:
-                    return new UnaryBufExecution("sign(convert_float4(in))", op, backend);
-                case UnaryOpOperation_ROUND:
-                    return new UnaryBufExecution("round(convert_float4(in))", op, backend);
-                case UnaryOpOperation_COSH:
-                    return new UnaryBufExecution("cosh(convert_float4(in))", op, backend);
-               case UnaryOpOperation_ERF:
-                    return new UnaryBufExecution("erf(convert_float4(in))", op, backend);
-                case UnaryOpOperation_ERFC:
-                    return new UnaryBufExecution("erfc(convert_float4(in))", op, backend);
-                case UnaryOpOperation_EXPM1:
-                    return new UnaryBufExecution("expm1(convert_float4(in))", op, backend);
-                case UnaryOpOperation_SIGMOID:
-                    return new UnaryBufExecution("native_recip((float4)1+native_exp(convert_float4(-in)))", op, backend);
-                case UnaryOpOperation_TANH:
-                    return new UnaryBufExecution("tanh(convert_float4(in))", op, backend);
-                case UnaryOpOperation_HARDSWISH:
-                    return new UnaryBufExecution("convert_float4(in)>(float4)(-3.0f)?(convert_float4(in)<(float4)(3.0f)?((convert_float4(in)*(convert_float4(in)+(float4)3.0f))/(float4)6.0f):convert_float4(in)):(float4)(0.0f)", op, backend);
-                case UnaryOpOperation_GELU:
-                    return new UnaryBufExecution("gelu(convert_float4(in))", op, backend);
-		default:
+                case UnaryOpOperation_ABS: OPENCL_CREATOR_CHECK(new UnaryBufExecution("fabs(convert_float4(in))", op, backend));
+                case UnaryOpOperation_SQUARE: OPENCL_CREATOR_CHECK(new UnaryBufExecution("in*in", op, backend));
+                case UnaryOpOperation_RSQRT: OPENCL_CREATOR_CHECK(new UnaryBufExecution("rsqrt(convert_float4(in)>(float4)(0.000001)?convert_float4(in):(float4)(0.000001))", op, backend));
+                case UnaryOpOperation_NEG: OPENCL_CREATOR_CHECK(new UnaryBufExecution("-(in)", op, backend));
+                case UnaryOpOperation_EXP: OPENCL_CREATOR_CHECK(new UnaryBufExecution("exp(convert_float4(in))", op, backend));
+                case UnaryOpOperation_COS: OPENCL_CREATOR_CHECK(new UnaryBufExecution("cos(convert_float4(in))", op, backend));
+                case UnaryOpOperation_SIN: OPENCL_CREATOR_CHECK(new UnaryBufExecution("sin(convert_float4(in))", op, backend));
+                case UnaryOpOperation_TAN: OPENCL_CREATOR_CHECK(new UnaryBufExecution("tan(convert_float4(in))", op, backend));
+                case UnaryOpOperation_ATAN: OPENCL_CREATOR_CHECK(new UnaryBufExecution("atan(convert_float4(in))", op, backend));
+                case UnaryOpOperation_SQRT: OPENCL_CREATOR_CHECK(new UnaryBufExecution("sqrt(convert_float4(in))", op, backend));
+                case UnaryOpOperation_CEIL: OPENCL_CREATOR_CHECK(new UnaryBufExecution("ceil(convert_float4(in))", op, backend));
+                case UnaryOpOperation_RECIPROCAL: OPENCL_CREATOR_CHECK(new UnaryBufExecution("native_recip(convert_float4(in))", op, backend));
+                case UnaryOpOperation_LOG1P: OPENCL_CREATOR_CHECK(new UnaryBufExecution("log1p(convert_float4(in))", op, backend));
+                case UnaryOpOperation_LOG: OPENCL_CREATOR_CHECK(new UnaryBufExecution("native_log(convert_float4(in)>(float4)(0.0000001)?convert_float4(in):(float4)(0.0000001))", op, backend));
+                case UnaryOpOperation_FLOOR: OPENCL_CREATOR_CHECK(new UnaryBufExecution("floor(convert_float4(in))", op, backend));
+                case UnaryOpOperation_BNLL: OPENCL_CREATOR_CHECK(new UnaryBufExecution("in>(float4)((float)0)?(in+native_log(exp(convert_float4(-(in)))+(float4)(1.0))):(native_log(exp(convert_float4(in))+(float4)(1.0)))", op, backend));
+                case UnaryOpOperation_ACOSH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("acosh(convert_float4(in))", op, backend));
+                case UnaryOpOperation_SINH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("sinh(convert_float4(in))", op, backend));
+                case UnaryOpOperation_ASINH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("asinh(convert_float4(in))", op, backend));
+                case UnaryOpOperation_ATANH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("atanh(convert_float4(in))", op, backend));
+                case UnaryOpOperation_SIGN: OPENCL_CREATOR_CHECK(new UnaryBufExecution("sign(convert_float4(in))", op, backend));
+                case UnaryOpOperation_ROUND: OPENCL_CREATOR_CHECK(new UnaryBufExecution("round(convert_float4(in))", op, backend));
+                case UnaryOpOperation_COSH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("cosh(convert_float4(in))", op, backend));
+               case UnaryOpOperation_ERF: OPENCL_CREATOR_CHECK(new UnaryBufExecution("erf(convert_float4(in))", op, backend));
+                case UnaryOpOperation_ERFC: OPENCL_CREATOR_CHECK(new UnaryBufExecution("erfc(convert_float4(in))", op, backend));
+                case UnaryOpOperation_EXPM1: OPENCL_CREATOR_CHECK(new UnaryBufExecution("expm1(convert_float4(in))", op, backend));
+                case UnaryOpOperation_SIGMOID: OPENCL_CREATOR_CHECK(new UnaryBufExecution("native_recip((float4)1+native_exp(convert_float4(-in)))", op, backend));
+                case UnaryOpOperation_SILU: OPENCL_CREATOR_CHECK(new UnaryBufExecution("(convert_float4(in)*native_recip((float4)1+native_exp(convert_float4(-in))))", op, backend));
+                case UnaryOpOperation_TANH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("tanh(convert_float4(in))", op, backend));
+                case UnaryOpOperation_HARDSWISH: OPENCL_CREATOR_CHECK(new UnaryBufExecution("convert_float4(in)>(float4)(-3.0f)?(convert_float4(in)<(float4)(3.0f)?((convert_float4(in)*(convert_float4(in)+(float4)3.0f))/(float4)6.0f):convert_float4(in)):(float4)(0.0f)", op, backend));
+                case UnaryOpOperation_GELU: OPENCL_CREATOR_CHECK(new UnaryBufExecution("gelu(convert_float4(in))", op, backend));
+                case UnaryOpOperation_GELU_STANDARD: OPENCL_CREATOR_CHECK(new UnaryBufExecution("(erf(convert_float4(in)*(float4)0.7071067932881648)+(float4)1.0)*convert_float4(in)*(float4)0.5", op, backend));
+                default:
                     break;
             }
             return nullptr;
         }
-        if (op->type() == OpType_Sigmoid) {
-            return new UnaryBufExecution("native_recip((float4)(1.0)+native_exp(convert_float4(-(in))))", op, backend);
-        }
-        if (op->type() == OpType_TanH) {
-            return new UnaryBufExecution("tanh(convert_float4(in))", op, backend);
-        }
+        if (op->type() == OpType_Sigmoid) OPENCL_CREATOR_CHECK(new UnaryBufExecution("native_recip((float4)(1.0)+native_exp(convert_float4(-(in))))", op, backend));
+        if (op->type() == OpType_TanH) OPENCL_CREATOR_CHECK(new UnaryBufExecution("tanh(convert_float4(in))", op, backend));
         return nullptr;
     }
 };

@@ -23,7 +23,7 @@ ErrorCode RangeExecution::onEncode(const std::vector<Tensor*>& inputs, const std
     auto &unit = mUnits[0];
     auto openCLBackend = static_cast<OpenCLBackend*>(backend());
     auto runtime       = openCLBackend->getOpenCLRuntime();
-    unit.kernel = runtime->buildKernel("range", "range", mBuildOptions, inputs[0], outputs[0]);
+    unit.kernel = runtime->buildKernel("range", "range", mBuildOptions, openCLBackend->getPrecision(), inputs[0], outputs[0]);
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
     std::vector<int> outputShape = tensorShapeFormat(outputs[0]);
@@ -57,7 +57,7 @@ ErrorCode RangeExecution::onEncode(const std::vector<Tensor*>& inputs, const std
     MNN_CHECK_CL_SUCCESS(ret, "setArg RangeExecution");
 
     std::string kernelName = "range";
-    mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel).first;
+    mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel, openCLBackend->getCLTuneLevel(), "range").first;
     openCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalSize);
     unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1], mGlobalWorkSize[2]};
     unit.localWorkSize = {mLocalSize[0], mLocalSize[1], mLocalSize[2]};
@@ -71,9 +71,9 @@ public:
         auto code = inputs[0]->getType().code;
         switch (code) {
             case halide_type_int:
-                return new RangeExecution("-DUSE_INT", op, backend);
+                OPENCL_CREATOR_CHECK(new RangeExecution("-DUSE_INT", op, backend));
             case halide_type_float:
-                return new RangeExecution("-DUSE_FLOAT", op, backend);
+                OPENCL_CREATOR_CHECK(new RangeExecution("-DUSE_FLOAT", op, backend));
             default:
                 return nullptr;
         }

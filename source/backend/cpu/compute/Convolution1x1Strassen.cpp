@@ -18,8 +18,9 @@
 #include "core/TensorUtils.hpp"
 
 namespace MNN {
+#ifndef MNN_REDUCE_SIZE
 Convolution1x1Strassen::Convolution1x1Strassen(const Convolution2DCommon *common, Backend *b, const float *originWeight,
-                                               size_t originWeightSize, const float *bias, size_t biasSize, std::shared_ptr<ConvolutionCommon::Int8Common> quantInfo)
+                                               size_t originWeightSize, const float *bias, size_t biasSize)
     : CPUConvolution(common, b) {
     auto outputCount = (int)biasSize;
     int ePack, lPack, hPack;
@@ -33,30 +34,14 @@ Convolution1x1Strassen::Convolution1x1Strassen(const Convolution2DCommon *common
         mValid = false;
         return;
     }
-#ifdef MNN_LOW_MEMORY
-    if ((originWeightSize == 0 || nullptr == originWeight) && nullptr != quantInfo.get()) { // Use Int8 Weight.
-        originWeightSize = quantInfo->weight.size();
-        int lSize = (int)originWeightSize / (int)biasSize * common->kernelX() * common->kernelY();
-        auto hU = UP_DIV(outputCount, hPack);
-        auto lU = UP_DIV(lSize, lPack);
-        mSrcCount   = (int)originWeightSize / outputCount;
-
-        mResource->mWeight.reset(Tensor::createDevice<int8_t>(std::vector<int>{UP_DIV(outputCount, hPack), UP_DIV(mSrcCount, lPack) * lPack, hPack}));
-        mValid = b->onAcquireBuffer(mResource->mWeight.get(), Backend::STATIC);
-        if (!mValid) {
-            MNN_ERROR("Not Enough Memory\n");
-            return;
-        }
-
-        DenseConvolutionTiledExecutor::initQuantizeResource(quantInfo, mResource, hU, hPack, lU, lPack, outputCount, (int)originWeightSize / (int)biasSize, common->kernelX() * common->kernelY(), core->bytes);
-        return;
-    }
-#endif
     // Use Float Weight.
     mResource->mWeight.reset(Tensor::createDevice<float>(std::vector<int>{UP_DIV(outputCount, hPack), UP_DIV(mSrcCount, lPack) * lPack, hPack}));
     mValid = b->onAcquireBuffer(mResource->mWeight.get(), Backend::STATIC);
     if (!mValid) {
         MNN_ERROR("Not Enough Memory\n");
+        return;
+    }
+    if (b->getRuntime()->hint().useCachedMmap > 1) {
         return;
     }
     if (core->bytes < 4) {
@@ -67,10 +52,10 @@ Convolution1x1Strassen::Convolution1x1Strassen(const Convolution2DCommon *common
             return;
         }
         core->MNNFp32ToLowp(originWeight, tempTensor->host<int16_t>(), outputCount * mSrcCount);
-        core->MNNPackForMatMul_B(mResource->mWeight->host<float>(), tempTensor->host<float>(), outputCount, mSrcCount, true);
+        core->MNNPackForMatMul_B(mResource->mWeight->host<float>(), tempTensor->host<float>(), outputCount, 1, mSrcCount, true);
         b->onReleaseBuffer(tempTensor.get(), Backend::STATIC);
     } else {
-        core->MNNPackForMatMul_B(mResource->mWeight->host<float>(), originWeight, outputCount, mSrcCount, true);
+        core->MNNPackForMatMul_B(mResource->mWeight->host<float>(), originWeight, outputCount, 1, mSrcCount, true);
     }
 }
 Convolution1x1Strassen::Convolution1x1Strassen(std::shared_ptr<CPUConvolution::Resource> resource, const Convolution2DCommon *common, Backend* b) : CPUConvolution(common, b) {
@@ -88,7 +73,8 @@ bool Convolution1x1Strassen::onClone(Backend* bn, const Op* op, Execution** dst)
     if (nullptr == dst) {
         return true;
     }
-    *dst = new Convolution1x1Strassen(mResource, op->main_as_Convolution2D()->common(), bn);
+    auto exe = new Convolution1x1Strassen(mResource, op->main_as_Convolution2D()->common(), bn);
+    *dst = exe;
     return true;
 }
 
@@ -101,20 +87,14 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
     auto CONVOLUTION_TILED_NUMBER = ePack;
     auto input       = inputs[0];
     auto output      = outputs[0];
-    int numberThread = ((CPUBackend *)backend())->threadNumber();
+    const int numberThread = ((CPUBackend *)backend())->threadNumber();
     auto ic = input->channel();
     auto oc = output->channel();
-    auto icC4        = UP_DIV(ic, core->pack);
     auto ocC4        = UP_DIV(oc, core->pack);
     auto batch       = input->batch();
     auto matrixSizeE = output->height() * output->width() * input->batch();
-    auto outputPlane = output->height() * output->width();
     mUnits.clear();
     std::shared_ptr<char> __autoFunction;
-    auto padY     = mPadY;
-    auto padX     = mPadX;
-    auto strideX  = mCommon->strideX();
-    auto strideY  = mCommon->strideY();
     auto postParameters = getPostParameters();
     auto memoryPool = ((CPUBackend *)backend())->getBufferAllocator();
     memoryPool->barrierBegin();
@@ -122,24 +102,15 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
     int maxDepth = 5;
     auto icAlign = UP_DIV(ic, lPack) * lPack;
     auto weightTensor = mResource->mWeight.get();
-    uint8_t* dequantAlpha = nullptr;
-    uint8_t* dequantBias = nullptr;
-    int dequantBits = bytes * 8; // fp16:16, fp32:32
-#ifdef MNN_LOW_MEMORY
-    if (mResource && mResource->mDequantize.bits <= 8) {
-        dequantAlpha = mResource->mDequantize.mScaleBias->host<uint8_t>();
-        dequantBias = dequantAlpha + mResource->hU * mResource->hP * bytes;
-        dequantBits = mResource->mDequantize.bits;
-    }
-#endif
-    mWeightBytes = static_cast<float>(dequantBits) / 8.0f;
+    mWeightBytes = bytes;
     if (matrixSizeE > CONVOLUTION_TILED_NUMBER * 8 * numberThread && matrixSizeE > ocC4) {
-        // Divide in plane, in this case the divide equal numberThread
-        int divideStep = UP_DIV(matrixSizeE, numberThread);
+        std::vector<int> divides(numberThread+1);
+        divides[0] = 0;
+        static_cast<CPUBackend *>(backend())->computeDivideSizes(matrixSizeE, divides.data()+1);
         mUnits.resize(numberThread);
         for (int i = 0; i < numberThread; ++i) {
-            int planeStart = i * divideStep;
-            int planeEnd   = std::min(planeStart + divideStep, matrixSizeE);
+            int planeStart = divides[i];
+            int planeEnd   = divides[i+1];
             int planeSize  = planeEnd - planeStart;
             Unit &unit     = mUnits[i];
             if (planeSize <= 0) {
@@ -150,7 +121,7 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
             unit.offset[2] = 0;
             unit.offset[0] = core->pack * planeStart * bytes;
             unit.offset[3] = core->pack * planeStart * bytes;
-            unit.mStracssenComputor.reset(new StrassenMatrixComputor(backend(), false, maxDepth, dequantAlpha, dequantBias, dequantBits));
+            unit.mStracssenComputor.reset(new StrassenMatrixComputor(backend(), maxDepth));
             int e = planeSize;
             int l = ic;
             int h = oc;
@@ -173,15 +144,17 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
             hDiv = hPack / core->pack;
         }
         auto ocDiv = UP_DIV(ocC4, hDiv);
-        numberThread   = std::min(numberThread, ocDiv);
-        int divideStep = (ocDiv / numberThread) * hDiv;
+        std::vector<int> divides(numberThread+1);
+        divides[0] = 0;
+        static_cast<CPUBackend *>(backend())->computeDivideSizes(ocDiv, divides.data()+1);
         mUnits.resize(numberThread);
         for (int i = 0; i < numberThread; ++i) {
-            int ocStart = i * divideStep;
-            int ocSize  = divideStep;
-            if (i == numberThread - 1) {
-                ocSize = ocC4 - i * divideStep;
+            int ocStart = divides[i] * hDiv;
+            int ocEnd = divides[i+1] * hDiv;
+            if (ocEnd >= ocC4) {
+                ocEnd = ocC4;
             }
+            int ocSize  = ocEnd - ocStart;
             Unit &unit  = mUnits[i];
             if (ocSize <= 0) {
                 unit.mValid = false;
@@ -194,7 +167,7 @@ ErrorCode Convolution1x1Strassen::onResize(const std::vector<Tensor *> &inputs, 
             unit.offset[0] = 0;
             unit.offset[3] = core->pack * matrixSizeE * ocStart * bytes;
 
-            unit.mStracssenComputor.reset(new StrassenMatrixComputor(backend(), false, maxDepth, dequantAlpha, dequantBias, dequantBits));
+            unit.mStracssenComputor.reset(new StrassenMatrixComputor(backend(), maxDepth));
             int e = matrixSizeE;
             int l = ic;
             int h = std::min(ocSize * core->pack, ocWeightSize * hPack);
@@ -233,4 +206,5 @@ ErrorCode Convolution1x1Strassen::onExecute(const std::vector<Tensor *> &inputs,
     MNN_CONCURRENCY_END();
     return NO_ERROR;
 }
+#endif
 } // namespace MNN

@@ -22,6 +22,12 @@ static void _MNNGetMatMulPackMode(int* eP, int *lP, int* hP) {
     *hP = ghP;
 }
 
+#ifndef MNN_USE_AVX
+bool AVX2Functions::init(int cpuFlags) {
+    return false;
+}
+#else
+
 bool AVX2Functions::init(int cpuFlags) {
     gAVX2CoreFunctions = new CoreFunctions;
     auto coreFunction = gAVX2CoreFunctions;
@@ -39,22 +45,24 @@ bool AVX2Functions::init(int cpuFlags) {
 
     coreFunction->MNNPackedMatMul       = _AVX_MNNPackedMatMul;
     coreFunction->MNNPackedMatMulRemain = _AVX_MNNPackedMatMulRemain;
-#ifdef MNN_LOW_MEMORY
-    coreFunction->MNNPackedMatMul_int4       = _AVX_MNNPackedMatMul_int4;
-    coreFunction->MNNPackedMatMulRemain_int4 = _AVX_MNNPackedMatMulRemain_int4;
+#ifdef MNN_CPU_WEIGHT_DEQUANT_GEMM
     coreFunction->MNNPackedMatMul_int8       = _AVX_MNNPackedMatMul_int8;
     coreFunction->MNNPackedMatMulRemain_int8 = _AVX_MNNPackedMatMulRemain_int8;
-    coreFunction->MNNGemmHybridInt4 = _AVX_MNNGemmHybridInt4;
-    coreFunction->MNNGemmHybridInt8 = _AVX_MNNGemmHybridInt8;
+#endif
+
+#ifdef MNN_LOW_MEMORY
     coreFunction->MNNAbsMax = _AVX_MNNAbsMaxFP32;
-    coreFunction->MNNDynamicQuant = _AVX_MNNDynamicQuantFP32;
+    coreFunction->MNNDynamicQuant = _AVX_MNNDynamicQuant;
+    coreFunction->MNNAsyQuantFunc = _AVX_MNNAsyQuantFunc;
+    coreFunction->MNNAsyQuantInfo = _AVX_MNNAsyQuantInfo;
 #endif
     coreFunction->MNNPackC4ForMatMul_A  = _AVX_MNNPackC4ForMatMul_A;
     coreFunction->MNNPackForMatMul_B    = _AVX_MNNPackForMatMul_B;
     coreFunction->MNNComputeMatMulForE_1 = _AVX_MNNComputeMatMulForE_1;
     coreFunction->MNNComputeMatMulForH_1 = _AVX_MNNComputeMatMulForH_1;
     // Dynamic Quant
-    coreFunction->MNNCountMaxMinValue = _AVX_MNNComputeScaleZeroScalar;
+    coreFunction->MNNCountMaxMinValue = _AVX_MNNCountMinMaxValue;
+    coreFunction->MNNSoftmax = _AVX_MNNSoftmax;
 
     // For Packed Functions
     coreFunction->pack = 8;
@@ -97,13 +105,22 @@ bool AVX2Functions::init(int cpuFlags) {
             sizeof(MNN::CoreFunctions::MNNPackedMatMulKernel) * AVX512_INPUT_TILE_MAX);
     }
 #endif
+    {
+        coreFunction->int8MatmulRelatedFunctions.Int8GemmKernel = gAVX2CoreInt8Functions->Int8GemmKernel;
+        coreFunction->int8MatmulRelatedFunctions.Int8GemmKernelFast = gAVX2CoreInt8Functions->Int8GemmKernelFast;
+        coreFunction->int8MatmulRelatedFunctions.Int8GemmKernel_W4 = gAVX2CoreInt8Functions->Int8GemmKernel_W4;
+        coreFunction->int8MatmulRelatedFunctions.MNNGetGemmUnit = gAVX2CoreInt8Functions->MNNGetGemmUnit;
+        coreFunction->int8MatmulRelatedFunctions.MNNPackC4Int8ForMatMul_A = gAVX2CoreInt8Functions->MNNPackC4Int8ForMatMul_A;
+        coreFunction->int8MatmulRelatedFunctions.eP = 4;
+    }
     return true;
 }
+#endif
+
 CoreFunctions* AVX2Functions::get() {
     return gAVX2CoreFunctions;
 }
 CoreInt8Functions* AVX2Functions::getInt8() {
     return gAVX2CoreInt8Functions;
 }
-
 };

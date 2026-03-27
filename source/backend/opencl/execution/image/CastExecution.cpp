@@ -17,7 +17,8 @@ CastExecution::CastExecution(const std::vector<Tensor *> &inputs, const std::vec
     auto runtime       = openCLBackend->getOpenCLRuntime();
     mUnits.resize(1);
     auto &unit = mUnits[0];
-    unit.kernel = openCLBackend->getOpenCLRuntime()->buildKernel("cast", "cast", mBuildOptions, inputs[0], outputs[0]);
+    unit.kernel = openCLBackend->getOpenCLRuntime()->buildKernel("cast", "cast", mBuildOptions, openCLBackend->getPrecision(), inputs[0], outputs[0]);
+    OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     mMaxWorkGroupSize  = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 }
 ErrorCode CastExecution::onEncode(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) {
@@ -56,7 +57,7 @@ ErrorCode CastExecution::onEncode(const std::vector<Tensor*>& inputs, const std:
     MNN_CHECK_CL_SUCCESS(ret, "setArg CastExecution");
 
     std::string kernelName = "cast";
-    mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel).first;
+    mLocalSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel, openCLBackend->getCLTuneLevel(), "cast").first;
     openCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalSize);
     unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1], mGlobalWorkSize[2]};
     unit.localWorkSize  = {mLocalSize[0], mLocalSize[1], mLocalSize[2]};
@@ -86,11 +87,7 @@ public:
         auto dstT = _mapDataType(cast->dstT());
 
         const auto &inputDataType = inputs[0]->getType();
-        if (inputDataType.bytes() == 4 && cast->dstT() == MNN::DataType_DT_BOOL) {
-            return new CastExecution(inputs, outputs, "-DTO_BOOL", op, backend);
-        } else {
-            return new CastExecution(inputs, outputs, "", op, backend);
-        }
+        if (inputDataType.bytes() == 4 && cast->dstT() == MNN::DataType_DT_BOOL) OPENCL_CREATOR_CHECK(new CastExecution(inputs, outputs, "-DTO_BOOL", op, backend)); else OPENCL_CREATOR_CHECK(new CastExecution(inputs, outputs, "", op, backend));
         return nullptr;
     }
 };

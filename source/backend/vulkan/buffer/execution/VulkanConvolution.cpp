@@ -10,6 +10,8 @@
 #include "core/Macro.h"
 #include "VulkanConvolutionImpl.hpp"
 #include "core/ConvolutionCommon.hpp"
+#include "VulkanConv1x1Coop.hpp"
+#include "VulkanConv1x1General.hpp"
 namespace MNN {
 int VulkanConvolutionCommon::gImage2ColLocal = 256;
 std::string VulkanConvolutionCommon::getPostTreatMacro(const Convolution2DCommon* common) {
@@ -26,29 +28,42 @@ static std::shared_ptr<VulkanBuffer> _createBufferForConvDepthwise(VulkanBackend
                                                                    const float* weightSource, size_t weightSize) {
     auto outputCount     = mCommon->outputCount();
     auto totalWeightSize = ALIGN_UP4(mCommon->outputCount()) * (mCommon->kernelY() * mCommon->kernelX());
-    auto kernelBuffer    = std::make_shared<VulkanBuffer>(extra->getMemoryPool(), false, sizeof(float) * totalWeightSize, nullptr,
+    size_t elementSize = sizeof(float);
+    if (extra->useFP16()) {
+        elementSize = sizeof(int16_t);
+    }
+    auto kernelBuffer    = std::make_shared<VulkanBuffer>(extra->getMemoryPool(), false, elementSize * totalWeightSize, nullptr,
                                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     auto layer        = mCommon;
 
-    auto weight     = (float*)kernelBuffer->map();
+    auto weight     = kernelBuffer->map();
     int kw          = layer->kernelX();
     int kh          = layer->kernelY();
     int planeStride = kw * kh * 4;
 
     int cur = 0;
-    for (int c = 0; c < outputCount; ++c) {
-        int plane  = c / 4;
-        int offset = c % 4;
-        for (int y = 0; y < kh; ++y) {
-            for (int x = 0; x < kw; ++x) {
-                float* dst = weight + offset + (x + y * kw) * 4 + planeStride * plane;
-                *dst       = weightSource[cur++];
+    auto packWeight = [&](bool useFP16) {
+        for (int c = 0; c < outputCount; ++c) {
+            int plane  = c / 4;
+            int offset = c % 4;
+            for (int y = 0; y < kh; ++y) {
+                for (int x = 0; x < kw; ++x) {
+                    int idx = offset + (x + y * kw) * 4 + planeStride * plane;
+                    float val = weightSource[cur++];
+                    if (useFP16) {
+                        ((half_float::half*)weight)[idx] = (half_float::half)val;
+                    } else {
+                        ((float*)weight)[idx] = val;
+                    }
+                }
             }
         }
-    }
+    };
+    packWeight(extra->useFP16());
     kernelBuffer->unmap();
     return kernelBuffer;
 }
+
 
 void VulkanConvolutionCommon::writeDeconvolution(VulkanConvolutionCommon::ConvolutionParameter* convCons,
                                                 const Convolution2DCommon* common, const Tensor* src,
@@ -145,8 +160,13 @@ bool VulkanConvolutionDepthwise::_init(const float* weightData, size_t weightSiz
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER};
     MNN_ASSERT(OpType_ConvolutionDepthwise == convOp->type());
-    auto macro = getPostTreatMacro(common);
-    mConvPipeline = extra->getPipeline("glsl_convolutionDepthwise_" + macro + "comp", convTypes);
+    std::string pKey = "glsl_convolutionDepthwise_";
+    pKey += getPostTreatMacro(common);
+    if (extra->useFP16()) {
+        pKey += "FP16_";
+    }
+    pKey += "comp";
+    mConvPipeline = extra->getPipeline(pKey, convTypes);
     mLocalX       = 16;
     mLocalY       = 16;
 
@@ -159,20 +179,32 @@ bool VulkanConvolutionDepthwise::_init(const float* weightData, size_t weightSiz
     if (nullptr != weightData){
         mKernel = _createBufferForConvDepthwise(extra, common, weightData, weightSize);
     } else {
-        mKernel.reset(new VulkanBuffer(extra->getMemoryPool(), false, common->kernelX() * common->kernelY() * c4 * 4 * sizeof(float), nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT));
-        auto weight     = (float*)mKernel->map();
+        size_t elementSize = sizeof(float);
+        if (extra->useFP16()) {
+            elementSize = sizeof(int16_t);
+        }
+        mKernel.reset(new VulkanBuffer(extra->getMemoryPool(), false, common->kernelX() * common->kernelY() * c4 * 4 * elementSize, nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT));
+        auto weight     = mKernel->map();
         ::memset(weight, 0, mKernel->size());
         mKernel->unmap();
     }
     auto convReal = convOp->main_as_Convolution2D();
+    size_t elementSize = sizeof(float);
+    if (extra->useFP16()) {
+        elementSize = sizeof(int16_t);
+    }
     auto biasBuffer = std::make_shared<VulkanBuffer>(extra->getMemoryPool(), false,
-                                                     sizeof(float) * ALIGN_UP4(common->outputCount()));
+                                                     elementSize * ALIGN_UP4(common->outputCount()));
 
     auto bias = biasBuffer->map();
-    ::memset(bias, 0, ALIGN_UP4(common->outputCount()) * sizeof(float));
+    ::memset(bias, 0, ALIGN_UP4(common->outputCount()) * elementSize);
     if (nullptr != convReal->bias()) {
         // Create Buffer
-        ::memcpy(bias, convReal->bias()->data(), common->outputCount() * sizeof(float));
+        if (extra->useFP16()) {
+            FLOAT_TO_HALF(convReal->bias()->data(), (int16_t*)bias, common->outputCount());
+        } else {
+            ::memcpy(bias, convReal->bias()->data(), common->outputCount() * sizeof(float));
+        }
     }
     biasBuffer->unmap();
     mBias = biasBuffer;
@@ -216,7 +248,12 @@ ErrorCode VulkanConvolutionDepthwise::onEncodeConvolution(const Convolution2DCom
     if (inputs.size() >= 2) {
         auto weight =  extra->getTensorBuffer(inputs[1]);
         auto weightSize = extra->getTensorSize(inputs[1]);
-        auto pipeline = extra->getPipeline("glsl_dwweightcopy_comp", {
+        std::string key = "glsl_dwweightcopy_";
+        if (extra->useFP16()) {
+            key += "FP16_";
+        }
+        key += "comp";
+        auto pipeline = extra->getPipeline(key, {
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -274,48 +311,89 @@ private:
     std::shared_ptr<Resource> mResource;
     std::shared_ptr<VulkanLayout::DescriptorSet> mConvSet;
 public:
-    static std::shared_ptr<Resource> makeResource( std::shared_ptr<ConvolutionCommon::Int8Common> quanParam, const float* biasPtr, const Convolution2DCommon* convOption, VulkanBackend* vkBn, int srcCount, int outputCount) {
+    static std::shared_ptr<Resource> makeResource( std::shared_ptr<ConvolutionCommon::Int8Common> quanParam, const float* biasPtr, const Convolution2DCommon* convOption, VulkanBackend* vkBn, int srcCount, int outputCount, bool useFP16) {
         std::shared_ptr<Resource> resP(new Resource);
         auto& res = *resP;
-        int kxky = quanParam->weight.size() / srcCount / outputCount;
+        if (nullptr == quanParam.get() || nullptr == quanParam->weight.get() || srcCount <= 0 || outputCount <= 0) {
+            MNN_ERROR("Invalid quant conv param for Vulkan, srcCount=%d, outputCount=%d\n", srcCount, outputCount);
+            return nullptr;
+        }
+        size_t elementSize = useFP16 ? sizeof(int16_t) : sizeof(float);
+        const int kxky = convOption->kernelX() * convOption->kernelY();
+        if (kxky <= 0) {
+            MNN_ERROR("Invalid kernel size for Vulkan quant conv, kxky=%d\n", kxky);
+            return nullptr;
+        }
+        const size_t expectedWeightCount = (size_t)srcCount * (size_t)outputCount * (size_t)kxky;
+        const size_t packedWeightCount = (size_t)quanParam->weight.size();
+        if (quanParam->canUseInt4) {
+            const size_t minimumPackedWeightCount = UP_DIV(expectedWeightCount, (size_t)2);
+            if (packedWeightCount < minimumPackedWeightCount) {
+                MNN_ERROR("Invalid int4 weight size for Vulkan, packed=%zu, required=%zu\n", packedWeightCount, minimumPackedWeightCount);
+                return nullptr;
+            }
+        } else {
+            if (packedWeightCount < expectedWeightCount) {
+                MNN_ERROR("Invalid int8 weight size for Vulkan, count=%zu, required=%zu\n", packedWeightCount, expectedWeightCount);
+                return nullptr;
+            }
+        }
         // Reorder
         auto& pool = vkBn->getMemoryPool();
         int icC4 = UP_DIV(srcCount, 4);
         int ocC4 = UP_DIV(outputCount, 4);
         int unit = 4;
         int packSize = unit * unit;
-        std::vector<int8_t> weightReorder(icC4 * ocC4 * kxky * packSize);
-        ::memset(weightReorder.data(), 0, weightReorder.size());
+        const size_t reorderWeightCount = (size_t)icC4 * (size_t)ocC4 * (size_t)kxky * (size_t)packSize;
+        if (reorderWeightCount == 0) {
+            MNN_ERROR("Invalid reorder weight size for Vulkan, icC4=%d, ocC4=%d, kxky=%d\n", icC4, ocC4, kxky);
+            return nullptr;
+        }
+        std::vector<int8_t> weightReorder(reorderWeightCount, 0);
+        const auto* rawWeight = reinterpret_cast<const uint8_t*>(quanParam->weight.get());
+        const auto* rawWeightInt8 = reinterpret_cast<const int8_t*>(quanParam->weight.get());
         int divSize = 1;
         for (int oz=0; oz<outputCount; ++oz) {
             int oy = oz / unit;
             int ox = oz % unit;
             auto dstOz = weightReorder.data() + oy * icC4 * kxky * packSize + ox;
-            auto srcOz = quanParam->weight.get() + oz * srcCount * kxky;
             for (int sz=0; sz<srcCount; ++sz) {
                 int sy = sz / unit;
                 int sx = sz % unit;
                 auto dstSz = dstOz + sy * packSize + sx * unit;
-                auto srcSz = srcOz + sz * kxky;
                 for (int k=0; k<kxky; ++k) {
-                    dstSz[k * packSize * icC4] = srcSz[k];
+                    const size_t srcIndex = ((size_t)oz * (size_t)srcCount + (size_t)sz) * (size_t)kxky + (size_t)k;
+                    int8_t srcValue = 0;
+                    if (quanParam->canUseInt4) {
+                        const size_t srcByteIndex = srcIndex >> 1;
+                        const auto packedValue = rawWeight[srcByteIndex];
+                        const int nibble = (srcIndex & 1) ? (packedValue & 0x0F) : ((packedValue >> 4) & 0x0F);
+                        srcValue = (int8_t)(nibble - 8);
+                    } else {
+                        srcValue = rawWeightInt8[srcIndex];
+                    }
+                    dstSz[k * packSize * icC4] = srcValue;
                 }
             }
         }
         if (quanParam->canUseInt4) {
             divSize = 2;
         }
-        res.mKernel.reset(new VulkanBuffer(pool, false, icC4 * ocC4 * kxky * (packSize / divSize), nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0));
-        res.mBias.reset(new VulkanBuffer(pool, false, ocC4 * 4 * sizeof(float), nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0));
-        res.mWeightScale.reset(new VulkanBuffer(pool, false, ocC4 * 4 * 2 * sizeof(float), nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0));
+        // Weight
+        const size_t kernelBufferSize = reorderWeightCount / (size_t)divSize;
+        if (kernelBufferSize == 0) {
+            MNN_ERROR("Invalid kernel buffer size for Vulkan quant conv\n");
+            return nullptr;
+        }
+        res.mKernel.reset(new VulkanBuffer(pool, false, kernelBufferSize, nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0));
         float originOffset = 0.0f;
         float unpackRate = 127.0f;
         if (quanParam->canUseInt4) {
             originOffset = -8.0f;
             unpackRate = 1.0f;
-            size_t weightLength = icC4 * ocC4 * kxky * packSize / 2;
+            size_t weightLength = kernelBufferSize;
             std::vector<uint8_t> weightNew(weightLength);
-            for (int i=0; i<weightLength; ++i) {
+            for (size_t i=0; i<weightLength; ++i) {
                 int s0 = weightReorder[2 * i + 0] + 8;
                 int s1 = weightReorder[2 * i + 1] + 8;
                 int d = s0 * 16 + s1;
@@ -325,23 +403,45 @@ public:
         } else {
             vkBn->copyToGPUBuffer(weightReorder.data(), res.mKernel->buffer(), weightReorder.size(), 0);
         }
-        vkBn->copyToGPUBuffer(biasPtr, res.mBias->buffer(), outputCount * sizeof(float), 0);
-        auto alphaPtr = quanParam->alpha.get();
-        auto asym = quanParam->asymmetric;
-        std::vector<float> wscaleData(ocC4 * 4 * 2, 0.0f);
-        if (asym) {
-            for (int i=0; i<outputCount; ++i) {
-                wscaleData[i] = alphaPtr[2*i+1] * unpackRate;
-                wscaleData[i + ocC4 * 4] = originOffset * wscaleData[i] + alphaPtr[2*i];
+        // Bias
+        {
+            res.mBias.reset(new VulkanBuffer(pool, false, ocC4 * 4 * elementSize, nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0));
+            const void * tempPtr = biasPtr;
+            std::vector<uint8_t> biasDataFP16;
+            if (useFP16) {
+                biasDataFP16.resize(outputCount * sizeof(int16_t), 0);
+                FLOAT_TO_HALF(biasPtr, (int16_t *) biasDataFP16.data(), outputCount);
+                tempPtr = (const void *) biasDataFP16.data();
             }
-        } else {
-            for (int i=0; i<outputCount; ++i) {
-                wscaleData[i] = alphaPtr[i] * unpackRate;
-                wscaleData[i + ocC4 * 4] = originOffset * wscaleData[i];
-            }
+            vkBn->copyToGPUBuffer(tempPtr, res.mBias->buffer(), outputCount * elementSize, 0);
         }
-        vkBn->copyToGPUBuffer(wscaleData.data(), res.mWeightScale->buffer(), ocC4 * 4 * 2 * sizeof(float), 0);
-        
+        // Scale
+        {
+            res.mWeightScale.reset(new VulkanBuffer(pool, false, ocC4 * 4 * 2 * elementSize, nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_SHARING_MODE_EXCLUSIVE, 0));
+            auto alphaPtr = quanParam->alpha.get();
+            auto asym = quanParam->asymmetric;
+            std::vector<uint8_t> wscaleData(ocC4 * 4 * 2 * elementSize, 0);
+            half_float::half * tempHalf = (half_float::half *) wscaleData.data();
+            float * tempFloat = (float *) wscaleData.data();
+
+            for (int i=0; i<outputCount; ++i) {
+                float s = alphaPtr[asym ? 2*i+1 : i];
+                float b = asym ? alphaPtr[2*i] : 0.0f;
+                
+                s = s * unpackRate;
+                b = originOffset * s + b;
+
+                if (useFP16) {
+                    tempHalf[i] = (half_float::half)s;
+                    tempHalf[i + ocC4 * 4] = (half_float::half)b;
+                } else {
+                    tempFloat[i] = s;
+                    tempFloat[i + ocC4 * 4] = b;
+                }
+            }
+            vkBn->copyToGPUBuffer(wscaleData.data(), res.mWeightScale->buffer(), ocC4 * 4 * 2 * elementSize, 0);
+        }
+
         // Build Pipeline
         // Create Pipeline
         std::vector<VkDescriptorType> convTypes{
@@ -352,12 +452,19 @@ public:
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
         };
-        auto macro = getPostTreatMacro(convOption);
+        std::string pKey = "glsl_convolution";
         if (quanParam->canUseInt4) {
-            res.mPipeline = vkBn->getPipeline("glsl_convolutionint4_" + macro + "comp", convTypes);
+            pKey += "int4_";
         } else {
-            res.mPipeline = vkBn->getPipeline("glsl_convolutionint8_" + macro + "comp", convTypes);
+            pKey += "int8_";
         }
+        auto macro = getPostTreatMacro(convOption);
+        pKey += macro;
+        if (useFP16) {
+            pKey += "FP16_";
+        }
+        pKey += "comp";
+        res.mPipeline = vkBn->getPipeline(pKey, convTypes);
         return resP;
     }
 
@@ -427,10 +534,12 @@ public:
                     return nullptr;
                 }
             }
-            if (quan->buffer() && OpType_Convolution == op->type()) {
-                quanWeight = ConvolutionCommon::load(op->main_as_Convolution2D(), backend, false, true);
+            const bool hasExternalQuantWeight = (convReal->external() != nullptr && convReal->external()->size() > 1);
+            // For coop/int8 path, external quant weights should also keep int8 payload instead of being forced to float.
+            if ((quan->buffer() || hasExternalQuantWeight) && OpType_Convolution == op->type()) {
+                quanWeight = ConvolutionCommon::load(op, backend, false, true);
             } else {
-                quanWeight = ConvolutionCommon::load(op->main_as_Convolution2D(), backend, true);
+                quanWeight = ConvolutionCommon::load(op, backend, true);
             }
             if (quanWeight->weight.get() != nullptr) {
                 useInt8Conv = true;
@@ -456,8 +565,30 @@ public:
             auto convCommonParam = op->main_as_Convolution2D()->common();
             const int group      = convCommonParam->group();
             if (1 == group) {
+                auto coopMatInfo = extra->getDevice().getCoopMatInfo();
+                const auto& subgroup = extra->getDevice().getSubgroupInfo();
+                const VkSubgroupFeatureFlags requiredSubgroupOps = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+                const bool supportSubgroupArithmetic = subgroup.size > 0 &&
+                                                       (subgroup.stages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                                                       ((subgroup.ops & requiredSubgroupOps) == requiredSubgroupOps);
+                bool is1x1 = common->kernelX() == 1 && common->kernelY() == 1 && 
+                             common->strideX() == 1 && common->strideY() == 1 &&
+                             inputs[0]->width() == outputs[0]->width() && inputs[0]->height() == outputs[0]->height();
+                bool singleInput = (inputs.size() == 1);
+                if (useInt8Conv && is1x1 && singleInput) {
+                    if (coopMatInfo.supportCoopMat && supportSubgroupArithmetic && extra->gpuType() == VulkanRuntime::ADRENO) {
+                        return new VulkanConv1x1Coop(extra, convCommonParam, nullptr, biasPtr, srcCount, outputCount, coopMatInfo,
+                                                     quanWeight);
+                    }
+                    return new VulkanConv1x1General(extra, convCommonParam, biasPtr, srcCount, outputCount, quanWeight);
+                }
+                if (coopMatInfo.supportCoopMat && supportSubgroupArithmetic && is1x1 && singleInput &&
+                    extra->gpuType() == VulkanRuntime::ADRENO) {
+                    return new VulkanConv1x1Coop(extra, convCommonParam, source, biasPtr, srcCount, outputCount, coopMatInfo);
+                }
                 if (useInt8Conv) {
-                    auto res = VulkanConvolutionSlideWindowsInt8::makeResource(quanWeight, biasPtr, convCommonParam, extra, srcCount, outputCount);
+                    bool useFP16 = extra->useFP16();
+                    auto res = VulkanConvolutionSlideWindowsInt8::makeResource(quanWeight, biasPtr, convCommonParam, extra, srcCount, outputCount, useFP16);
                     return new VulkanConvolutionSlideWindowsInt8(extra, common, res);
                 }
                 return VulkanConvolutionImpl::create(extra, common, inputs, outputs[0], source,

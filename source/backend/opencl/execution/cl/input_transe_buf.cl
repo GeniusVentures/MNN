@@ -12,6 +12,7 @@ __kernel void conv_transe_c4_c1(
     __private const int input_width,
     __private const int input_height,
     __private const int input_channel,
+    __private const int batch,
     __private const int channel_blocks,
     __private const int input_pad_left,
     __private const int input_pad_right)
@@ -29,10 +30,10 @@ __kernel void conv_transe_c4_c1(
     const uint input_x_pitch = 4;
     const uint input_y_pitch = input_x_pitch * input_width;
     const uint input_f_pitch = input_y_pitch * input_height;
-    const uint input_b_pitch = input_f_pitch * channel_blocks;
+    const uint input_b_pitch = input_f_pitch * batch;
 
-    const uint input_offset = b * input_b_pitch +
-                              c * input_f_pitch +
+    const uint input_offset = b * input_f_pitch +
+                              c * input_b_pitch +
                               h * input_y_pitch +
                               w * input_x_pitch;
 
@@ -48,8 +49,9 @@ __kernel void conv_transe_c4_c1(
                                w * output_x_pitch;
     
     FLOAT4 value = vload4(0, input + input_offset);
+    FLOAT *value_ptr = (FLOAT*)&value;
     for(int i = 0; i < 4 && cout + i < input_channel; ++i){
-        output[output_offset + i * output_f_pitch] = value[i];
+        output[output_offset + i * output_f_pitch] = value_ptr[i];
     }
 }
 
@@ -63,6 +65,7 @@ __kernel void conv_transe_c4_c16(
     int input_width,
     int input_height,
     int input_channel,
+    int batch,
     int channel_blocks,
     int input_pad_left,
     int input_pad_right)
@@ -80,10 +83,10 @@ __kernel void conv_transe_c4_c16(
     const uint input_x_pitch = 4;
     const uint input_y_pitch = input_x_pitch * input_width;
     const uint input_f_pitch = input_y_pitch * input_height;
-    const uint input_b_pitch = input_f_pitch * channel_blocks;
+    const uint input_b_pitch = input_f_pitch * batch;
     
-    const uint input_offset = b * input_b_pitch +
-                              c * input_f_pitch +
+    const uint input_offset = b * input_f_pitch +
+                              c * input_b_pitch +
                               h * input_y_pitch +
                               w * input_x_pitch;
     

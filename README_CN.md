@@ -1,10 +1,17 @@
 ![MNN](doc/banner.png)
+---
+[![License](https://img.shields.io/github/license/alibaba/MNN)](LICENSE.txt)
+[![Documentation](https://img.shields.io/badge/Documentation-Read-green)](https://mnn-docs.readthedocs.io/en/latest/)
+[![English Version](https://img.shields.io/badge/Language-English-green)](README.md)
+[![日本語バージョン](https://img.shields.io/badge/Language-%E6%97%A5%E6%9C%AC%E8%AA%9E-green)](README_JP.md)
+[![MNN Homepage](https://img.shields.io/badge/Homepage-Visit-green)](http://www.mnn.zone)
 
-[English Version](README.md)
-
-[MNN Homepage](http://www.mnn.zone)
 
 [MNN](https://github.com/alibaba/MNN)是一个轻量级的深度神经网络引擎，支持深度学习的推理与训练。适用于服务器/个人电脑/手机/嵌入式各类设备。目前，MNN已经在阿里巴巴的手机淘宝、手机天猫、优酷等30多个App中使用，覆盖直播、短视频、搜索推荐、商品图像搜索、互动营销、权益发放、安全风控等场景。
+
+[MNN-LLM](https://github.com/alibaba/MNN/tree/master/transformers/llm)是基于MNN引擎开发的大语言模型运行方案，解决大语言模型在本地设备的高效部署问题(手机/个人电脑/嵌入式设备)。支持常见的千问/百川/智谱/LLAMA等大语言模型。使用教程：[MNN-LLM使用教程](https://mnn-docs.readthedocs.io/en/latest/transformers/llm.html)
+
+[MNN-Diffusion](https://github.com/alibaba/MNN/tree/master/transformers/diffusion)是基于MNN引擎开发的Stable Diffusion文生图模型运行方案，解决Stable Diffusion模型在本地设备的高效部署问题。使用教程：[MNN-Diffusion使用教程](https://mnn-docs.readthedocs.io/en/latest/transformers/diffusion.html)
 
 ![架构图](doc/architecture.png)
 
@@ -26,21 +33,23 @@
 ## 文档与工作台
 MNN文档：
 - [最新文档(readthedocs)](https://mnn-docs.readthedocs.io/en/latest/index.html)
-- [语雀文档](https://www.yuque.com/mnn/cn)
+
+- 也可阅读 docs/README ，编译本地文档
+
 
 [MNN官网](http://www.mnn.zone)上还可以下载MNN团队全新力作MNN工作台，涵盖开箱即用模型、可视化训练等工具，更可以一键部署到多端设备。
 
 ## 整体特点
 
-### 轻量性 
+### 轻量性
 
-- 主体功能（模型推理CPU+GPU）无任何依赖，代码精简，可以方便地部署到移动设备和各种嵌入式设备中。 
+- 主体功能（模型推理CPU+GPU）无任何依赖，代码精简，可以方便地部署到移动设备和各种嵌入式设备中。
    - iOS平台：功能全开的MNN静态库 armv7+arm64大小12MB左右，链接生成可执行文件增加大小2M左右。可裁剪主体功能后静态库大小6.1M ，链接生成可执行文件增加大小 600 KB。
    - Android平台：主体功能 armv7a - c++_shared 动态库大小800KB左右。
 - 支持采用 Mini 编辑选项进一步降低包大小，大约能在上述库体积基础上进一步降低 25% 左右。
 - 支持模型FP16/Int8压缩与量化，可减少模型50% - 75% 的体积
 
-### 通用性 
+### 通用性
 
 - 支持 Tensorflow、Caffe、ONNX、Torchscripts 等主流模型文件格式，支持CNN / RNN / GAN / Transformer 等主流网络结构。
 - 支持多输入多输出，支持任意维度的输入输出，支持动态输入（输入大小可变），支持带控制流的模型
@@ -70,21 +79,22 @@ MNN适配的硬件架构与精度详见下表：
 - B ：支持，无优化或在实验状态，不推荐使用
 - C ：不支持
 
-| Architecture / Precision |  | Normal | FP16 | BF16 | Int8 |
+| Architecture / Precision |  | Normal | FP16 | BF16 | Int8 / Int4 |
 | --- | --- | --- | --- | --- | --- |
 | CPU | Native | B | C | B | B |
-|  | x86/x64-SSE4.1 | A | B | B | A |
-|  | x86/x64-AVX2 | S | B | B | A |
-|  | x86/x64-AVX512 | S | B | B | S |
+|  | x86/x64-SSE4.1 | A | C | C | A |
+|  | x86/x64-AVX2 | S | C | C | A |
+|  | x86/x64-AVX512 | S | C | C | S |
 |  | ARMv7a | S | S (ARMv8.2) | S | S |
 |  | ARMv8 | S | S (ARMv8.2) | S(ARMv8.6) | S |
-| GPU | OpenCL | A | S | C | C |
-|  | Vulkan | A | A | C | C |
-|  | Metal | A | S | C | C |
-|  | CUDA | A | S | C | C |
-| NPU | CoreML | B | B | C | C |
-|  | HIAI | B | C | C | B |
-|  | NNAPI | B | B | C | C |
+| GPU | OpenCL | A | S | C | S |
+|  | Vulkan | A | A | C | A |
+|  | Metal | A | S | C | S |
+|  | CUDA | A | S | C | A |
+| NPU | CoreML | A | C | C | C |
+|  | HIAI | A | C | C | C |
+|  | NNAPI | B | B | C | B |
+|  | QNN | C | B | C | C |
 
 
 ## 工具
@@ -101,12 +111,10 @@ MNN适配的硬件架构与精度详见下表：
 ## 社区交流与反馈
 钉钉群组：
 
-- 钉钉群1:23329087 
-- 钉钉群2:23350225
-- 钉钉群3:扫描二维码加入
-
-![MNN-3](doc/dingdingmnn3.png)
-
+- 钉钉群3 (可加入): 160170007549
+- 钉钉群3 (已无法加入)
+- 钉钉群2 (已满): 23350225
+- 钉钉群1 (已满): 23329087
 
 ## 历史论文
 
@@ -147,4 +155,5 @@ MNN参考、借鉴了下列项目：
 - [libyuv](https://chromium.googlesource.com/libyuv/libyuv)
 - [libjpeg](https://github.com/libjpeg-turbo/libjpeg-turbo)
 - [opencv](https://github.com/opencv/opencv)
+- [onnxruntime](https://github.com/microsoft/onnxruntime)
 

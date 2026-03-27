@@ -45,8 +45,17 @@ extern void registerCoreMLRuntimeCreator();
 #if MNN_NNAPI_ENABLED
 extern void registerNNAPIRuntimeCreator();
 #endif
+
 #if MNN_VULKAN_BACKEND_ENABLED
 extern void registerCoreVulkanRuntimeCreator();
+#endif
+
+#if MNN_QNN_ENABLED
+extern void registerQNNRuntimeCreator();
+#endif
+
+#ifdef MNN_NEUROPILOT
+extern void registerNeuroPilot();
 #endif
 
 static std::once_flag s_flag;
@@ -56,7 +65,7 @@ void registerBackend() {
         LogInit();
 #endif
         registerCPURuntimeCreator();
-#ifndef MNN_BUILD_MINI
+#ifndef MNN_SKIPBUILD_GEOMETRY
         SizeComputerSuite::init();
         GeometryComputer::init();
 #endif
@@ -65,6 +74,9 @@ void registerBackend() {
 #endif
 #ifdef MNN_NNAPI_ENABLED
         registerNNAPIRuntimeCreator();
+#endif
+#if MNN_QNN_ENABLED
+    registerQNNRuntimeCreator();
 #endif
 #if MNN_OPENCL_ENABLED
         OpenCL::registerOpenCLRuntimeCreator();
@@ -91,6 +103,9 @@ void registerBackend() {
                 }
             }
         }
+#ifdef MNN_NEUROPILOT
+        registerNeuroPilot();
+#endif
     });
 }
 
@@ -149,6 +164,9 @@ bool Backend::onAcquireBuffer(const Tensor* tensor, StorageType storageType) {
         return true;
     }
     TensorUtils::getDescribeOrigin(tensor)->mem = mem;
+    if (nullptr == TensorUtils::getDescribeOrigin(tensor)->getBackend()) {
+        TensorUtils::getDescribeOrigin(tensor)->setBackend(this);
+    }
     return true;
 }
 bool Backend::onReleaseBuffer(const Tensor* tensor, StorageType storageType) {

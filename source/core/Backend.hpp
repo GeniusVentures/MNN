@@ -25,6 +25,66 @@ class Execution;
 
 class Runtime;
 class Backend;
+struct RuntimeHint {
+    // 0: Defer, 1: Eager
+    int memoryAllocatorType = 0;
+    int winogradMemoryUsed = 3;
+
+    // 0-100, 50 means litter core has 50% capacity of large core
+    int cpuDecreaseRate = 50;
+    int dynamicQuantOption = 0;
+
+    // attentionOption % 8:
+    // 0: Do not quantize
+    // 1: Q,K: Int8, V: Float
+    // 2: Q,K,V: Int8
+
+    // attentionOption / 8:
+    // 0: don't use flash attention
+    // 1: use flash attention
+
+    int attentionOption = 8;
+
+    // the kvcache size limit of each layer
+    // if the size of kvcache in memory exceeds the limit
+    // it will be moved to disk to save memory
+    // -1 for no limit
+    int kvcacheSizeLimit = -1;
+
+    // path of the kvcache directory
+    std::string kvcacheDirPath = "";
+
+    // path of the kvcache directory
+    std::string prefixcacheDirPath = "prefixcache";
+
+    std::string midMemoryPath;
+    std::string weightMemoryPath;
+    int mmapFileSize = 1024; // MB
+    int useCachedMmap = 0;
+
+    // op encoder number for once commit
+    int encorderNumForCommit = 10;
+    int initThreadNumber = 0;
+
+    // whether to use Arm sme2 cores when threads>1
+    bool useArmSme2Cores = true;
+#ifdef MNN_DEFAULT_USE_KLEIDIAI
+    bool enableKleidiAI = true;
+#else
+    bool enableKleidiAI = false;
+#endif
+    // Use CPU Ids
+    std::vector<int> cpuIds;
+
+    // Division ration between SME and NEON when runtime threads>=4
+    // Default: 41, which means that in LLM inference,
+    // during the Prefill stage the workload
+    // per single SME core is six times that of NEON,
+    //while during the Decode stage it is the same (1×).
+    int divisionRatio = 41;
+
+    int smeCores = 2; // Number of SME cores of the backend, default is 2, if supports sme
+};
 /** abstract backend */
 class Backend : public NonCopyable {
 
@@ -48,11 +108,6 @@ public:
             INDIRECT = 1
         };
         Mode mode = DIRECT;
-        enum Allocator {
-            DEFER = 0,
-            EAGER = 1
-        };
-        Allocator allocator = DEFER;
     };
 
     /** backend buffer storage type */
@@ -77,7 +132,9 @@ public:
          - do NOTHING when `onReleaseBuffer` is called.
          - releases memory when `onClearBuffer` is called or when the backend is deleted.
          */
-        DYNAMIC_SEPERATE
+        DYNAMIC_SEPERATE,
+
+        DYNAMIC_IN_EXECUTION
     };
 
 public:
@@ -129,7 +186,7 @@ public:
     virtual const Runtime* getRuntime() {
         return nullptr;
     }
-    
+
     /**
      * @brief allocate buffer of tensor for given storage type.
      * @param tensor        buffer provider.
@@ -159,7 +216,7 @@ public:
      * @return MemObj for release, if failed, return nullptr.
      */
     virtual MemObj* onAcquire(const Tensor* tensor, StorageType storageType) = 0;
-    
+
     virtual bool onSelectDynamicAllocator(int index, int maxIndex) {
         return false;
     }
@@ -210,8 +267,19 @@ public:
         return 0;
     }
 
+public:
+    void* getMetaPtr() {
+        return mMetaPtr;
+    }
+    void setMetaPtr(void* ptr) {
+        mMetaPtr = ptr;
+    }
+    // path of the NPU model directory
+    std::string pNPUModelDirPath = ".";
+
 private:
     const MNNForwardType mType;
+    void* mMetaPtr;
 };
 
 /** Each backend belong to a runtime*/
@@ -232,21 +300,11 @@ public:
         Allocator_Defer = 0,
         Allocator_Eager = 1,
     };
-    
-    void setWinogradMemoryLevel(int level) {
-        mWinogradMemoryLevel = level;
+    void setRuntimeHint(const RuntimeHint& hint) {
+        mHint = hint;
     }
-    
-    int getWinogradMemoryLevel() const {
-        return mWinogradMemoryLevel;
-    }
-
-    void setAllocatorType(int type) {
-        mAllocatorType = static_cast<AllocatorType>(type);
-    }
-
-    AllocatorType getAllocatorType() const {
-        return mAllocatorType;
+    const RuntimeHint& hint() const {
+        return mHint;
     }
 
     virtual CompilerType onGetCompilerType() const {
@@ -258,7 +316,14 @@ public:
      @brief create backend
      @return created backend
      */
-    virtual Backend* onCreate(const BackendConfig* config = nullptr) const = 0;
+    virtual Backend* onCreate(const BackendConfig* config = nullptr, Backend* origin = nullptr) const = 0;
+
+    /**
+     @brief reset runtime
+     */
+    virtual void onReset(int numberThread, const BackendConfig* config, bool full) {
+        // Do nothing
+    }
 
     /**
      @brief clear unuseful resource
@@ -271,6 +336,10 @@ public:
      */
     virtual float onGetMemoryInMB() {
         return 0.0f;
+    }
+    // For NPU backend don't support load from buffer , use onSetCachePath
+    virtual bool onSetCachePath(const char* path, int mode) {
+        return false;
     }
 
     // If buffer is not nullptr, try copy cache, else delete cache
@@ -317,10 +386,22 @@ public:
     MNN_PUBLIC bool hasAsyncWork() const;
     void setAsyncWork(std::future<int>&& future);
     MNN_PUBLIC void waitAsyncWork();
+
+    virtual void onConcurrencyBegin() const {
+        // Do nothing
+    }
+    virtual void onConcurrencyEnd() const {
+        // Do nothing
+    }
+
+    mutable int pCurrentStatus = 0; // NO_ERROR
+    mutable int pExecutionStatus = 0; // NO_ERROR
+
+    // TODO: Move to Backend
+    void* pMeta = nullptr;
 private:
     std::future<int> mFuture;
-    AllocatorType mAllocatorType = Allocator_Eager;
-    int mWinogradMemoryLevel = 3;
+    RuntimeHint mHint;
 };
 
 /** abstract Runtime register */
@@ -340,6 +421,13 @@ public:
     virtual bool onValid(Backend::Info& info) const {
         info.mode = Backend::Info::DIRECT;
         return true;
+    }
+    virtual bool onGetDeviceInfo(const std::string& deviceKey, std::string& deviceValue) const {
+        return false;
+    }
+
+    virtual bool onSetQuantInfo(const Op* op, const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) const {
+        return false;
     }
 protected:
     /**

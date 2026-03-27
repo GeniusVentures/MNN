@@ -14,11 +14,15 @@ class ConcatSizeComputer : public SizeComputer {
     virtual bool onComputeSize(const MNN::Op* op, const std::vector<Tensor*>& inputs,
                                const std::vector<Tensor*>& outputs) const override {
         MNN_ASSERT(1 == outputs.size());
-        MNN_ASSERT(inputs.size() >= 2);
+        // MNN_ASSERT(inputs.size() >= 2);
         auto& ob      = outputs[0]->buffer();
         int basicAxis = 0;
         if (op->type() == OpType_Concat) {
-            basicAxis = op->main_as_Axis()->axis();
+            if (op->main_as_Axis() != nullptr) {
+                basicAxis = op->main_as_Axis()->axis();
+            } else {
+                MNN_ERROR("Concat op axis is nullptr, set to 0 as default\n");
+            }
         } else if (op->type() == OpType_QuantizedConcat) {
             basicAxis = op->main_as_QuantizedConcat()->axis();
         }

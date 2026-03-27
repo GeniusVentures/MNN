@@ -77,7 +77,7 @@ Tensor::Tensor(const Tensor* tensor, DimensionType type, bool allocMemory) {
 
     // format mapping
     auto originType = tensor->getDimensionType();
-    if (originType != type && buffer.dimensions >= 4) {
+    if (originType != type && buffer.dimensions >= 3) {
         std::vector<int> axisMap;
         // NCHW -> NHWC
         if (originType == CAFFE) {
@@ -172,6 +172,13 @@ bool Tensor::copyFromHostTensor(const Tensor* hostTensor) {
     if (nullptr == bn) {
         return false;
     }
+    auto hostbn = hostTensor->mDescribe->getBackend();
+    std::shared_ptr<Tensor> tmpTensor;
+    if (nullptr != hostbn && hostbn->type() != bn->type() && hostbn->type() != MNN_FORWARD_CPU) {
+        tmpTensor.reset(new Tensor(hostTensor, hostTensor->getDimensionType()));
+        hostTensor->copyToHostTensor(tmpTensor.get());
+        hostTensor = tmpTensor.get();
+    }
     bn->onCopyBuffer(hostTensor, this);
     return true;
 }
@@ -240,7 +247,7 @@ void Tensor::setType(int type) {
             mBuffer.type = halide_type_of<int16_t>();
             break;
         default:
-            MNN_PRINT("Unsupported data type!");
+            MNN_PRINT("Unsupported data type! %d\n", type);
             MNN_ASSERT(false);
             break;
     }
@@ -343,7 +350,11 @@ void Tensor::print() const {
 
     // convert to host if needed
     auto printee = this;
-    bool device  = this->buffer().host == NULL && this->buffer().device != 0;
+    auto bnType = MNN_FORWARD_CPU;
+    if (nullptr != mDescribe->getBackend()) {
+        bnType = mDescribe->getBackend()->type();
+    }
+    bool device  = bnType != MNN_FORWARD_CPU;
     if (device) {
         printee = this->createHostTensorFromDevice(this, true);
     }
@@ -417,6 +428,14 @@ void* Tensor::map(MapType mtype, DimensionType dtype) {
     auto bn = nativeDescribe->getBackend();
     if (nullptr == bn) {
         return mBuffer.host;
+    }
+
+    if (mtype == Tensor::MAP_TENSOR_READ) {
+        int syncResult = bn->onSync(mtype, false, this);
+        if (NO_EXECUTION == syncResult) {
+            MNN_PRINT("Warning, Backend has stop execute, return nullptr for tensor map addr\n");
+            return nullptr;
+        }
     }
 
     auto mapPtr = bn->onMapTensor(mtype, dtype, this);

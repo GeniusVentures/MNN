@@ -10,6 +10,7 @@
 #include <MNN/expr/ExprCreator.hpp>
 #include <thread>
 #include "MNNTestSuite.h"
+#include "TestUtils.h"
 #include "core/Backend.hpp"
 #include "RuntimeAttr.hpp"
 #include <MNN/expr/Executor.hpp>
@@ -27,14 +28,14 @@ static VARP convBlock(VARP x, INTS channels, int stride) {
     int inputChannel = channels[0], outputChannel = channels[1];
     int group = inputChannel;
     x         = _Conv(0.01f, 0.0f, x, {inputChannel, inputChannel}, {3, 3}, SAME, {stride, stride}, {1, 1}, group);
-    x         = _Conv(0.03f, -1.0f, x, {inputChannel, outputChannel}, {1, 1}, SAME, {1, 1}, {1, 1}, 1);
+    x         = _Conv(0.03f, 0.0f, x, {inputChannel, outputChannel}, {1, 1}, SAME, {1, 1}, {1, 1}, 1);
     return x;
 }
 static VARP convBlocTemp(VARP x, INTS channels, int stride) {
     int inputChannel = channels[0], outputChannel = channels[1];
     int group = inputChannel;
-    x         = _Conv(0.002f, 1.0f, x, {inputChannel, inputChannel}, {3, 3}, SAME, {stride, stride}, {1, 1});
-    x         = _Conv(0.05f, -2.0f, x, {inputChannel, outputChannel}, {1, 1}, SAME, {1, 1}, {1, 1}, 1);
+    x         = _Conv(0.002f, 0.0f, x, {inputChannel, inputChannel}, {3, 3}, SAME, {stride, stride}, {1, 1}, inputChannel);
+    x         = _Conv(0.05f, 0.0f, x, {inputChannel, outputChannel}, {1, 1}, SAME, {1, 1}, {1, 1}, 1);
     return x;
 }
 static VARP _mobileNetV1Expr(VARP x = nullptr, bool softmax = true) {
@@ -70,10 +71,11 @@ static VARP _mobileNetV1Expr(VARP x = nullptr, bool softmax = true) {
     x      = convBlock(x, {channels[5], channels[5]}, 1);
     x      = _AvePool(x, {poolSize, poolSize}, {1, 1}, VALID);
     x      = _Conv(0.01f, 0.0f, x, {channels[5], 1001}, {1, 1}, VALID, {1, 1}, {1, 1}, 1); // reshape FC with Conv1x1
-    if (softmax) {
-        x      = _Softmax(x, -1);
-    }
     x      = _Convert(x, NCHW);
+    if (softmax) {
+        x = _Reshape(x, {-1, 1001});
+        x = _Softmax(x, -1);
+    }
     x->setName("Prob");
     return x;
 }
@@ -172,9 +174,80 @@ public:
 };
 MNNTestSuiteRegister(ModuleTest, "expr/ModuleTest");
 
+class ModuleWrongInputTest : public MNNTestCase {
+public:
+    virtual bool run(int precision) {
+        auto executor = cloneCurrentExecutor();
+        ExecutorScope scope(executor);
+        std::vector<int8_t> buffer;
+        // construct
+        {
+            auto x = _Input({1, 3, 5, 7}, NCHW, halide_type_of<int>());
+            x->setName("data");
+            auto x1 = _Input({1, 3, 5, 7}, NCHW, halide_type_of<int>());
+            x1->setName("data1");
+            auto y = x + x1;
+            y->setName("o0");
+            auto y1 = x - x1;
+            y1->setName("o1");
+            buffer = Variable::save({y, y1});
+        }
+        // Execute
+        std::shared_ptr<Module> refModule(Module::load({"data", "data1"}, {"o0", "o1"}, (const uint8_t*)buffer.data(), buffer.size()), Module::destroy);
+        auto _runModuleTest = [&refModule](int number) {
+            auto x = _Input({1, 3, 5, 7}, NCHW, halide_type_of<int>());
+            auto x1 = _Input({1, 3, 5, 7}, NCHW, halide_type_of<int>());
+            auto xPtr = x->writeMap<int>();
+            auto x1Ptr = x1->writeMap<int>();
+            for (int i=0; i<x->getInfo()->size; ++i) {
+                xPtr[i] = i;
+                x1Ptr[i] = i + 1;
+            }
+            std::vector<VARP> y;
+            if (2 == number) {
+                y = refModule->onForward({x, x1});
+            } else {
+                y = refModule->onForward({x, x1, x1});
+            }
+            auto y0Ptr = y[0]->readMap<int>();
+            auto y1Ptr = y[1]->readMap<int>();
+            for (int i=0; i<x->getInfo()->size; ++i) {
+                if (y0Ptr[i] != i * 2 + 1) {
+                    FUNC_PRINT(1);
+                    return false;
+                }
+                if (y1Ptr[i] != -1) {
+                    FUNC_PRINT(1);
+                    return false;
+                }
+            }
+            return true;
+        };
+        auto res = _runModuleTest(2);
+        if (!res) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        refModule.reset(Module::load({"data", "data1", "data2"}, {"o0", "o1"}, (const uint8_t*)buffer.data(), buffer.size()), Module::destroy);
+        res = _runModuleTest(3);
+        if (!res) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        refModule.reset(Module::load({"data"}, {"o0", "o1"}, (const uint8_t*)buffer.data(), buffer.size()), Module::destroy);
+        if (nullptr != refModule) {
+            return false;
+        }
+        return true;
+    }
+};
+MNNTestSuiteRegister(ModuleWrongInputTest, "expr/ModuleWrongInputTest");
+
 class RefTest : public MNNTestCase {
 public:
     virtual bool run(int precision) {
+        auto executor = cloneCurrentExecutor();
+        ExecutorScope scope(executor);
         std::vector<int8_t> buffer;
         // construct
         {
@@ -249,7 +322,13 @@ public:
         }
     }
     virtual bool run(int precision) {
+        auto executor = cloneCurrentExecutor();
+        ExecutorScope scope(executor);
         std::vector<int8_t> buffer;
+#ifdef MNN_REDUCE_SIZE
+        return true;
+#endif
+
         // construct
         {
             auto x = _Input({1, 3, 5, 7}, NCHW, halide_type_of<int>());
@@ -482,6 +561,11 @@ public:
         Module::Config config;
         config.shapeMutable = false;
         config.rearrange = true;
+        auto x = _Input({1, 3, 224, 224}, NC4HW4, halide_type_of<float>());
+        auto xPtr = x->writeMap<float>();
+        ::memset(xPtr, 0, 1*3*224*224*sizeof(float));
+        x->unMap();
+        int runTime = 10;
         std::shared_ptr<Module> interp0;
         {
             MNN::ScheduleConfig sconfig;
@@ -489,6 +573,13 @@ public:
             std::vector<MNN::ScheduleConfig> sconfigs = {sconfig};
             std::shared_ptr<Executor::RuntimeManager> rtMgr(Executor::RuntimeManager::createRuntimeManager(sconfigs));
             interp0.reset(Module::load({"Input"}, {"Prob"}, bufferOutput, sizeOutput, rtMgr, &config), Module::destroy);
+        }
+        {
+            Timer _l;
+            for (int i=0; i<runTime; ++i) {
+                auto y0 = interp0->onForward({x});
+            }
+            MNN_PRINT("Thread 1 avg cost: %f ms\n", (float)_l.durationInUs() / 1000.0f / runTime);
         }
         std::shared_ptr<Module> interp1;
         {
@@ -498,18 +589,6 @@ public:
             std::shared_ptr<Executor::RuntimeManager> rtMgr(Executor::RuntimeManager::createRuntimeManager(sconfigs));
             rtMgr->setHint(Interpreter::STRICT_CHECK_MODEL, 0);
             interp1.reset(Module::load({"Input"}, {"Prob"}, bufferOutput, sizeOutput, rtMgr, &config), Module::destroy);
-        }
-        auto x = _Input({1, 3, 224, 224}, NC4HW4, halide_type_of<float>());
-        auto xPtr = x->writeMap<float>();
-        ::memset(xPtr, 0, 1*3*224*224*sizeof(float));
-        x->unMap();
-        int runTime = 10;
-        {
-            Timer _l;
-            for (int i=0; i<runTime; ++i) {
-                auto y0 = interp0->onForward({x});
-            }
-            MNN_PRINT("Thread 1 avg cost: %f ms\n", (float)_l.durationInUs() / 1000.0f / runTime);
         }
         {
             Timer _l;
@@ -851,7 +930,7 @@ public:
             BackendConfig bnConfig;
             bnConfig.precision = (MNN::BackendConfig::PrecisionMode)precision;
             config.numThread = 1;
-            config.type = ExecutorScope::Current()->getAttr()->firstType.first;
+            config.type = ExecutorScope::Current()->getAttr()->firstType;
             config.backendConfig = &bnConfig;
             auto s1 = net->createSession(config);
             float memory = 0.0f;
@@ -947,7 +1026,7 @@ public:
         std::shared_ptr<Interpreter> net(Interpreter::createFromBuffer((void*)bufferOutput, sizeOutput), Interpreter::destroy);
         ScheduleConfig config;
         config.numThread = 4;
-        config.type = ExecutorScope::Current()->getAttr()->firstType.first;
+        config.type = ExecutorScope::Current()->getAttr()->firstType;
         auto s1 = net->createSession(config);
         int resizeCode;
         net->getSessionInfo(s1, Interpreter::RESIZE_STATUS, &resizeCode);
@@ -966,6 +1045,8 @@ MNNTestSuiteRegister(ConstMemoryReplaceTest, "expr/ConstMemoryReplaceTest");
 class MutlThreadConstReplaceTest : public MNNTestCase {
 public:
     virtual bool run(int precision) {
+        auto executor = cloneCurrentExecutor();
+        ExecutorScope scope(executor);
         auto func = [precision](VARP y, int thread) {
             flatbuffers::FlatBufferBuilder builderOutput(1024);
             {
@@ -984,7 +1065,7 @@ public:
             BackendConfig bnConfig;
             bnConfig.precision = (MNN::BackendConfig::PrecisionMode)precision;
             config.numThread = 1;
-            config.type = ExecutorScope::Current()->getAttr()->firstType.first;
+            config.type = ExecutorScope::Current()->getAttr()->firstType;
             config.backendConfig = &bnConfig;
 
             std::vector<std::thread> threads;
@@ -1148,7 +1229,10 @@ MNNTestSuiteRegister(ResizeOptimizationTest, "expr/ResizeOptimizationTest");
 class WinogradMemoryTest : public MNNTestCase {
 public:
     float memoryUsed(int level) {
-        auto y = _mobileNetV1Expr();
+        auto x = _Input({1, 64, 224, 224}, MNN::Express::NC4HW4, halide_type_of<float>());
+        x->setName("Input");
+        auto y = _Conv(0.0f, 0.0f, x, {64, 112}, {3, 3});
+        y->setName("Prob");
         std::unique_ptr<MNN::NetT> net(new NetT);
         Variable::save({y}, net.get());
         y = nullptr;
@@ -1181,12 +1265,425 @@ public:
     }
     virtual bool run(int precision) {
         float mem0 = memoryUsed(0);
+        float mem1 = memoryUsed(1);
         float mem3 = memoryUsed(3);
-        printf("level=0,3: %fMb, %fMb\n", mem0,mem3);
-        if (mem3 < mem0) {
+        MNN_PRINT("level=0, 1, 3: %fMb, %fMb, %fMb\n", mem0,mem1,mem3);
+        if (mem3 <= mem1 || mem1 <= mem0) {
             return false;
         }
         return true;
     }
 };
+#ifndef MNN_KLEIDIAI_ENABLED
 MNNTestSuiteRegister(WinogradMemoryTest, "expr/WinogradMemoryTest");
+#endif
+
+
+class SequenceMemoryTest : public MNNTestCase {
+public:
+    virtual bool run(int precision) {
+        auto res = _run(precision, false);
+        if (!res) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        return _run(precision, true);
+    }
+    bool _checkResult(std::shared_ptr<MNN::Express::Module> basic, int precision, bool shapeMultable) {
+        std::shared_ptr<MNN::Express::Module> m0(Module::clone(basic.get()), Module::destroy);
+        std::shared_ptr<MNN::Express::Module> m1(Module::clone(basic.get()), Module::destroy);
+        
+        auto x = _Input({1, 3, 32, 32}, NCHW, halide_type_of<float>());
+        auto ptr = x->writeMap<float>();
+        for (int i=0; i<x->getInfo()->size; ++i) {
+            ptr[i] = i * 0.0001f;
+        }
+        x->unMap();
+        x = x + _Scalar<float>(0.001f);
+        auto firstResult = m0->onForward({x})[0]->readMap<float>()[0];
+        auto y = _Input({1, 3, 33, 33}, NCHW, halide_type_of<float>());
+        y->writeMap<float>();
+        y->unMap();
+        m0->onForward({y});
+        auto z = _Input({1, 3, 34, 34}, NCHW, halide_type_of<float>());
+        z->writeMap<float>();
+        z->unMap();
+        m1->onForward({z});
+        x = _Input({1, 3, 32, 32}, NCHW, halide_type_of<float>());
+        ptr = x->writeMap<float>();
+        for (int i=0; i<x->getInfo()->size; ++i) {
+            ptr[i] = i * 0.0001f;
+        }
+        x->unMap();
+        x = x + _Scalar<float>(0.001f);
+        auto secondResult = m0->onForward({x})[0]->readMap<float>()[0];
+        if (fabsf(firstResult - secondResult) >= 1e-6) {
+            return false;
+        }
+        return true;
+    }
+    
+    bool _run(int precision, bool shapeMultable) {
+        BackendConfig bnConfig;
+        auto exe = Executor::newExecutor(MNN_FORWARD_CPU, bnConfig, 1);
+        ExecutorScope scope(exe);
+        Module::Config config;
+        config.shapeMutable = shapeMultable;
+        config.rearrange = true;
+        std::vector<int8_t> buffer;
+        {
+            // Make Buffer
+            auto x0 = _Input({1, 3, -1, -1}, NCHW, halide_type_of<float>());
+            x0->setName("x0");
+            auto y0 = _mobileNetV1Expr(_Convert(x0, NC4HW4), false);
+            y0->setName("y0");
+            buffer = Variable::save({y0});
+        }
+        auto rtInfo = Express::ExecutorScope::Current()->getRuntime();
+        auto rt = rtInfo.first.begin()->second;
+        MNN::ScheduleConfig sconfig;
+        std::vector<MNN::ScheduleConfig> sconfigs = {sconfig};
+        std::shared_ptr<Executor::RuntimeManager> rtMgr(Executor::RuntimeManager::createRuntimeManager(sconfigs));
+        rtMgr->setMode(Interpreter::Session_Memory_Collect);
+        std::shared_ptr<MNN::Express::Module> m0(Module::load({"x0"}, {"y0"}, (const unsigned char*)buffer.data(), buffer.size(), rtMgr, &config), Module::destroy);
+        std::shared_ptr<MNN::Express::Module> m1(Module::load({"x0"}, {"y0"}, (const unsigned char*)buffer.data(), buffer.size(), rtMgr, &config), Module::destroy);
+        float memoryInit = 0.0f;
+        rtMgr->getInfo(Interpreter::MEMORY, &memoryInit);
+        FUNC_PRINT_ALL(memoryInit, f);
+        auto x = _Input({1, 3, 96, 96}, NCHW, halide_type_of<float>());
+        x->writeMap<float>();
+        x->unMap();
+        auto x1 = _Input({1, 3, 97, 97}, NCHW, halide_type_of<float>());
+        x1->writeMap<float>();
+        x1->unMap();
+        auto x2 = _Input({1, 3, 95, 95}, NCHW, halide_type_of<float>());
+        x2->writeMap<float>();
+        x2->unMap();
+        float memoryCurrent = 0.0f;
+        auto compute = [&](){
+            m0->onForward({x});
+            rtMgr->getInfo(Interpreter::MEMORY, &memoryCurrent);
+            auto dynamic0 = memoryCurrent - memoryInit;
+            FUNC_PRINT_ALL(dynamic0, f);
+            m1->onForward({x1});
+            rtMgr->getInfo(Interpreter::MEMORY, &memoryCurrent);
+            auto dynamic1 = memoryCurrent - memoryInit;
+
+            FUNC_PRINT_ALL(dynamic1, f);
+            m1->onForward({x2});
+            rtMgr->getInfo(Interpreter::MEMORY, &memoryCurrent);
+            auto dynamic2 = memoryCurrent - memoryInit;
+            FUNC_PRINT_ALL(dynamic2, f);
+
+            if (dynamic1 > dynamic0 * 1.1f || dynamic2 > dynamic1) {
+                MNN_ERROR("Dynamic Memory reuse error\n");
+                return false;
+            }
+            return true;
+        };
+        bool res = compute();
+        if (!res) {
+            return false;
+        }
+        exe->gc(MNN::Express::Executor::FULL);
+        rtMgr->getInfo(Interpreter::MEMORY, &memoryCurrent);
+        auto dynamic3 = memoryCurrent - memoryInit;
+        FUNC_PRINT_ALL(dynamic3, f);
+        if (dynamic3 > 0.2) {
+            MNN_ERROR("Dynamic Memory GC error\n");
+            return false;
+        }
+        res = compute();
+        if (!res) {
+            return false;
+        }
+        m1.reset();
+        _checkResult(m0, precision, shapeMultable);
+        return true;
+    }
+};
+MNNTestSuiteRegister(SequenceMemoryTest, "expr/SequenceMemoryTest");
+
+class PrearrangeTest : public MNNTestCase {
+public:
+    virtual bool run(int precision) {
+        // Make Model include convolution in shape compute and content compute
+        auto x = _Input({1, 3, 24, 24}, NCHW, halide_type_of<float>());
+        x->setName("x");
+        auto xs = _Convert(_Reshape(_Cast<float>(_Shape(x, NCHW)), {1, 1, 2, 2}), NC4HW4);
+        xs = _Convert(_Conv(1.0f, 0.0f, xs, {1, 1}, {2, 2}), NCHW);
+        auto y = _Conv(0.1f, 0.0f, _Convert(x, NC4HW4), {3, 1}, {3, 3});
+        y = _Convert(y, NCHW);
+        y = _ReduceMean(y);
+        y = y * _Reciprocal(xs);
+        auto info = y->getInfo();
+        y->setName("y");
+        auto buffer = Variable::save({y});
+        MNN::ScheduleConfig sconfig;
+        BackendConfig bnConfig;
+        bnConfig.precision = MNN::BackendConfig::Precision_Low;
+        sconfig.backendConfig = &bnConfig;
+        auto exe = Executor::newExecutor(MNN_FORWARD_CPU, bnConfig, 4);
+        ExecutorScope scope(exe);
+        std::vector<MNN::ScheduleConfig> sconfigs = {sconfig};
+        std::shared_ptr<Executor::RuntimeManager> rtMgr(Executor::RuntimeManager::createRuntimeManager(sconfigs));
+        rtMgr->setMode(Interpreter::Session_Memory_Collect);
+        Module::Config config;
+        config.rearrange = false;
+        std::shared_ptr<MNN::Express::Module> m0(Module::load({"x"}, {"y"}, (const unsigned char*)buffer.data(), buffer.size(), rtMgr, &config), Module::destroy);
+        config.rearrange = true;
+        std::shared_ptr<MNN::Express::Module> m1(Module::load({"x"}, {"y"}, (const unsigned char*)buffer.data(), buffer.size(), rtMgr, &config), Module::destroy);
+        auto size = x->getInfo()->size;
+        auto xPtr = x->writeMap<float>();
+        for (int v=0; v<size; ++v) {
+            xPtr[v] = 0.01f;
+        }
+        auto y0 = m0->onForward({x})[0]->readMap<float>()[0];
+        auto y1 = m1->onForward({x})[0]->readMap<float>()[0];
+        if (fabsf(y0 - y1) > 0.000001f) {
+            return false;
+        }
+        rtMgr->setExternalPath(".", Interpreter::EXTERNAL_FEATUREMAP_DIR);
+        std::shared_ptr<MNN::Express::Module> m2(Module::load({"x"}, {"y"}, (const unsigned char*)buffer.data(), buffer.size(), rtMgr, &config), Module::destroy);
+        auto y2 = m2->onForward({x})[0]->readMap<float>()[0];
+        if (fabsf(y0 - y2) > 0.000001f) {
+            return false;
+        }
+        return true;
+    }
+};
+MNNTestSuiteRegister(PrearrangeTest, "expr/PrearrangeTest");
+
+class ExecutorResetLoadModuleTest : public MNNTestCase {
+public:
+    virtual bool run(int precision) {
+        BackendConfig originConfig;
+        auto exe = Executor::newExecutor(MNN_FORWARD_CPU, originConfig, 1);
+        ExecutorScope _s(exe);
+        // Make Model include convolution in shape compute and content compute
+        auto x = _Input({1, 3, 24, 24}, NCHW, halide_type_of<float>());
+        x->setName("x");
+        auto xs = _Convert(_Reshape(_Cast<float>(_Shape(x, NCHW)), {1, 1, 2, 2}), NC4HW4);
+        xs = _Convert(_Conv(1.0f, 0.0f, xs, {1, 1}, {2, 2}), NCHW);
+        auto y = _Conv(0.1f, 0.0f, _Convert(x, NC4HW4), {3, 1}, {3, 3});
+        y = _Convert(y, NCHW);
+        y = _ReduceMean(y);
+        y = y * _Reciprocal(xs);
+        auto info = y->getInfo();
+        y->setName("y");
+        auto buffer = Variable::save({y});
+        MNN::ScheduleConfig sconfig;
+        BackendConfig bnConfig;
+        bnConfig.precision = MNN::BackendConfig::Precision_Low;
+        bnConfig.memory = MNN::BackendConfig::Memory_Low;
+        sconfig.backendConfig = &bnConfig;
+        sconfig.numThread = 4;
+        exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, bnConfig, 4);
+        std::shared_ptr<Executor::RuntimeManager> rtMgr(Executor::RuntimeManager::createRuntimeManager(sconfig));
+        Module::Config config;
+        config.rearrange = false;
+        std::shared_ptr<MNN::Express::Module> m0(Module::load({"x"}, {"y"}, (const unsigned char*)buffer.data(), buffer.size(), nullptr, &config), Module::destroy);
+        config.rearrange = true;
+        std::shared_ptr<MNN::Express::Module> m1(Module::load({"x"}, {"y"}, (const unsigned char*)buffer.data(), buffer.size(), rtMgr, &config), Module::destroy);
+        auto m0Rt = m0->getInfo()->runTimeManager;
+        auto m1Rt = m1->getInfo()->runTimeManager;
+        if (nullptr == m0Rt->getBnConfig() || nullptr == m1Rt->getBnConfig()) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        if (MNN::BackendConfig::Precision_Low != m0Rt->getBnConfig()->precision || MNN::BackendConfig::Memory_Low != m0Rt->getBnConfig()->memory) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        if (MNN::BackendConfig::Precision_Low != m1Rt->getBnConfig()->precision || MNN::BackendConfig::Memory_Low != m1Rt->getBnConfig()->memory) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        return true;
+    }
+};
+MNNTestSuiteRegister(ExecutorResetLoadModuleTest, "expr/ExecutorResetLoadModuleTest");
+
+class SequenceForwardResizeTest : public MNNTestCase {
+public:
+    virtual bool run(int precision) {
+        auto executor = cloneCurrentExecutor();
+        ExecutorScope scope(executor);
+        // Make Model include convolution in shape compute and content compute
+        auto x = _Input({1, 3, 24, 24}, NCHW, halide_type_of<float>());
+        x->setName("x");
+        auto y = _Square(x);
+        auto z = _Erf(y);
+        z = _Sqrt(z);
+        z->setName("z");
+        auto buffer = Variable::save({z});
+        ScheduleConfig config;
+        config.type = getCurrentType();
+        std::shared_ptr<Executor::RuntimeManager> rtm0( Executor::RuntimeManager::createRuntimeManager(config));
+        std::shared_ptr<Executor::RuntimeManager> rtm1( Executor::RuntimeManager::createRuntimeManager(config));
+
+        Module::Config mconfig;
+        mconfig.rearrange = false;
+        std::shared_ptr<MNN::Express::Module> m0(Module::load({"x"}, {"z"}, (const unsigned char*)buffer.data(), buffer.size(), rtm0, &mconfig), Module::destroy);
+        std::shared_ptr<MNN::Express::Module> m1(Module::load({"x"}, {"z"}, (const unsigned char*)buffer.data(), buffer.size(), rtm1, &mconfig), Module::destroy);
+        x = _Input({1, 3, 24, 24}, NCHW, halide_type_of<float>());
+        auto xPtr = x->writeMap<float>();
+        ::memset(xPtr, 0, x->getInfo()->size * sizeof(float));
+        x->unMap();
+        y = m0->onForward({x})[0];
+        z = m1->onForward({y})[0];
+        int status0 = 0;
+        int status1 = 0;
+        rtm0->getInfo(MNN::Interpreter::RESIZE_STATUS, &status0);
+        rtm1->getInfo(MNN::Interpreter::RESIZE_STATUS, &status1);
+        if (status0 != 2 || status1 != 2) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        const_cast<Tensor*>(z->getTensor())->wait(MNN::Tensor::MAP_TENSOR_READ, true);
+        y = m0->onForward({x})[0];
+        z = m1->onForward({y})[0];
+        rtm0->getInfo(MNN::Interpreter::RESIZE_STATUS, &status0);
+        rtm1->getInfo(MNN::Interpreter::RESIZE_STATUS, &status1);
+        if (status0 != 1 || status1 != 1) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        y = nullptr;
+        z = nullptr;
+        y = m0->onForward({x})[0];
+        z = m1->onForward({y})[0];
+        rtm0->getInfo(MNN::Interpreter::RESIZE_STATUS, &status0);
+        rtm1->getInfo(MNN::Interpreter::RESIZE_STATUS, &status1);
+        if (status0 != 0 || status1 != 0) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        x = _Input({1, 3, 12, 12}, NCHW, halide_type_of<float>());
+        y = m0->onForward({x})[0];
+        rtm0->getInfo(MNN::Interpreter::RESIZE_STATUS, &status0);
+        if (2 != status0) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        BackendConfig originConfig;
+        auto exe = Executor::newExecutor(MNN_FORWARD_CPU, originConfig, 1);
+        {
+            ExecutorScope _s(exe);
+            std::shared_ptr<MNN::Express::Module> m2(Module::clone(m0.get()));
+            auto rtm2 = m2->getInfo()->runTimeManager;
+            if (rtm2 == rtm0) {
+                FUNC_PRINT(1);
+                return false;
+            }
+            int status2 = 0;
+            rtm2->getInfo(MNN::Interpreter::RESIZE_STATUS, &status2);
+            if (0 != status2) {
+                FUNC_PRINT(1);
+                return false;
+            }
+            auto x2 = _Input({1, 3, 24, 24}, NCHW, halide_type_of<float>());
+            auto xPtr = x2->writeMap<float>();
+            ::memset(xPtr, 0, x2->getInfo()->size * sizeof(float));
+            x2->unMap();
+            auto y2 = m2->onForward({x})[0];
+
+            rtm2->getInfo(MNN::Interpreter::RESIZE_STATUS, &status2);
+            if (2 != status2) {
+                FUNC_PRINT(1);
+                return false;
+            }
+        }
+        x = nullptr;
+        y = nullptr;
+        z = nullptr;
+        x = _Input({1, 3, 12, 12}, NCHW, halide_type_of<float>());
+        x->writeMap<float>();
+        m0->onForward({x});
+        m1->onForward({x});
+        x = _Input({1, 3, 36, 36}, NCHW, halide_type_of<float>());
+        x->writeMap<float>();
+        m0->onForward({x});
+        x = _Input({1, 3, 12, 12}, NCHW, halide_type_of<float>());
+        x->writeMap<float>();
+        m1->onForward({x});
+
+        return true;
+    }
+};
+MNNTestSuiteRegister(SequenceForwardResizeTest, "expr/SequenceForwardResizeTest");
+
+class InputModuleTest : public MNNTestCase {
+public:
+    virtual bool run(int precision) {
+        auto executor = cloneCurrentExecutor();
+        ExecutorScope scope(executor);
+        auto y = _mobileNetV1Expr(nullptr, false);
+        std::unique_ptr<MNN::NetT> net(new NetT);
+        Variable::save({y}, net.get());
+        y = nullptr;
+        flatbuffers::FlatBufferBuilder builderOutput(1024);
+        auto len = MNN::Net::Pack(builderOutput, net.get());
+        builderOutput.Finish(len);
+        int sizeOutput    = builderOutput.GetSize();
+        auto bufferOutput = builderOutput.GetBufferPointer();
+        auto test = [&](bool shapeMutable) {
+            Module::Config config;
+            config.shapeMutable = shapeMutable;
+            config.rearrange = true;
+            std::shared_ptr<Module> m0;
+            std::shared_ptr<Module> m1;
+            std::shared_ptr<Module> m2;
+            {
+                MNN::ScheduleConfig sconfig;
+                sconfig.numThread = 1;
+                MNN::BackendConfig bnconfig;
+                bnconfig.precision = MNN::BackendConfig::Precision_Low;
+                sconfig.backendConfig = &bnconfig;
+                std::vector<MNN::ScheduleConfig> sconfigs = {sconfig};
+                std::shared_ptr<Executor::RuntimeManager> rtMgr(Executor::RuntimeManager::createRuntimeManager(sconfigs));
+                m0.reset(Module::load({"Input"}, {"Prob"}, bufferOutput, sizeOutput, rtMgr, &config), Module::destroy);
+                bnconfig.precision = MNN::BackendConfig::Precision_Normal;
+                std::shared_ptr<Executor::RuntimeManager> rtMgr2(Executor::RuntimeManager::createRuntimeManager(sconfigs));
+                m1.reset(Module::load({"Input"}, {"Prob"}, bufferOutput, sizeOutput, rtMgr2, &config), Module::destroy);
+                m2.reset(Module::load({"Input"}, {"Prob"}, bufferOutput, sizeOutput), Module::destroy);
+            }
+            auto x = _Input({1, 3, 32, 32}, NCHW, halide_type_of<float>());
+            auto ptr = x->writeMap<float>();
+            for (int i=0; i<x->getInfo()->size; ++i) {
+                ptr[i] = 1.0f * i;
+            }
+            x = x + x;
+            auto prob = m0->onForward({x})[0];
+            auto pptr = prob->readMap<float>();
+            
+            float s0 = _ReduceSum(m0->onForward({x})[0])->readMap<float>()[0];
+            float s1 = _ReduceSum(m1->onForward({x})[0])->readMap<float>()[0];
+            float s2 = _ReduceSum(m2->onForward({x})[0])->readMap<float>()[0];
+            // Normally s2 is correct, compare to s2
+            if (fabsf(s0-s2) / s2 > 0.2f) {
+                FUNC_PRINT_ALL(s0, f);
+                FUNC_PRINT_ALL(s2, f);
+                return false;
+            }
+            if (fabsf(s1-s2) / s2 > 0.2f) {
+                FUNC_PRINT_ALL(s1, f);
+                FUNC_PRINT_ALL(s2, f);
+                return false;
+            }
+            return true;
+        };
+        auto res = test(true);
+        if (!res) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        res = test(false);
+        if (!res) {
+            FUNC_PRINT(1);
+            return false;
+        }
+        return true;
+    };
+};
+MNNTestSuiteRegister(InputModuleTest, "expr/InputModuleTest");

@@ -7,6 +7,7 @@
 //
 
 #include "backend/opencl/execution/image/FuseExecution.hpp"
+#include "backend/opencl/execution/image/ConvExecution.hpp"
 #include "core/Macro.h"
 #include "backend/opencl/core/OpenCLRunningUtils.hpp"
 
@@ -24,7 +25,8 @@ FuseExecution::FuseExecution(const std::vector<Tensor *> &inputs, Backend *backe
     auto source = reinterpret_cast<const char*>(extra->info()->data());
     auto name = extra->type()->c_str();
     mKernelName = extra->type()->str();
-    mUnits[0].kernel = runtime->buildKernelFromSource(source, name, buildOptions);
+    mUnits[0].kernel = runtime->buildKernelFromSource(source, name, buildOptions, mOpenCLBackend->getPrecision());
+    OPENCL_CHECK_KERNEL_CTOR(mUnits[0].kernel);
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(mUnits[0].kernel));
 }
 
@@ -62,7 +64,7 @@ ErrorCode FuseExecution::onEncode(const std::vector<Tensor *> &inputs, const std
     ret |= unit.kernel->get().setArg(idx++, mGlobalWorkSize[2]);
     MNN_CHECK_CL_SUCCESS(ret, "setArg FuseExecution");
 
-    mLocalWorkSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), mKernelName, unit.kernel).first;
+    mLocalWorkSize = localWS3DDefault(mGlobalWorkSize, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), mKernelName, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "Fuse").first;
     mOpenCLBackend->recordKernel3d(unit.kernel, mGlobalWorkSize, mLocalWorkSize);
     unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1], mGlobalWorkSize[2]};
     unit.localWorkSize = {mLocalWorkSize[0], mLocalWorkSize[1], mLocalWorkSize[2]};
@@ -73,7 +75,9 @@ class FuseCreator : public OpenCLBackend::Creator {
 public:
     virtual Execution *onCreate(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs,
                                 const MNN::Op *op, Backend *backend) const override {
-        return new FuseExecution(inputs, backend, op);
+        auto param = op->main_as_Extra();
+        if(param->type()->str() == "ExtraConvolution2DPrelu")OPENCL_CREATOR_CHECK(new ConvExecution(inputs, outputs, op, backend, true));
+        OPENCL_CREATOR_CHECK(new FuseExecution(inputs, backend, op));
     }
 };
 REGISTER_OPENCL_OP_CREATOR(FuseCreator, OpType_Extra, IMAGE);

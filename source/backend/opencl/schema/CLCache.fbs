@@ -15,6 +15,7 @@ table Shader {
     program:string;
     kernel:string;
     buildInfo:string;
+    md5:string;
 }
 
 table Autotuning {
@@ -22,11 +23,26 @@ table Autotuning {
     gloablSize:[uint];
     localSize:[uint];
     timeCost:uint;
+    name:string;
+    md5:string;
 }
 
-table Cache {
+table GemmInfo {
+    gemmSize:[uint];
+    paramInfo:[uint];
+    md5:string;
+}
+
+table BackendInfo{
+    deviceName:string;
     programs:[Shader];
     tunings:[Autotuning];
+    gemm:[GemmInfo];
+    driverVersion:string;
+} 
+
+table Cache {
+    backends:[BackendInfo];
     tuned:[OpInfo];
 }
 

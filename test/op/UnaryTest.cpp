@@ -350,7 +350,7 @@ VARP _ErfinvInt8(VARP x, float* scale, float* zero) {
         auto result = p * fx;
         float val = 0;
         if (fabsf(fabsf(fx) - 1) < 1e-8) {
-            val = std::numeric_limits<float>::infinity();
+            val = std::numeric_limits<float>::max();
         } else {
             val = result;
         }
@@ -741,6 +741,20 @@ public:
             data_out[i] = 1 / (1 + expf(-data_in[i]));
         }
         return test<float, float>(_Sigmoid, "SigmoidTest", 0.01,
+                    data_in, data_out, {size}, {size});
+    }
+};
+class SiluTest : public UnaryTestCommon {
+public:
+    virtual ~SiluTest() = default;
+    virtual bool run(int precision) {
+        int size = 32;
+        std::vector<float> data_in(size), data_out(size);
+        for (int i = 0; i < size; ++i) {
+            data_in[i] = 0.25 * i - 4;
+            data_out[i] = data_in[i] / (1 + expf(-data_in[i]));
+        }
+        return test<float, float>(_Silu, "SiluTest", 0.01,
                     data_in, data_out, {size}, {size});
     }
 };
@@ -1209,6 +1223,7 @@ MNNTestSuiteRegister(Expm1Test, "op/unary/expm1");
 MNNTestSuiteRegister(SinhTest, "op/unary/sinh");
 MNNTestSuiteRegister(GeluTest, "op/unary/gelu");
 MNNTestSuiteRegister(GeluStandTest, "op/unary/gelustandard");
+MNNTestSuiteRegister(SiluTest, "op/unary/silu");
 MNNTestSuiteRegister(AbsTestInt8, "op/unary/absInt8");
 MNNTestSuiteRegister(SignTestInt8, "op/unary/signInt8");
 MNNTestSuiteRegister(NegativeTestInt8, "op/unary/negativeInt8");

@@ -10,8 +10,10 @@
 #include <map>
 #include <set>
 #include <stack>
+#include <MNN/expr/ExecutorScope.hpp>
 #include "MNN_generated.h"
 #include "core/TensorUtils.hpp"
+#include "core/OpCommonUtils.hpp"
 #include "core/Session.hpp"
 #include "core/MNNMemoryUtils.h"
 #include "core/Backend.hpp"
@@ -60,19 +62,7 @@ int Utils::convertFormat(Dimensionformat format) {
 }
 
 DataType Utils::convertDataType(halide_type_t type) {
-    if (type.code == halide_type_float) {
-        return DataType_DT_FLOAT;
-    }
-    if (type.code == halide_type_uint && type.bits == 8) {
-        return DataType_DT_UINT8;
-    }
-    if (type.code == halide_type_int && type.bits == 8) {
-        return DataType_DT_INT8;
-    }
-    if (type.code == halide_type_int && type.bits == 32) {
-        return DataType_DT_INT32;
-    }
-    return DataType_DT_INVALID;
+    return OpCommonUtils::convertDataType(type);
 }
 halide_type_t Utils::revertDataType(DataType dataType) {
     CONVERT(DataType_DT_FLOAT, halide_type_of<float>(), dataType);
@@ -188,14 +178,31 @@ void* Executor::ComputeCache::mapOutput(int offset, Tensor* dest) {
         //MNN_ASSERT(nullptr != ptr);
         return ptr;
     }
+    if (0 == tensor->usize()) {
+        return nullptr;
+    }
+    
+    bool hasNoExecution = false;
+    if (nullptr != tensor) {
+        auto backend = TensorUtils::getDescribeOrigin(tensor)->getBackend();
+        if (nullptr != backend) {
+            // Try to sync to check execution status
+            int syncResult = backend->onSync(Tensor::MAP_TENSOR_READ, false, tensor);
+            if (NO_EXECUTION == syncResult) {
+                hasNoExecution = true;
+            }
+        }
+    }
+    if (hasNoExecution) {
+        MNN_PRINT("\nWarning, Backend has stop execute, return nullptr for current varp\n");
+        return nullptr;
+    }
+    
     Utils::allocMemoryForHostTensor(dest);
-    tensor->copyToHostTensor(dest);
-    MNN_ASSERT(nullptr != dest->host<void>());
+    if(nullptr != dest->host<void>()) {
+        tensor->copyToHostTensor(dest);
+    }
     return dest->host<void>();
-}
-
-void Executor::ComputeCache::setShapeDirty() {
-    mShapeDirty = true;
 }
 
 void Executor::ComputeCache::setContentDirty() {
@@ -209,18 +216,52 @@ Executor::ComputeCache::~ComputeCache() {
     FUNC_PRINT(gInstanceCount);
 #endif
 }
+Executor::RuntimeExecuteWrap::RuntimeExecuteWrap(const RuntimeInfo& info) : mRt(info) {
+    for (auto& iter : mRt.first) {
+        iter.second->onConcurrencyBegin();
+    }
+}
+Executor::RuntimeExecuteWrap::~RuntimeExecuteWrap() {
+    for (auto& iter : mRt.first) {
+        iter.second->onConcurrencyEnd();
+    }
+}
 ErrorCode Executor::ComputeCache::compute() {
     std::stack<ComputeCache*> dfsStack;
     std::set<ComputeCache*> visited;
     dfsStack.push(this);
+    auto hasUnvisitInput = [&] (ComputeCache* cache) {
+        for (auto c : cache->mInputs) {
+            if (visited.find(c.get()) == visited.end()) {
+                return true;
+            }
+        }
+        return false;
+    };
+    // Check need compute or not
     while (!dfsStack.empty()) {
-        //printf("stcak = %d\n", dfsStack.size());
         auto cache = dfsStack.top();
+        dfsStack.pop();
         for (auto& c : cache->mInputInside) {
             if (c->mContentDirty) {
                 return CALL_BACK_STOP;
             }
         }
+        if (hasUnvisitInput(cache)) {
+            for (auto c : cache->mInputs) {
+                dfsStack.push(c.get());
+            }
+        }
+    }
+    // Compute
+    visited.clear();
+    dfsStack.push(this);
+    ErrorCode code = NO_ERROR;
+    auto glo = ExecutorScope::Current();
+    RuntimeExecuteWrap wrap(glo->mRuntimeInfo);
+    auto debug = glo->getDebugTools();
+    while (!dfsStack.empty()) {
+        auto cache = dfsStack.top();
         if (cache->mShapeDirty) {
             auto code = cache->resize();
             if (NO_ERROR != code) {
@@ -233,22 +274,21 @@ ErrorCode Executor::ComputeCache::compute() {
             dfsStack.pop();
             continue;
         }
-        auto hasUnvisitInput = [&] () {
-            for (auto c : cache->mInputs) {
-                if (visited.find(c.get()) == visited.end()) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        if (hasUnvisitInput()) {
+        if (hasUnvisitInput(cache)) {
             for (auto c : cache->mInputs) {
                 dfsStack.push(c.get());
             }
         } else {
             visited.insert(cache);
             dfsStack.pop();
-            cache->mSession->run();
+            if (debug->after != nullptr && debug->before != nullptr) {
+                code = cache->mSession->runWithCallBack(debug->before, debug->after);
+            } else {
+                code = cache->mSession->run();
+            }
+            if (NO_ERROR != code) {
+                return code;
+            }
             cache->mContentDirty = false;
         }
     }
@@ -307,3 +347,5 @@ int Executor::ComputeCache::gInstanceCount = 0;
 
 } // namespace Express
 } // namespace MNN
+
+

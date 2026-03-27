@@ -42,8 +42,7 @@ public:
                 return true;
             }
         }
-        outputDes->regions = {TensorUtils::makeFullSlice(input)};
-        outputDes->memoryType = Tensor::InsideDescribe::MEMORY_VIRTUAL;
+        TensorUtils::makeFullRef(output, input);
         return true;
     }
 };
@@ -75,10 +74,7 @@ public:
                            Context& context, CommandBuffer& res) const override {
         auto input      = inputs[0];
         auto output     = outputs[0];
-        auto inputDes   = TensorUtils::getDescribe(input);
-        auto outputDes  = TensorUtils::getDescribe(output);
-        outputDes->regions = {TensorUtils::makeFullSlice(input)};
-        outputDes->memoryType = Tensor::InsideDescribe::MEMORY_VIRTUAL;
+        TensorUtils::makeFullRef(output, input);
         return true;
     }
 };
@@ -94,8 +90,7 @@ class CopyGeometryComputer : public GeometryComputer {
                 outputDes->tensorArrayAttr = inputDes->tensorArrayAttr;
                 return true;
             }
-            outputDes->regions = {TensorUtils::makeFullSlice(input)};
-            outputDes->memoryType = Tensor::InsideDescribe::MEMORY_VIRTUAL;
+            TensorUtils::makeFullRef(output, input);
         }
         return true;
     }
@@ -107,7 +102,7 @@ static void _create() {
     std::shared_ptr<GeometryComputer> _comp(new SingleGeometryComputer);
     GeometryComputer::registerGeometryComputer(_comp, {OpType_Squeeze, OpType_Unsqueeze, OpType_ExpandDims, OpType_Flatten, OpType_QuantizedReshape});
     std::shared_ptr<GeometryComputer> copycomp(new CopyGeometryComputer);
-    GeometryComputer::registerGeometryComputer(comp, {OpType_Identity});
+    GeometryComputer::registerGeometryComputer(copycomp, {OpType_Identity});
 }
 
 REGISTER_GEOMETRY(GeometryReshape, _create);

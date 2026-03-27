@@ -208,11 +208,24 @@ std::vector<int> SizeComputer::needInputContent(const MNN::Op* op, int inputSize
                 return std::vector<int>{ inputSize - 1 };
             }
         }
-        if (inputSize > 1 && (op->type() == OpType_Squeeze || op->type() == OpType_Unsqueeze)) {
+        if (inputSize > 1 && (op->type() == OpType_Squeeze || op->type() == OpType_Unsqueeze || op->type() == OpType_ReverseSequence || op->type() == OpType_Reverse)) {
             return std::vector<int>{1};
         }
         if (op->type() == OpType_CumSum) {
             return std::vector<int>{1};
+        }
+        if (op->type() == OpType_StridedSlice && op->main_type() == OpParameter_StridedSliceParam) {
+            auto sliceParam = op->main_as_StridedSliceParam();
+            if (sliceParam->fromType() == 0) {
+                if (5 == inputSize) {
+                    // For stridedslice write
+                    return std::vector<int>{};
+                }
+                return std::vector<int> {1, 2, 3};
+            } else {
+                MNN_ASSERT(sliceParam->fromType() == 1);
+                return std::vector<int> {1, 2, 3, 4};
+            }
         }
 #ifdef MNN_SUPPORT_RENDER
         if (op->type() == OpType_RasterAndInterpolate) {
@@ -242,7 +255,7 @@ std::vector<int> SizeComputer::needInputContent(const MNN::Op* op, int inputSize
     }
     return std::vector<int>{};
 }
-bool SizeComputer::computeBroadCastDims(const MNN::Op* op, const std::vector<Tensor*>& inputs,
+bool SizeComputer::computeBroadCastDims(const std::vector<Tensor*>& inputs,
                                  const std::vector<Tensor*>& outputs) {
     int maxDimensions = inputs[0]->dimensions();
     int maxIndex = 0;

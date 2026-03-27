@@ -1,5 +1,9 @@
 # 模型转换工具
-[从源码编译](../compile/tools.html#id2)
+
+模型转换工具能够将其他格式的模型（如：ONNX, TFLITE, TorchScript, Tensorflow等）转换为MNN模型，以方便MNN模型在各种平台上部署。
+- 从源码编译可参考[这里](../compile/other.html#id2)
+- 从pip安装（`pip install MNN`）使用可以参考[这里](python.html#mnnconvert)
+
 ## 参数说明
 ```bash
 Usage:
@@ -8,9 +12,9 @@ Usage:
   -h, --help                    Convert Other Model Format To MNN Model
 
   -v, --version                 显示当前转换器版本
-  
+
   -f, --framework arg           需要进行转换的模型类型, ex: [TF,CAFFE,ONNX,TFLITE,MNN,TORCH, JSON]
-  
+
       --modelFile arg           需要进行转换的模型文件名, ex: *.pb,*caffemodel
 
       --batch arg               如果模型时输入的batch是动态的，可以指定转换后的batch数
@@ -26,30 +30,30 @@ Usage:
                                     - 0：正常优化
                                     - 1：优化后模型尽可能小；
                                     - 2：优化后模型尽可能快；
-      
+
       --prototxt arg            caffe模型结构描述文件, ex: *.prototxt
-      
+
       --MNNModel arg            转换之后保存的MNN模型文件名, ex: *.mnn
-      
+
       --fp16                    将conv/matmul/LSTM的float32参数保存为float16，
-      													模型将减小一半，精度基本无损
-      
+      													模型将减小一半，精度基本无损，运行速度和float32模型一致
+
       --bizCode arg             MNN模型Flag, ex: MNN
-      
+
       --debug                   使用debug模型显示更多转换信息
-      
+
       --forTraining             保存训练相关算子，如BN/Dropout，default: false
-      
+
       --weightQuantBits arg     arg=2~8，此功能仅对conv/matmul/LSTM的float32权值进行量化，
       													仅优化模型大小，加载模型后会解码为float32，量化位宽可选2~8，
-                                运行速度和float32模型一致。8bit时精度基本无损，模型大小减小4倍
+                                不开启动态量化的情况下，运行速度和float32模型一致。8bit时精度基本无损，模型大小减小4倍
                                 default: 0，即不进行权值量化
 
       --weightQuantAsymmetric   与weightQuantBits结合使用，决定是否用非对称量化，默认为`true`
-      
+
       --compressionParamsFile arg
-                                使用MNN模型压缩工具箱生成的模型压缩信息文件
-                                
+                                使用MNN模型压缩工具箱生成的模型压缩信息文件或根据用户提供的量化参数来生成对应的量化模型，量化参数文件可参考tools/converter/user_provide_quant_params.json 。如果文件不存在，且开启了weightQuantBits等量化功能，会在相应路径生成模型压缩信息文件(json格式)，可后续编辑
+
       --saveStaticModel         固定输入形状，保存静态模型， default: false
 
       --targetVersion arg       兼容旧的推理引擎版本，例如：1.2f
@@ -75,10 +79,13 @@ Usage:
       --alignDenormalizedValue arg
                                 可选值：{0, 1}， 默认为1, 当`float(|x| < 1.18e-38)`会被视为0
 
-      --detectSparseSpeedUp arg
-                                可选值：{0, 1}， 默认为1, 会检测权重是否使用稀疏化加速
+      --detectSparseSpeedUp     检测权重是否使用稀疏化加速/压缩，有可能减少模型大小，但增大模型转换时间
 
-      --saveExternalData        将权重，常量等数据存储在额外文件中，默认为`false`
+      --saveExternalData        将权重，常量等数据存储在额外文件中，默认为0，也就是`false`
+
+      --useGeluApproximation    在进行Gelu算子合并时，使用Gelu的近似算法，默认为1 ，也就是`true`
+
+      --useOriginRNNImpl    LSTM和GRU算子是否使用原始算子实现，默认关闭。若开启，性能可能提升，但无法进行LSTM/GRU的量化
 
 ```
 
@@ -145,7 +152,13 @@ model_script.save('model_script.pt')
 - testMNNFromOnnx.py ：适用 onnx
 - testMNNFromTorch.py ：适用 pt (torchscript)
 
-注意：对于由Torchscript转换的模型，需要自行修改`testMNNFromTorch.py`中的的输入信息来测试
+注意：
+
+- 如果模型是动态输入形状，MNN 在脚本中默认不固定部分为1，有可能在 Tensorflow / OnnxRuntime / Torch 验证阶段报错。此时需要修改脚本中对应的输入部分，比如 testMNNFromOnnx.py 中的 run_onnx(self) 函数，把输入替换为有效的输入形状和内容。
+- 对于由Torchscript转换的模型，一般都需要自行修改`testMNNFromTorch.py`中的的输入信息来测试。
+- 如果模型输出层是 Identity 产生的，会因为 MNN 图优化的缘故丢失，此时需要校验上一层的输出，即在脚本后接输出名来测试，如: python3 ../tools/scripts/testMNNFromTf.py XXX.pb $NAME$
+
+
 ### 前置
 - 测试 pb / tflite ：安装`tensorflow`(`pip install tensorflow`）
 - 测试 onnx : 安装`onnxruntime`(`pip install onnxruntime`）
@@ -197,7 +210,7 @@ model_script.save('model_script.pt')
 - 示例，以ONNX为例：
    - 假设存在错误；此处为实验将MNN的Binary_ADD实现修改为错误实现；执行上述测试脚本，效果如下，显示`TESTERROR`表明可以转换但是推理结果有错误：
       ```bash
-      python ../tools/script/testMNNFromOnnx.py mobilenetv2-7.onnx      
+      python ../tools/script/testMNNFromOnnx.py mobilenetv2-7.onnx
       Dir exist
       onnx/test.onnx
       tensor(float)
@@ -239,7 +252,7 @@ model_script.save('model_script.pt')
       Save mnn result to  .error director
       # binary search test layers ...
       # test layer output 339: ERROR, 339's inputs is [489, 498]
-      python ../tools/script/testMNNFromOnnx.py mobilenetv2-7.onnx 339 
+      python ../tools/script/testMNNFromOnnx.py mobilenetv2-7.onnx 339
       ...
       output: 339
       339: (1, 24, 56, 56, )
@@ -273,7 +286,7 @@ model_script.save('model_script.pt')
 ./MNNConvert -f CAFFE --OP
 ./MNNConvert -f TF --OP
 ./MNNConvert -f ONNX --OP
-./MNNConvert -f TORCH --OP 
+./MNNConvert -f TORCH --OP
 ```
 
 ## 模型打印
@@ -301,19 +314,88 @@ cat mobilenet_v1.json
 , "main_type": "Convolution2D", "main":
 { "common":
 { "dilateX": 1, "dilateY": 1, "strideX": 2, "strideY": 2, "kernelX": 3, "kernelY": 3, "padX": 1, "padY": 1, "group": 1, "outputCount": 32, "relu": true, "padMode": "CAFFE", "relu6": false, "inputCount": 0 }
-, weight: 
+, weight:
 [ -0.0, -0.0, 0.0, -0.0, ... ]
-, bias: 
+, bias:
 [ -0.000004, 0.694553, 0.416608,  ... ]
  }
 , "defaultDimentionFormat": "NHWC" }
-, 
+,
 ...
  ]
-, "tensorName": 
+, "tensorName":
 [ "data", "conv1", "conv2_1/dw", "conv2_1/sep", "conv2_2/dw", "conv2_2/sep", "conv3_1/dw", "conv3_1/sep", "conv3_2/dw", "conv3_2/sep", "conv4_1/dw", "conv4_1/sep", "conv4_2/dw", "conv4_2/sep", "conv5_1/dw", "conv5_1/sep", "conv5_2/dw", "conv5_2/sep", "conv5_3/dw", "conv5_3/sep", "conv5_4/dw", "conv5_4/sep", "conv5_5/dw", "conv5_5/sep", "conv5_6/dw", "conv5_6/sep", "conv6/dw", "conv6/sep", "pool6", "fc7", "prob" ]
 , "sourceType": "CAFFE", "bizCode": "AliNNTest", "tensorNumber": 0, "preferForwardType": "CPU" }
 ```
 
 ## Python版
 我们提供了预编译的MNNConvert Python工具：[mnnconvert](python.html#mnnconvert)
+
+
+## MNN2QNNModel
+### 功能
+该工具针对特定的高通硬件架构，为原始的MNN模型生成MNN-QNN后端需要的替代模型以及QNN离线产物。目前，支持静态形状的模型以及有限输入形状组合的模型。
+### 运行环境要求
+该工具必须在 x86_64 架构的 Linux 系统上运行（部分QNN SDK中的离线工具必须在此环境中运行）。
+### 编译
+添加额外的CMAKE变量并编译：`-DMNN_QNN=ON -DMNN_QNN_CONVERT_MODE=ON -DMNN_WITH_PLUGIN=OFF -DMNN_BUILD_TOOLS=ON -DMNN_SUPPORT_TRANSFORMER_FUSE=ON`。
+### 用法说明
+该工具的用法如下
+
+```
+./MNN2QNNModel <qnnSDKPath> <socId> <hexagonArch> <srcMNNPath> <outputDir> [totalShapeNum] [inputShape1] [inputShape2] ...
+```
+
+参数配置说明如下：
+| 参数 | 说明 | 是否必须 |
+| :--- | :--- | :--- |
+| `<qnnSDKPath>` | QNN SDK 的根目录路径。 | 是 |
+| `<socId>` | 目标 SoC 的 ID。常用 ID 参考：8Gen2 -> `43`, 8Gen3 -> `57`, 8 Elite -> `69`。其他型号请参考高通官方文档。 | 是 |
+| `<hexagonArch>` | Hexagon架构版本。常用架构参考：8Gen2 -> `73`, 8Gen3 -> `75`, 8 Elite -> `79`。其他型号请参考高通官方文档。 | 是 |
+| `<srcMNNPath>` | 待转换的原始 MNN 模型文件路径（`.mnn` 文件）。 | 是 |
+| `<outputDir>` | 用于存放生成产物的目录。工具会在此目录下生成一个新的 `.mnn` 文件（替代模型）和一个 `.bin` 文件（QNN离线产物）。 | 是 |
+| `[totalShapeNum]` | 需要支持的动态输入形状的总数量。 | 否 |
+| `[inputShapeN]` | 具体的输入形状配置。根据 `totalShapeNum` 的数量，提供相应个数的形状描述。形状信息可以是以下两种格式之一：<br>1. **形状字符串**：例如 `1x3x512x512`。对于多输入模型，用下划线 `_` 分隔，例如 `1x3x512x512_1x256`。<br>2. **MNN 文件路径**：提供一个包含所需输入信息的 `.mnn` 文件路径。 | 否 |
+
+#### 示例
+假设 QNN SDK 路径为 /path/to/qnn/sdk，目标设备为 8Gen3 (socId=57, hexagonArch=75)，原始模型为 model.mnn，输出目录为 /path/to/output
+- 使用默认输入形状进行转换
+
+```
+./MNN2QNNModel /path/to/qnn/sdk 57 75 model.mnn /path/to/output
+```
+
+- 为单输入模型指定单种输入形状进行转换
+
+```
+./MNN2QNNModel /path/to/qnn/sdk 57 75 model.mnn /path/to/output 1 1x3x256x256
+```
+
+- 为单输入模型指定多种输入形状进行转换
+
+```
+./MNN2QNNModel /path/to/qnn/sdk 57 75 model.mnn /path/to/output 2 1x3x256x256 1x3x512x512
+```
+
+- 为多输入模型指定多种输入形状进行转换
+```
+./MNN2QNNModel /path/to/qnn/sdk 57 75 model.mnn /path/to/output 2 1x3x256x256_1x100 1x3x512x512_1x200
+```
+
+#### 产物
+工具执行成功后，会在指定的 `<outputDir>` 目录下生成两个文件。文件名由原始模型名、SoC ID 和 Hexagon 架构版本共同决定，格式为 `<原始模型名>_<socId>_<hexagonArch>.<suffix>`。
+
+- **替代模型**：一个 `.mnn` 文件。文件名格式为`<原始模型名>_<socId>_<hexagonArch>.mnn`。
+- **QNN离线产物**：一个 `.bin` 文件，QNN离线产物，包含了优化后的模型和权重。文件名格式为`<原始模型名>_<socId>_<hexagonArch>.bin`。
+
+例如，对于上述示例（原始模型为 `model.mnn`，socId=57，hexagonArch=75），产物将位于 `/path/to/output/` 目录下：
+```
+/path/to/output/
+├── model_57_75.mnn       # 替代模型
+└── model_57_75.bin       # QNN离线产物
+```
+
+关于如何使用这些产物，可进一步参考[QNN离线构图模式的使用说明](../inference/npu.md#离线构图模式推理常规模型)。
+
+## compilefornpu
+对于较复杂的模型，通过compilefornpu及对应的`npu_convert.py`分段转换为NPU，该工具目前仅在llm相关模型的转换中使用

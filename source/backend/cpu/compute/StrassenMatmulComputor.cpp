@@ -6,6 +6,8 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
+#ifndef MNN_REDUCE_SIZE
+
 #include "StrassenMatmulComputor.hpp"
 #include "DenseConvolutionTiledExecutor.hpp"
 #include "CommonOptFunction.h"
@@ -42,17 +44,10 @@ private:
     BufferAllocator* mAllocator;
 };
 
-StrassenMatrixComputor::StrassenMatrixComputor(Backend* bn, bool multithread, int maxDepth, uint8_t* dequantAlpha, uint8_t* dequantBias, int32_t dequantBits) : mBackend(bn) {
+StrassenMatrixComputor::StrassenMatrixComputor(Backend* bn, int maxDepth) : mBackend(bn) {
     mMaxDepth = maxDepth;
-    mSupportMultiThread = multithread;
-    mDequantBias = dequantBias;
-    mDequantAlpha = dequantAlpha;
-    mDequantBits = dequantBits;
     auto core = static_cast<CPUBackend*>(backend())->functions();
     mWeightBytes = core->bytes;
-    if (mDequantBits == 8 || mDequantBits == 4) {
-        mWeightBytes = (float)mDequantBits / 8;
-    }
 };
 StrassenMatrixComputor::~StrassenMatrixComputor() {
     // Do nothing
@@ -68,7 +63,7 @@ ErrorCode StrassenMatrixComputor::_generateTrivalMatMul(int e, int l, int h, con
     auto cStride = CT.lineStrideBytes;
     int eP, lP, hP;
     core->MNNGetMatMulPackMode(&eP, &lP, &hP);
-    auto numberThread = mSupportMultiThread ? ((CPUBackend*)backend())->threadNumber() : 1;
+    auto numberThread = 1;
     auto bExtraStride = bStride - UP_DIV(l, lP)*lP*hP * mWeightBytes;
     MNN_ASSERT(bExtraStride >= 0);
     auto tileBufferBasic = static_cast<CPUBackend*>(backend())->getBufferAllocator()->alloc(numberThread * UP_DIV(l, lP) * eP * lP * bytes);
@@ -81,26 +76,17 @@ ErrorCode StrassenMatrixComputor::_generateTrivalMatMul(int e, int l, int h, con
     auto eReal = aStride / core->bytes / core->pack;
     auto matmulUnit = core->MNNPackedMatMul;
     auto matmulRemain = core->MNNPackedMatMulRemain;
-    const float* dequantAlpha = nullptr;
-    const float* dequantBias  = nullptr;
-    float weightBytes           = 1;
-#ifdef MNN_LOW_MEMORY
-    if (nullptr != mDequantAlpha && nullptr != mDequantBias) {
-        dequantAlpha = reinterpret_cast<const float*>(mDequantAlpha);
-        dequantBias = reinterpret_cast<const float*>(mDequantBias);
-        DenseConvolutionTiledExecutor::selectLowMemoryMatmulFunc(&matmulUnit, &matmulRemain, &weightBytes, mDequantBits, core);
-    }
-#endif
     mFunctions.emplace_back(
-        std::make_pair([cStride, l, h, xCount, AT, BT, CT, COT, tileBufferBasic, unitNumber, bExtraStride, numberThread, eReal, eP, active, matmulUnit, matmulRemain, dequantAlpha, dequantBias, this](int tId) {
+        std::make_pair([cStride, l, h, xCount, AT, BT, CT, COT, tileBufferBasic, unitNumber, bExtraStride, numberThread, eReal, eP, lP, active, matmulUnit, matmulRemain, this](int tId) {
             auto core = static_cast<CPUBackend*>(backend())->functions();
-            size_t parameters[6];
-            parameters[0] = xCount * core->bytes;
-            parameters[1] = l;
+            size_t parameters[7];
+            parameters[0] = xCount * lP * core->bytes;
+            parameters[1] = ROUND_UP(l, lP);
             parameters[2] = h;
             parameters[3] = cStride;
             parameters[4] = 0;
             parameters[5] = bExtraStride;
+            parameters[6] = 0;
             auto tileHost = tileBufferBasic.ptr() + eP * parameters[1] * tId * core->bytes;
             const float* postParametersPtr = nullptr;
             if (!active.empty()) {
@@ -128,7 +114,7 @@ ErrorCode StrassenMatrixComputor::_generateTrivalMatMul(int e, int l, int h, con
                 int xStart    = i * eP;
                 auto aStart   = aHost + xStart * packUnit;
                 core->MNNPackC4ForMatMul_A((float*)(tileHost), (const float**)(&aStart), info, stride);
-                matmulUnit((float*)(cHost + xStart * packUnit), (float*)tileHost, (float*)bHost, parameters, postParametersPtr, (const float*)biasPtr, dequantAlpha, dequantBias);
+                matmulUnit((float*)(cHost + xStart * packUnit), (float*)tileHost, (float*)bHost, parameters, postParametersPtr, (const float*)biasPtr, nullptr, nullptr);
             }
             if (tId != numberThread -1) {
                 return;
@@ -142,7 +128,7 @@ ErrorCode StrassenMatrixComputor::_generateTrivalMatMul(int e, int l, int h, con
                 auto aStart   = aHost + xStart * packUnit;
                 // Copy
                 core->MNNPackC4ForMatMul_A((float*)(tileHost), (const float**)(&aStart), info, stride);
-                matmulRemain((float*)(cHost + xStart * packUnit), (float*)tileHost, (float*)bHost, xCount, parameters, postParametersPtr, (const float*)biasPtr, dequantAlpha, dequantBias);
+                matmulRemain((float*)(cHost + xStart * packUnit), (float*)tileHost, (float*)bHost, xCount, parameters, postParametersPtr, (const float*)biasPtr, nullptr, nullptr);
             }
         }, numberThread));
     static_cast<CPUBackend*>(backend())->getBufferAllocator()->free(tileBufferBasic);
@@ -192,7 +178,7 @@ ErrorCode StrassenMatrixComputor::_generateBasicMatMul(int e, int l, int h, cons
 
     MatrixInfo Empty;
     Empty.stackIndex = -1;
-    auto numberThread = mSupportMultiThread ? ((CPUBackend*)backend())->threadNumber() : 1;
+    auto numberThread = 1;
     auto cHeight = UP_DIV(h, core->pack);
 
     for (int i=0; i<unit; ++i) {
@@ -256,7 +242,7 @@ ErrorCode StrassenMatrixComputor::_generateMatMul(int e, int l, int h, const Mat
     auto core = static_cast<CPUBackend*>(backend())->functions();
     auto aUnit = core->pack;
 
-    auto numberThread = mSupportMultiThread ? ((CPUBackend*)backend())->threadNumber() : 1;
+    auto numberThread = 1;
     int eP, lP, hP;
     core->MNNGetMatMulPackMode(&eP, &lP, &hP);
     MNN_ASSERT(hP % core->pack == 0 || core->pack % hP == 0);
@@ -319,7 +305,7 @@ ErrorCode StrassenMatrixComputor::_generateMatMul(int e, int l, int h, const Mat
     CX.stackIndex = X.stackIndex;
     CX.offsetBytes = 0;
     CX.lineStrideBytes = eSub * core->bytes * core->pack;
-    
+
     MatrixInfo a11 = AT;
     MatrixInfo a12 = AT;
     a12.offsetBytes = AT.offsetBytes + AT.lineStrideBytes * lSubUnit;
@@ -327,7 +313,7 @@ ErrorCode StrassenMatrixComputor::_generateMatMul(int e, int l, int h, const Mat
     a21.offsetBytes = AT.offsetBytes + eSub * core->pack * core->bytes;
     MatrixInfo a22 = AT;
     a22.offsetBytes = AT.offsetBytes + eSub * core->pack * core->bytes + AT.lineStrideBytes * lSubUnit;
-    
+
     MatrixInfo b11 = BT;
     MatrixInfo b12 = BT;
     b12.offsetBytes = BT.offsetBytes + BT.lineStrideBytes * (hSub / hP);
@@ -335,7 +321,7 @@ ErrorCode StrassenMatrixComputor::_generateMatMul(int e, int l, int h, const Mat
     b21.offsetBytes = BT.offsetBytes + lSub * hP * mWeightBytes;
     MatrixInfo b22 = BT;
     b22.offsetBytes = BT.offsetBytes + BT.lineStrideBytes * (hSub / hP) + lSub * hP * mWeightBytes;
-    
+
     MatrixInfo c11 = CT;
     MatrixInfo c12 = CT;
     c12.offsetBytes = CT.offsetBytes + CT.lineStrideBytes * (hSub / core->pack);
@@ -501,9 +487,6 @@ void StrassenMatrixComputor::onReset() {
 ErrorCode StrassenMatrixComputor::onEncode(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs, const std::vector<float>& postParameters, int inputL, int inputH) {
     auto core = static_cast<CPUBackend*>(backend())->functions();
     mWeightBytes = core->bytes;
-    if (mDequantBits == 8 || mDequantBits == 4) {
-        mWeightBytes = (float)mDequantBits / 8;
-    }
     MNN_ASSERT(inputs.size() == 2 || inputs.size() == 3);
     MNN_ASSERT(outputs.size() == 1);
     auto A  = inputs[0];
@@ -550,7 +533,7 @@ ErrorCode StrassenMatrixComputor::onEncode(int e, int l, int h, int as, int bs, 
     b.stackIndex = 1;
     b.lineStrideBytes = bs * mWeightBytes;
     b.offsetBytes = 0;
-    
+
     c.stackIndex = 2;
     c.lineStrideBytes = cs * core->bytes;
     c.offsetBytes = 0;
@@ -573,10 +556,8 @@ void StrassenMatrixComputor::onExecute(const uint8_t* AT, const uint8_t* BT, con
 
     // All is done in onResize, just execute it
     for (auto& f : mFunctions) {
-        MNN_CONCURRENCY_BEGIN(tId, f.second) {
-            f.first(tId);
-        }
-        MNN_CONCURRENCY_END();
+        f.first(0);
     }
 }
 } // namespace MNN
+#endif

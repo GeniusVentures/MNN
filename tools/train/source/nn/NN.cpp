@@ -6,6 +6,7 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
+#include <MNN/expr/ExecutorScope.hpp>
 #include "NN.hpp"
 #include "Distributions.hpp"
 #include "module/PipelineModule.hpp"
@@ -17,7 +18,7 @@
 #include "RandomGenerator.hpp"
 #include "core/Macro.h"
 #include "math/WingoradGenerater.hpp"
-#include "common/WinogradInt8Attr.hpp"
+#include "core/WinogradInt8Attr.hpp"
 #include <string>
 
 using namespace MNN::Express;
@@ -223,10 +224,10 @@ private:
         BatchNormModule* module(new BatchNormModule);
         module->mMomentum = mMomentum;
         module->mEps = mEps;
-        module->mScale = ctx->getOrClone(mScale);
-        module->mBias = ctx->getOrClone(mBias);
-        module->mRunningMean = ctx->getOrClone(mRunningMean);
-        module->mRunningVariance = ctx->getOrClone(mRunningVariance);
+        module->mScale = (mScale);
+        module->mBias = (mBias);
+        module->mRunningMean = (mRunningMean);
+        module->mRunningVariance = (mRunningVariance);
         module->mRunningMeanPos = mRunningMeanPos;
         module->mRunningVariancePos = mRunningVariancePos;
         module->mChannels = mChannels;
@@ -309,8 +310,8 @@ private:
     Module* clone(CloneContext* ctx) const override {
         ConvModule* module(new ConvModule);
         module->mParameter = mParameter;
-        module->mParameter.weight = ctx->getOrClone(mParameter.weight);
-        module->mParameter.bias = ctx->getOrClone(mParameter.bias);
+        module->mParameter.weight = (mParameter.weight);
+        module->mParameter.bias = (mParameter.bias);
         return this->cloneBaseTo(ctx, module);
     }
 
@@ -397,6 +398,11 @@ Module* NN::Linear(int l, int t, bool hasBias, std::shared_ptr<Initializer> weig
     }
     auto weight = weightInit->createConstVar({t, l}, NCHW);
     weight.fix(VARP::TRAINABLE);
+    // Save lazy mode
+    auto lazyEval = ExecutorScope::Current()->lazyEval;
+    auto lazyMode = ExecutorScope::Current()->getLazyMode();
+    ExecutorScope::Current()->lazyEval = true;
+    ExecutorScope::Current()->setLazyComputeMode(Executor::LAZY_FULL);
     auto input  = _Input({l}, NCHW);
     auto output = _MatMul(input, weight, false, true);
     if (!hasBias) {
@@ -407,6 +413,10 @@ Module* NN::Linear(int l, int t, bool hasBias, std::shared_ptr<Initializer> weig
     output    = _Add(output, bias);
     auto module = NN::extract({input}, {output}, true);
     module->setType("Linear");
+    // Revert lazy mode
+    ExecutorScope::Current()->lazyEval = lazyEval;
+    ExecutorScope::Current()->setLazyComputeMode(lazyMode);
+
     return module;
 }
 
@@ -592,11 +602,11 @@ public:
         mWeightClampValue = _Scalar<float>(mLimit);
         // mInputClampValue = _Scalar<float>(mLimit);
         // mOutputClampValue = _Scalar<float>(mLimit);
-        
+
         // lower bits only apply to weights
         mInputClampValue = _Scalar<float>((float)(1 << (8 - 1)) - 1.0f);
         mOutputClampValue = _Scalar<float>((float)(1 << (8 - 1)) - 1.0f);
-        
+
         mInputMinPos = addParameter(mInputMin);
         mInputMaxPos = addParameter(mInputMax);
         mOutputMinPos = addParameter(mOutputMin);
@@ -700,7 +710,7 @@ public:
         int threadNumber = 1, ePack = 12;
         int unit2   = UP_DIV(outH * outW, ePack * threadNumber);
         int maxUnit = (int)::sqrtf((float)unit2);
-        const int MAX_UNIT = 4, MIN_UNIT = 2;
+        const int MAX_UNIT = 6, MIN_UNIT = 2;
         maxUnit = std::max(std::min(maxUnit, MAX_UNIT), MIN_UNIT);
 
         auto units = std::pair<int, int>({0, 0});
@@ -761,13 +771,13 @@ public:
         xx = _MatMul(_MatMul(_Transpose(srcTransH, {1, 0}), xx), srcTransW);
         // [alphaH * alphaW, ic, N * h_unit_num * w_unit_num]
         xx = _Reshape(_Transpose(xx, {2, 3, 1, 0}), {alphaH * alphaW, inChannel, -1});
-        
+
         auto inputPair = fakeQuantFeatureWithMinMax(xx, nullptr, nullptr, mInputClampValue, {1, 2, 3});
         mWinogradTransInputMin = updateParameter(mWinogradTransInputMin, inputPair[1]);
         mWinogradTransInputMax = updateParameter(mWinogradTransInputMax, inputPair[2]);
         setParameter(mWinogradTransInputMin, mWinogradTransInputMinPos);
         setParameter(mWinogradTransInputMax, mWinogradTransInputMaxPos);
-        
+
         auto wTransH = _Const(genH.G()->host<void>(), {alphaH, kernelH}, NCHW);
         auto wTransW = _Const(genW.G()->host<void>(), {alphaW, kernelW}, NCHW);
         // [oc, ic, alphaH, alphaW]
@@ -775,12 +785,12 @@ public:
         // [alphaH * alphaW, oc, ic]
         ww = _Transpose(_Reshape(ww, {outChannel, inChannel, -1}), {2, 0, 1});
         auto wwInfo = ww->getInfo();
-        
+
         // simulate weight quant
         auto weightScale = _Maximum(_ReduceMax(_Abs(ww), {2}, true), _Scalar<float>(1E-6)) * _Reciprocal(mWeightClampValue);
 //        ww = clamp(_Round(ww * _Reciprocal(weightScale)), mWeightClampValue) * weightScale;
         setParameter(weightScale, mWinogradTransWeightScalePos);
-        
+
         // [alphaH * alphaW, oc, N * h_unit_num * w_unit_num]
         auto yy = _MatMul(ww, xx);
         // [oc, N * h_unit_num * w_unit_num, alphaH, alphaW]
@@ -963,7 +973,7 @@ public:
                     bias.resize(biasinfo->size);
                     auto ptr = fusedBias->readMap<float>();
                     ::memcpy(bias.data(), ptr, bias.size() * sizeof(float));
-                    
+
                     auto info = weightScale->getInfo();
                     weightScaleVector.resize(info->size);
                     MNN_ASSERT(weightScaleVector.size() == bias.size());
@@ -973,7 +983,7 @@ public:
             }
             bool relu = mActivation == NN::None ? false : true;
             res = _Conv(std::move(weight), std::move(bias), std::move(weightScaleVector), _Convert(x, NC4HW4), mOption.channel,
-                        mOption.kernelSize, mOption.padMode, mOption.stride, mOption.dilate, mGroup, mOption.pads, relu, 
+                        mOption.kernelSize, mOption.padMode, mOption.stride, mOption.dilate, mGroup, mOption.pads, relu,
                         mInputScale->readMap<float>()[0], mOutputScale->readMap<float>()[0],
                         inputZeroPoint, outputZeroPoint,
                         -int8_t(mOutputClampValue->readMap<float>()[0]), int8_t(mOutputClampValue->readMap<float>()[0]), mWeightClampValue->readMap<float>()[0], mAccumulateToInt16);
@@ -982,7 +992,7 @@ public:
                 auto inputScaleVar = scaleAndZeroPoint.first;
                 auto inputZeroPointVar = scaleAndZeroPoint.second;
                 auto weightScaleVar = parameters()[mWinogradTransWeightScalePos];
-                
+
                 // Winograd Transformed input scale
                 auto inputScaleInfo = inputScaleVar->getInfo();
                 auto inputScaleData = inputScaleVar->readMap<float>();
@@ -1008,11 +1018,11 @@ public:
                     return {};
                 }
                 std::vector<float> weightScales(weightScaleData, weightScaleData + weightScaleInfo->size);
-                
+
                 mWinogradAttr->attrs[0].inputScales = inputScales;
                 mWinogradAttr->attrs[0].inputZeroPoints = inputZeroPoints;
                 mWinogradAttr->attrs[0].weightScales = weightScales;
-                
+
                 res = mWinogradAttr->turnToWinogradConv(res);
             }
             res->setName(name());
@@ -1030,31 +1040,31 @@ private:
     Module* clone(CloneContext* ctx) const override {
         ConvBNReluFusedModule* module(new ConvBNReluFusedModule);
         module->mConvParameter = mConvParameter;
-        module->mConvParameter.weight = ctx->getOrClone(mConvParameter.weight);
-        module->mConvParameter.bias = ctx->getOrClone(mConvParameter.bias);
+        module->mConvParameter.weight = (mConvParameter.weight);
+        module->mConvParameter.bias = (mConvParameter.bias);
         module->mOption = mOption;
         module->mGroup = mGroup;
-        module->mWeight = ctx->getOrClone(mWeight);
-        module->mBias = ctx->getOrClone(mBias);
+        module->mWeight = (mWeight);
+        module->mBias = (mBias);
         module->mActivation = mActivation;
         module->mBits = mBits;
         module->mLimit = mLimit;
-        module->mLimitScale = ctx->getOrClone(mLimitScale);
-        module->mWeightClampValue = ctx->getOrClone(mWeightClampValue);
-        module->mInputScale = ctx->getOrClone(mInputScale);
-        module->mOutputScale = ctx->getOrClone(mOutputScale);
-        module->mInputMin = ctx->getOrClone(mInputMin);
-        module->mInputMax = ctx->getOrClone(mInputMax);
-        module->mOutputMin = ctx->getOrClone(mOutputMin);
-        module->mOutputMax = ctx->getOrClone(mOutputMax);
-        module->mInputZeroPoint = ctx->getOrClone(mInputZeroPoint);
-        module->mOutputZeroPoint = ctx->getOrClone(mOutputZeroPoint);
+        module->mLimitScale = (mLimitScale);
+        module->mWeightClampValue = (mWeightClampValue);
+        module->mInputScale = (mInputScale);
+        module->mOutputScale = (mOutputScale);
+        module->mInputMin = (mInputMin);
+        module->mInputMax = (mInputMax);
+        module->mOutputMin = (mOutputMin);
+        module->mOutputMax = (mOutputMax);
+        module->mInputZeroPoint = (mInputZeroPoint);
+        module->mOutputZeroPoint = (mOutputZeroPoint);
         module->mInputMinPos = mInputMinPos;
         module->mInputMaxPos = mInputMaxPos;
         module->mOutputMinPos = mOutputMinPos;
         module->mOutputMaxPos = mOutputMaxPos;
-        module->mInputClampValue = ctx->getOrClone(mInputClampValue);
-        module->mOutputClampValue = ctx->getOrClone(mOutputClampValue);
+        module->mInputClampValue = (mInputClampValue);
+        module->mOutputClampValue = (mOutputClampValue);
         module->mMomentum = mMomentum;
         module->mFeatureScaleStatMethod = mFeatureScaleStatMethod;
         module->mScaleUpdateMethod = mScaleUpdateMethod;
@@ -1063,8 +1073,8 @@ private:
             module->registerModel({module->mBatchNorm});
         }
         module->mWinogradAttr = mWinogradAttr;
-        module->mWinogradTransInputMin = ctx->getOrClone(mWinogradTransInputMin);
-        module->mWinogradTransInputMax = ctx->getOrClone(mWinogradTransInputMax);
+        module->mWinogradTransInputMin = (mWinogradTransInputMin);
+        module->mWinogradTransInputMax = (mWinogradTransInputMax);
         module->mWinogradTransInputMinPos = mWinogradTransInputMinPos;
         module->mWinogradTransInputMaxPos = mWinogradTransInputMaxPos;
         module->mWinogradTransWeightScalePos = mWinogradTransWeightScalePos;

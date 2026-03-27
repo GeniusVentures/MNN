@@ -56,7 +56,8 @@ PoolExecution::PoolExecution(const std::vector<Tensor *> &inputs, const MNN::Op 
     mPaddings[0] = mPoolParams->padY() * 2;
     mPaddings[1] = mPoolParams->padX() * 2;
     mPadType     = mPoolParams->padType();
-    unit.kernel = mOpenCLBackend->getOpenCLRuntime()->buildKernel("pooling", "global_pooling", {"-DLOCAL_SIZE=512"});
+    unit.kernel = mOpenCLBackend->getOpenCLRuntime()->buildKernel("pooling", "global_pooling", {"-DLOCAL_SIZE=512"}, mOpenCLBackend->getPrecision());
+    OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     mMaxWorkGroupSize = static_cast<uint32_t>(mOpenCLBackend->getOpenCLRuntime()->getMaxWorkGroupSize(unit.kernel));
 }
 
@@ -80,7 +81,7 @@ ErrorCode PoolExecution::onEncode(const std::vector<Tensor *> &inputs, const std
     std::set<std::string> buildOptions;
     std::string kernelName = "pooling";
     auto runtime           = mOpenCLBackend->getOpenCLRuntime();
-    int local_size;
+    int local_size = 1;
 
     if (mPoolParams->isGlobal()) {
         std::vector<int> inputShape = tensorShapeFormat(inputs[0]);
@@ -90,8 +91,8 @@ ErrorCode PoolExecution::onEncode(const std::vector<Tensor *> &inputs, const std
         kernelName                  = "global_pooling";
         auto MaxLocalSize = std::min(runtime->getMaxWorkItemSizes()[0], mMaxWorkGroupSize);
         local_size = getLocalSize(inputShape.at(1) * inputShape.at(2), MaxLocalSize);
-        buildOptions.emplace("-DLOCAL_SIZE=" + std::to_string(local_size));
     }
+    buildOptions.emplace("-DLOCAL_SIZE=" + std::to_string(local_size));
 
     if (mPadType == PoolPadType_SAME) {
         int padNeededHeight = std::max(0, (output->height() - 1) * mStrides[0] + mKernels[0] - input->height());
@@ -125,7 +126,7 @@ ErrorCode PoolExecution::onEncode(const std::vector<Tensor *> &inputs, const std
     if(returnRedice){
         buildOptions.emplace("-DRETURN_REDICE");
     }
-    unit.kernel           = runtime->buildKernel("pooling", kernelName, buildOptions);
+    unit.kernel           = runtime->buildKernel("pooling", kernelName, buildOptions, mOpenCLBackend->getPrecision());
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
     MNN_ASSERT(mDilations[0] == 1 && mDilations[1] == 1);

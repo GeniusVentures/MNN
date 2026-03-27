@@ -30,17 +30,16 @@ ErrorCode SelectBufExecution::onEncode(const std::vector<Tensor*>& inputs, const
         buildOptions.emplace("-DINSIZE1_EUQAL_1");
     if(inSize2 == 1)
         buildOptions.emplace("-DINSIZE2_EUQAL_1");
-    unit.kernel = runtime->buildKernel("select_buf", "select_buf", buildOptions);
+    unit.kernel = runtime->buildKernel("select_buf", "select_buf", buildOptions, openCLBackend->getPrecision());
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
     std::vector<int> outputShape = tensorShapeFormat(outputs[0]);
-
-    int batch        = outputShape.at(0);
-    int outputHeight = outputShape.at(1);
-    int outputWidth  = outputShape.at(2);
-    int channels     = outputShape.at(3);
-    int channelBlocks = (channels + 3) / 4;
-    int outSize = batch * channelBlocks * outputWidth * outputHeight * 4;
+    int outSize = 0;
+    if(MNN::MNN_DATA_FORMAT_NC4HW4 == TensorUtils::getDescribe(outputs[0])->dimensionFormat){
+        outSize = outputShape[0] * outputShape[1] * outputShape[2] * ROUND_UP(outputShape[3], 4);
+    }else{
+        outSize = outputShape[0] * outputShape[1] * outputShape[2] * outputShape[3];
+    }
 
     mGlobalWorkSize = {
         static_cast<uint32_t>(outSize),
@@ -58,7 +57,7 @@ ErrorCode SelectBufExecution::onEncode(const std::vector<Tensor*>& inputs, const
     MNN_CHECK_CL_SUCCESS(ret, "setArg SelectBufExecution");
 
     std::string kernelName = "select_buf";
-    mLocalSize = localWS2DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel).first;
+    mLocalSize = localWS2DDefault(mGlobalWorkSize, mMaxWorkGroupSize, openCLBackend->getOpenCLRuntime(), kernelName, unit.kernel, openCLBackend->getCLTuneLevel(), "select_buf").first;
     openCLBackend->recordKernel2d(unit.kernel, mGlobalWorkSize, mLocalSize);
     unit.globalWorkSize = {mGlobalWorkSize[0], mGlobalWorkSize[1]};
     unit.localWorkSize = {mLocalSize[0], mLocalSize[1]};
@@ -75,7 +74,7 @@ public:
         for (int i = 0; i < outputs.size(); ++i) {
             TensorUtils::setTensorSupportPack(outputs[i], false);
         }
-        return new SelectBufExecution(backend, op);
+        OPENCL_CREATOR_CHECK(new SelectBufExecution(backend, op));
     }
 };
 

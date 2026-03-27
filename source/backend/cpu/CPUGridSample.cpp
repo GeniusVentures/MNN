@@ -74,7 +74,7 @@ ErrorCode CPUGridSample::onExecute(const std::vector<Tensor *> &inputs, const st
             auto _inputPtr = inputPtr + b * inH * inW * core->pack * core->bytes;
             auto _gridPtr = gridPtr + b * gridTensor->buffer().dim[0].stride * core->bytes;
             auto _outputPtr = outputPtr + b * outH * outW * core->pack * core->bytes;
-            core->MNNGridSampleComputeCord((float *)cordPtr, (const float *)_gridPtr, inH, inW, outH, outW, gridTensor->buffer().dim[1].stride, mAlignCorners);
+            core->MNNGridSampleComputeCord((float *)cordPtr, (const float *)_gridPtr, inH, inW, outH, outW, mAlignCorners);
             // Compute cord
             MNN_CONCURRENCY_BEGIN(tId, threadCount) {
                 for (int index=tId; index < tileCount; index += threadCount) {
@@ -98,21 +98,20 @@ ErrorCode CPUGridSample::onExecute(const std::vector<Tensor *> &inputs, const st
         auto outW = outputTensor->buffer().dim[4].extent;
         auto threadCount = static_cast<CPUBackend*>(backend())->threadNumber();
         auto tileCount = outD;
-        auto inOffset  = batches * inH * inW * core->pack;
-        auto outOffset = batches * outH * outW * core->pack;
+        auto inOffset  = batches * inD * inH * inW * core->pack;
+        auto outOffset = batches * outD * outH * outW * core->pack;
         auto cordPtr = mTempCordBuffer->host<uint8_t>();
         for (auto b = 0; b < batches; ++b) {
             auto _inputPtr = inputPtr + b * inD * inH * inW * core->pack * core->bytes;
             auto _gridPtr = gridPtr + b * gridTensor->buffer().dim[0].stride * core->bytes;
             auto _outputPtr = outputPtr + b * outD * outH * outW * core->pack * core->bytes;
-            core->MNNGridSampleComputeCord3D((float *)cordPtr, (const float *)_gridPtr, inD, inH, inW, outD, outH, outW, gridTensor->buffer().dim[1].stride, gridTensor->buffer().dim[2].stride, mAlignCorners);
+            core->MNNGridSampleComputeCord3D((float *)cordPtr, (const float *)_gridPtr, inD, inH, inW, outD, outH, outW, mAlignCorners);
             // Compute cord
             MNN_CONCURRENCY_BEGIN(tId, threadCount) {
                 for (int index=tId; index < tileCount; index += threadCount) {
-                    auto c = index / outD;
-                    auto d = index % outD;
-                    auto inputC = _inputPtr + c * inD * inW * inH * batches * core->pack * core->bytes;
-                    auto outputC = _outputPtr + c * outD * outW * outH * batches * core->pack * core->bytes;
+                    auto d = index;
+                    auto inputC = _inputPtr;
+                    auto outputC = _outputPtr;
                     auto cordD = cordPtr + d * outH * outW * 3 * core->bytes;
                     auto outputD = outputC + d * outH * outW * core->pack * core->bytes;
                     for (int h = 0; h < outH; h++) {
@@ -127,6 +126,7 @@ ErrorCode CPUGridSample::onExecute(const std::vector<Tensor *> &inputs, const st
     }
     return NO_ERROR;
 }
+#ifndef MNN_REDUCE_SIZE
 
 class CPUGridSampleGrad : public CPUGridSample {
 public:
@@ -185,7 +185,7 @@ public:
             auto _inputPtr = inputPtr + b * inH * inW * core->pack * core->bytes;
             auto _gridPtr = gridPtr + b * gridTensor->buffer().dim[0].stride * core->bytes;
             auto _outputPtr = outputPtr + b * outH * outW * core->pack * core->bytes;
-            core->MNNGridSampleComputeCord((float *)cordPtr, (const float *)_gridPtr, inH, inW, outH, outW, gridTensor->buffer().dim[1].stride, mAlignCorners);
+            core->MNNGridSampleComputeCord((float *)cordPtr, (const float *)_gridPtr, inH, inW, outH, outW, mAlignCorners);
             // Compute cord
             for (int index=0; index < tileCount; index++) {
                 auto c = index / outH;
@@ -201,7 +201,7 @@ public:
         return NO_ERROR;
     }
 };
-
+#endif
 class CPUGridSampleCreator : public CPUBackend::Creator {
 public:
     virtual Execution *onCreate(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs,
@@ -216,7 +216,11 @@ public:
             return nullptr;
         }
         if (gridSampleParam->backward()) {
+#ifndef MNN_REDUCE_SIZE
             return new CPUGridSampleGrad(backend, mode, paddingMode, alignCorners);;
+#else
+            return nullptr;
+#endif
         }
         if (outputs[0]->dimensions() > 4 && core->MNNGridSampleInterp3D == nullptr) {
             MNN_ERROR("Don't support gridsampler grad for pack = %d, float bytes = %d\n", core->pack, core->bytes);

@@ -154,6 +154,7 @@ static PyObject* PyMNN_Module_get_info(PyMNN_Module *self, PyObject *args) {
     }
     auto res = PyDict_New();
     PyDict_SetItemString(res, "version", char2Object(info->version.c_str()));
+    PyDict_SetItemString(res, "bizCode", char2Object(info->bizCode.c_str()));
     {
         auto names = PyList_New(info->inputNames.size());
         for (int i=0; i<info->inputNames.size(); ++i) {
@@ -344,15 +345,37 @@ static PyObject* PyMNNRuntimeManager_set_mode(PyMNNRuntimeManager *self, PyObjec
 }
 static PyObject* PyMNNRuntimeManager_set_hint(PyMNNRuntimeManager *self, PyObject *args) {
     int type_val = 0;
-    int num_val = 0;
-    if (!PyArg_ParseTuple(args, "ii", &type_val, &num_val)) {
+    PyObject* num_val = nullptr;
+    if (!PyArg_ParseTuple(args, "iO", &type_val, &num_val)) {
         PyErr_SetString(PyExc_Exception,
-                        "PyMNNRuntimeManager_set_hint: Not interger input and interger input");
-        return NULL;
+                        "PyMNNRuntimeManager_set_hint: Not interger input and interger/list/tuple input");
+        return nullptr;
     }
 
     auto type = (MNN::Interpreter::HintMode)type_val;
-    (*(self->ptr))->setHint(type, num_val);
+    if (PyList_Check(num_val)) {
+        size_t size = PyList_Size(num_val);
+        int* list = new int[size];
+        for (int i = 0; i < size; i++) {
+            list[i] = static_cast<int>(PyLong_AsLong(PyList_GetItem(num_val, i)));
+        }
+        (*(self->ptr))->setHint(type, list, size);
+        delete[] list;
+    } else if (PyTuple_Check(num_val)) {
+        size_t size = PyTuple_Size(num_val);
+        int* list = new int[size];
+        for (int i = 0; i < size; i++) {
+            list[i] = static_cast<int>(PyLong_AsLong(PyTuple_GetItem(num_val, i)));
+        }
+        (*(self->ptr))->setHint(type, list, size);
+        delete[] list;
+    } else if (PyLong_Check(num_val)) {
+        (*(self->ptr))->setHint(type, static_cast<int>(PyLong_AsLong(num_val)));
+    } else {
+        PyErr_SetString(PyExc_Exception,
+                        "PyMNNRuntimeManager_set_hint: num_val must be a list, tuple or int");
+        return nullptr;
+    }
     Py_RETURN_NONE;
 }
 
@@ -379,6 +402,7 @@ static PyObject* PyMNNNN_create_runtime_manager(PyObject *self, PyObject *args) 
     }
     for (auto i = 0; i < PySequence_Size(dicts); ++i) {
         backendConfig[i].sharedContext = nullptr;
+        config[i].numThread = 1;
         config[i].backendConfig = &backendConfig[i];
         bool ret = getScheduleConfig(PySequence_GetItem(dicts, i), config[i]);
         if (!ret) {
@@ -392,7 +416,7 @@ static PyObject* PyMNNNN_create_runtime_manager(PyObject *self, PyObject *args) 
     } else {
         m_ptr = Executor::RuntimeManager::createRuntimeManager(configs);
     }
-    
+
     if (m_ptr == nullptr) {
         printf("config size:%d\n", configs.size());
         std::string mnn_errno = "create_runtime_manager failed ";

@@ -20,36 +20,22 @@ ReluExecution::ReluExecution(const std::vector<Tensor *> &inputs, const MNN::Op 
     int preluSize             = mPreluParamPtr->slopeCount();
     const float *preluDataPtr = mPreluParamPtr->slope()->data();
     
-    int buffer_size = ALIGN_UP4(preluSize);
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()) {
-        buffer_size *= sizeof(half_float::half);
-    } else {
-        buffer_size *= sizeof(float);
-    }
+    size_t buffer_size = ALIGN_UP4(preluSize) * sizeof(float);
     cl::Buffer preluBuffer(mOpenCLBackend->getOpenCLRuntime()->context(), CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, buffer_size);
     cl_int error;
     auto preluDataPtrCL = mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(
         preluBuffer, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
     if(preluDataPtrCL != nullptr && error == CL_SUCCESS){
-        if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()){
-            for(int i=0; i<preluSize; i++) {
-                ((half_float::half*)preluDataPtrCL)[i] = (half_float::half)(preluDataPtr[i]);
-            }
-            for(int i=preluSize; i<ALIGN_UP4(preluSize); i++) {
-                ((half_float::half*)preluDataPtrCL)[i] = (half_float::half)(0.0f);
-            }
-        }else{
-            ::memset(preluDataPtrCL, 0, buffer_size);
-            ::memcpy(preluDataPtrCL, preluDataPtr, preluSize * sizeof(float));
-        }
+        ::memset(preluDataPtrCL, 0, buffer_size);
+        ::memcpy(preluDataPtrCL, preluDataPtr, preluSize * sizeof(float));
     }else{
         MNN_ERROR("Map error preluDataPtrCL == nullptr \n");
     }
     mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueUnmapMemObject(preluBuffer, preluDataPtrCL);
     mPreluParam.reset(Tensor::createDevice<float>({1, 1, 1, preluSize}));
-    mOpenCLBackend->onAcquireBuffer(mPreluParam.get(), Backend::STATIC);
+    OPENCL_CHECK_ALLOC_CTOR(mOpenCLBackend->onAcquireBuffer(mPreluParam.get(), Backend::STATIC));
     copyBufferToImage(mOpenCLBackend->getOpenCLRuntime(), preluBuffer, openCLImage(mPreluParam.get()),
-                      UP_DIV(preluSize, 4), 1);
+                      UP_DIV(preluSize, 4), 1, mOpenCLBackend->getPrecision());
 }
 ReluExecution::~ReluExecution() {
     backend()->onReleaseBuffer(mPreluParam.get(), Backend::STATIC);
@@ -68,7 +54,7 @@ ErrorCode ReluExecution::onEncode(const std::vector<Tensor *> &inputs, const std
     cl::NDRange globalSize = {(uint32_t)UP_DIV(imageWidth, 4) * 4, (uint32_t)UP_DIV(imageHeight, 4) * 4};
     
     auto mOpenCLBackend  = static_cast<OpenCLBackend *>(backend());
-    mUnits[0].kernel = mOpenCLBackend->getOpenCLRuntime()->buildKernel("binary", "binary_prelu", {"-DOPERATOR=select(in0*in1,in0,in0>=(float4)0)"}, inputs[0], outputs[0]);
+    mUnits[0].kernel = mOpenCLBackend->getOpenCLRuntime()->buildKernel("binary", "binary_prelu", {"-DOPERATOR=select(in0*in1,in0,in0>=(float4)0)"}, mOpenCLBackend->getPrecision(), inputs[0], outputs[0]);
     cl_int ret = CL_SUCCESS;
     ret |= mUnits[0].kernel->get().setArg(0, openCLImage(inputs[0]));
     ret |= mUnits[0].kernel->get().setArg(1, openCLImage(mPreluParam.get()));
@@ -106,27 +92,23 @@ public:
             if (isRadeonGpu) {
                 std::string temp = "(in<=(float4)((float)%f)?(float4)((float)%f):(in>=(float4)((float)%f)?(float4)((float)%f):in))";
                 sprintf(storage, temp.c_str(), minValue, minValue, maxValue, maxValue);
-                return new UnaryExecution(storage, op, backend);
+                OPENCL_CREATOR_CHECK(new UnaryExecution(storage, op, backend));
             }
             std::string temp = "clamp(in,(float4)((float)%f),(float4)((float)%f))";
             sprintf(storage, temp.c_str(), minValue, maxValue);
-            return new UnaryExecution(storage, op, backend);
+            OPENCL_CREATOR_CHECK(new UnaryExecution(storage, op, backend));
         }
         if (op->type() == OpType_ReLU) {
             if (op->main_as_Relu()->slope() == 0.0f) {
-                if (isRadeonGpu) {
-                    return new UnaryExecution("(in>(float4)((float)0)?in:(float4)((float)0))", op, backend);
-                }
-                return new UnaryExecution("fmax(in,(float4)((float)0))", op, backend);
+                if (isRadeonGpu) OPENCL_CREATOR_CHECK(new UnaryExecution("(in>(float4)((float)0)?in:(float4)((float)0))", op, backend));
+                OPENCL_CREATOR_CHECK(new UnaryExecution("fmax(in,(float4)((float)0))", op, backend));
             }
             auto slope         = op->main_as_Relu()->slope();
             char slopeCStr[30] = {};
             sprintf(slopeCStr, "%.8f", slope);
             std::string slopeStr = slopeCStr;
-            if (isRadeonGpu) {
-                return new UnaryExecution("in<(float4)((float)0)?(float)(" + slopeStr + "f)*in:in", op, backend);
-            }
-            return new UnaryExecution("select((float)(" + slopeStr + "f)*in,in,in>=(float4)((float)0))", op, backend);
+            if (isRadeonGpu) OPENCL_CREATOR_CHECK(new UnaryExecution("in<(float4)((float)0)?(float)(" + slopeStr + "f)*in:in", op, backend));
+            OPENCL_CREATOR_CHECK(new UnaryExecution("select((float)(" + slopeStr + "f)*in,in,in>=(float4)((float)0))", op, backend));
         }
         if (op->type() == OpType_PReLU) {
             if (op->main_as_PRelu()->slopeCount() == 1) {
@@ -134,13 +116,11 @@ public:
                 char slopeCStr[30] = {};
                 sprintf(slopeCStr, "%.8f", slope);
                 std::string slopeStr = slopeCStr;
-                if (isRadeonGpu) {
-                    return new UnaryExecution("in<(float4)((float)0)?(float)(" + slopeStr + "f)*in:in", op, backend);
-                }
-                return new UnaryExecution("select((float)(" + slopeStr + "f)*in,in,in>=(float4)((float)0))", op, backend);
+                if (isRadeonGpu) OPENCL_CREATOR_CHECK(new UnaryExecution("in<(float4)((float)0)?(float)(" + slopeStr + "f)*in:in", op, backend));
+                OPENCL_CREATOR_CHECK(new UnaryExecution("select((float)(" + slopeStr + "f)*in,in,in>=(float4)((float)0))", op, backend));
             }
             // FUNC_PRINT(1);
-            return new ReluExecution(inputs, op, backend);
+            OPENCL_CREATOR_CHECK(new ReluExecution(inputs, op, backend));
         }
         return nullptr;
     }

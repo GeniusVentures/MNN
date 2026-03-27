@@ -33,6 +33,14 @@ rm -rf tools
 cat __init__.py | sed '/from . import tools/d' > __init__.py.tmp
 mv __init__.py.tmp __init__.py
 
+# rm -rf llm
+# cat __init__.py | sed '/from . import llm/d' > __init__.py.tmp
+# mv __init__.py.tmp __init__.py
+
+rm -rf audio
+cat __init__.py | sed '/from . import audio/d' > __init__.py.tmp
+mv __init__.py.tmp __init__.py
+
 if [ -z $train_api ]; then
     rm -rf data optim
     cat __init__.py | sed '/from . import data/d' | sed '/from . import optim/d' > __init__.py.tmp
@@ -43,7 +51,7 @@ find . -name __pycache__ | xargs rm -rf
 if cmdExist pyenv; then
     pyenv global $py_version
 fi
-python -c "import compileall; compileall.compile_dir('/tmp/mnn_py/MNN', force=True)"
+python2 -c "import compileall; compileall.compile_dir('/tmp/mnn_py/MNN', force=True)"
 find . -name "*.py" | xargs rm -rf
 cd ..
 zip -r MNN.zip MNN

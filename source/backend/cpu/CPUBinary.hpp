@@ -30,7 +30,13 @@ private:
     int mNeedBroadcastIndex = -1;
     int mTotalSize;
     int mActivationType = 0;
+    int mThreadNum;
+    int mWorkDiv;
     std::shared_ptr<Execution> mActivationExe;
+    std::pair<std::function<void(int)>, int> mTask;
+    uint8_t* mInput0Ptr = nullptr;
+    uint8_t* mOutputPtr = nullptr;
+    uint8_t* mInput1Ptr = nullptr;
 };
 } // namespace MNN
 #endif /* CPUBinary_hpp */

@@ -8,149 +8,40 @@
 #ifdef MNN_USE_THREAD_POOL
 #include "backend/cpu/ThreadPool.hpp"
 #include <string.h>
+#include <unordered_map>
 #include <MNN/MNNDefine.h>
-
-//#define MNN_THREAD_LOCK_CPU
-
-#ifdef MNN_THREAD_LOCK_CPU
-#include <stdint.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#include <algorithm>
-#endif
+#include "ThreadPool.hpp"
 
 #define MNN_THREAD_POOL_MAX_TASKS 2
 namespace MNN {
-ThreadPool* ThreadPool::gInstance = nullptr;
+static std::unordered_map<long int, ThreadPool*> gInstances;
 static std::mutex gInitMutex;
-int ThreadPool::init(int number) {
-    if (1 >= number) {
-        return 1;
+int ThreadPool::init(int numberThread, unsigned long cpuMask, ThreadPool*& threadPool) {
+    if (1 >= numberThread) {
+        numberThread = 1;
     }
     std::lock_guard<std::mutex> _l(gInitMutex);
-    if (nullptr != gInstance) {
-        if (gInstance->number() < number) {
-            return gInstance->number();
-        }
+
+    if (gInstances.find(cpuMask) == gInstances.end()){
+        gInstances[cpuMask] = new ThreadPool(numberThread);
     }
-    if (nullptr == gInstance) {
-        gInstance = new ThreadPool(number);
+    threadPool = gInstances[cpuMask];
+    if (gInstances[cpuMask]->numberThread() < numberThread){
+        return gInstances[cpuMask]->numberThread();
     }
-    return number;
+    return numberThread;
 }
+
 void ThreadPool::destroy() {
     std::lock_guard<std::mutex> _l(gInitMutex);
-    if (nullptr != gInstance) {
-        delete gInstance;
-        gInstance = nullptr;
-    }
-}
-#ifdef MNN_THREAD_LOCK_CPU
-static int getNumberOfCPU() {
-    FILE* fp = fopen("/proc/cpuinfo", "rb");
-    if (!fp) {
-        return 1;
-    }
-    int number = 0;
-    char buffer[1024];
-    while (!feof(fp)) {
-        char* str = fgets(buffer, 1024, fp);
-        if (!str) {
-            break;
-        }
-        if (memcmp(buffer, "processor", 9) == 0) {
-            number++;
+    for (auto i= gInstances.begin(); i != gInstances.end(); i++){
+        if (i->second){
+            delete i->second;
         }
     }
-    fclose(fp);
-    if (number < 1) {
-        number = 1;
-    }
-    return number;
+    gInstances.clear();
 }
 
-static int getCPUMaxFreqKHz(int cpuID) {
-    char path[256];
-    sprintf(path, "/sys/devices/system/cpu/cpufreq/stats/cpu%d/time_in_state", cpuID);
-    FILE* fp = fopen(path, "rb");
-    if (!fp) {
-        sprintf(path, "/sys/devices/system/cpu/cpu%d/cpufreq/stats/time_in_state", cpuID);
-        fp = fopen(path, "rb");
-        if (!fp) {
-            sprintf(path, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", cpuID);
-            fp = fopen(path, "rb");
-            if (!fp) {
-                return -1;
-            }
-            int maxfrequency = -1;
-            fscanf(fp, "%d", &maxfrequency);
-            fclose(fp);
-            return maxfrequency;
-        }
-    }
-    int maxfrequency = 0;
-    while (!feof(fp)) {
-        int frequency = 0;
-        int history   = fscanf(fp, "%d %*d", &frequency);
-        if (history != 1) {
-            break;
-        }
-        if (frequency > maxfrequency) {
-            maxfrequency = frequency;
-        }
-    }
-    fclose(fp);
-    return maxfrequency;
-}
-
-static std::vector<int> sortCPUIDByMaxFrequency(int maxNumbers) {
-    const int cpuNumbers = getNumberOfCPU();
-    if (cpuNumbers == 0) {
-        return {};
-    }
-    std::vector<int> cpuIDs;
-    std::vector<std::pair<int, int>> cpusFrequency;
-    cpusFrequency.resize(cpuNumbers);
-    for (int i = 0; i < cpuNumbers; ++i) {
-        int frequency           = getCPUMaxFreqKHz(i);
-        cpusFrequency[i].first  = frequency;
-        cpusFrequency[i].second = i;
-    }
-    maxNumbers = std::min(maxNumbers, cpuNumbers);
-    std::sort(cpusFrequency.rbegin(), cpusFrequency.rend());
-    cpuIDs.resize(maxNumbers);
-    for (int i = 0; i < maxNumbers; ++i) {
-        cpuIDs[i] = cpusFrequency[i].second;
-    }
-    // FUNC_PRINT(cpusFrequency[0].first);
-    return cpuIDs;
-}
-
-static int setSchedAffinity(const std::vector<int>& cpuIDs) {
-#define __NCPUBITS (8 * sizeof(unsigned long))
-    typedef struct {
-        unsigned long __bits[CPU_SETSIZE / __NCPUBITS];
-    } cpu_set_t;
-
-    // set affinity for thread
-
-    pid_t pid = gettid();
-    cpu_set_t mask;
-    CPU_ZERO(&mask);
-    for (int i = 1; i < (int)cpuIDs.size(); i++) {
-        CPU_SET(cpuIDs[i], &mask);
-    }
-
-    int syscallret = syscall(__NR_sched_setaffinity, pid, sizeof(mask), &mask);
-    if (syscallret) {
-        MNN_PRINT("syscall error %d\n", syscallret);
-        return -1;
-    }
-
-    return 0;
-}
-
-#endif // arch
 ThreadPool::ThreadPool(int numberThread) {
     mNumberThread = numberThread;
     mActiveCount  = 0;
@@ -162,24 +53,14 @@ ThreadPool::ThreadPool(int numberThread) {
             mTasks[t].second.emplace_back(new std::atomic_bool{false});
         }
     }
-#ifdef MNN_THREAD_LOCK_CPU
-    std::vector<int> sortedCPUIDs = sortCPUIDByMaxFrequency(numberThread);
-#endif
     for (int i = 1; i < mNumberThread; ++i) {
         int threadIndex = i;
-#ifdef MNN_THREAD_LOCK_CPU
-        mWorkers.emplace_back([this, sortedCPUIDs, threadIndex]() {
-#else
         mWorkers.emplace_back([this, threadIndex]() {
-#endif
-#ifdef MNN_THREAD_LOCK_CPU
-            int res = setSchedAffinity(sortedCPUIDs);
-#endif
             while (!mStop) {
                 while (mActiveCount > 0) {
                     for (int i = 0; i < MNN_THREAD_POOL_MAX_TASKS; ++i) {
                         if (*mTasks[i].second[threadIndex]) {
-                            mTasks[i].first.first(threadIndex);
+                            mTasks[i].first->first(threadIndex);
                             { *mTasks[i].second[threadIndex] = false; }
                         }
                     }
@@ -209,57 +90,46 @@ ThreadPool::~ThreadPool() {
 }
 
 int ThreadPool::acquireWorkIndex() {
-    if (nullptr == gInstance) {
-        return -1;
-    }
-    std::lock_guard<std::mutex> _l(gInstance->mQueueMutex);
+    std::lock_guard<std::mutex> _l(mQueueMutex);
     for (int i = 0; i < MNN_THREAD_POOL_MAX_TASKS; ++i) {
-        if (gInstance->mTaskAvailable[i]) {
-            gInstance->mTaskAvailable[i] = false;
+        if (mTaskAvailable[i]) {
+            mTaskAvailable[i] = false;
             return i;
         }
     }
     return -1;
 }
 void ThreadPool::releaseWorkIndex(int index) {
-    if (nullptr == gInstance) {
-        return;
-    }
     if (index < 0 || index >= MNN_THREAD_POOL_MAX_TASKS) {
         return;
     }
-    std::lock_guard<std::mutex> _l(gInstance->mQueueMutex);
-    gInstance->mTaskAvailable[index] = true;
+    std::lock_guard<std::mutex> _l(mQueueMutex);
+    mTaskAvailable[index] = true;
 }
 
 void ThreadPool::active() {
-    if (nullptr == gInstance) {
-        return;
-    }
     {
-        std::lock_guard<std::mutex> _l(gInstance->mQueueMutex);
-        gInstance->mActiveCount++;
+        std::lock_guard<std::mutex> _l(mQueueMutex);
+        mActiveCount++;
     }
-    gInstance->mCondition.notify_all();
+    mCondition.notify_all();
 }
 void ThreadPool::deactive() {
-    if (nullptr == gInstance) {
-        return;
-    }
-    gInstance->mActiveCount--;
+    mActiveCount--;
 }
 
-void ThreadPool::enqueue(TASK&& task, int index) {
+void ThreadPool::enqueue(TASK* taskp, int index) {
+    auto& task = *taskp;
     if (1 >= task.second || 0 > index) {
         for (int i = 0; i < task.second; ++i) {
             task.first(i);
         }
         return;
     }
-    MNN_ASSERT(nullptr != gInstance);
-    gInstance->enqueueInternal(std::move(task), index);
+    enqueueInternal(taskp, index);
 }
-void ThreadPool::enqueueInternal(TASK&& task, int index) {
+void ThreadPool::enqueueInternal(TASK* taskp, int index) {
+    auto& task = *taskp;
     if (mActiveCount == 0) {
         for (int i = 0; i < task.second; ++i) {
             task.first(i);
@@ -267,24 +137,25 @@ void ThreadPool::enqueueInternal(TASK&& task, int index) {
         return;
     }
     int workSize = task.second;
+    TASK* tmpTask = nullptr;
     if (workSize > mNumberThread) {
-        mTasks[index].first = std::make_pair(
-            [workSize, &task, this](int tId) {
-                for (int v = tId; v < workSize; v += mNumberThread) {
-                    task.first(v);
-                }
-            },
-            mNumberThread);
+        tmpTask = new TASK;
+        *tmpTask = std::make_pair([workSize, &task, this](int tId) {
+            for (int v = tId; v < workSize; v += mNumberThread) {
+                task.first(v);
+            }
+        }, mNumberThread);
+        mTasks[index].first = tmpTask;
         workSize = mNumberThread;
     } else {
-        mTasks[index].first = std::move(task);
+        mTasks[index].first = taskp;
     }
     {
         for (int i = 1; i < workSize; ++i) {
             *mTasks[index].second[i] = true;
         }
     }
-    mTasks[index].first.first(0);
+    mTasks[index].first->first(0);
     bool complete = true;
     do {
         complete = true;
@@ -297,6 +168,9 @@ void ThreadPool::enqueueInternal(TASK&& task, int index) {
         std::this_thread::yield();
         // FUNC_PRINT(notComplete);
     } while (!complete);
+    if (nullptr != tmpTask) {
+        delete tmpTask;
+    }
 }
 } // namespace MNN
 #endif

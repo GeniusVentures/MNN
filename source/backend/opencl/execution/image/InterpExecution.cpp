@@ -27,12 +27,15 @@ InterpExecution::InterpExecution(const std::vector<Tensor *> &inputs, const MNN:
     std::set<std::string> buildOptions;
     std::string kernelName = "interp";
     if (op->main_as_Interp()->resizeType() == 1) {
-        unit.kernel                = runtime->buildKernel("nearest", kernelName, buildOptions);
+        unit.kernel                = runtime->buildKernel("nearest", kernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     }else if (op->main_as_Interp()->resizeType() == 4) {
         buildOptions.emplace("-DUSE_ROUND");
-        unit.kernel                 = runtime->buildKernel("nearest", kernelName, buildOptions);
+        unit.kernel                 = runtime->buildKernel("nearest", kernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     }else {
-        unit.kernel                 = runtime->buildKernel("interp", kernelName, buildOptions);
+        unit.kernel                 = runtime->buildKernel("interp", kernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     }
 
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel ));
@@ -80,7 +83,11 @@ ErrorCode InterpExecution::onEncode(const std::vector<Tensor *> &inputs, const s
     MNN_CHECK_CL_SUCCESS(ret, "setArg InterpExecution");
 
     std::string name = "interp";
-    mLWS = localWS3DDefault(mGWS, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), name, unit.kernel).first;
+    std::string programName = "interp";
+    if (mOp->main_as_Interp()->resizeType() == 1 || mOp->main_as_Interp()->resizeType() == 4) {
+        programName = "nearest";
+    }
+    mLWS = localWS3DDefault(mGWS, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), name, unit.kernel, mOpenCLBackend->getCLTuneLevel(), programName).first;
     mOpenCLBackend->recordKernel3d(unit.kernel, mGWS, mLWS);
     unit.globalWorkSize = {mGWS[0], mGWS[1], mGWS[2]};
     unit.localWorkSize = {mLWS[0], mLWS[1], mLWS[2]};
@@ -96,7 +103,7 @@ public:
             MNN_PRINT("openCL not support interp type:%d, fallback to cpu\n", op->main_as_Interp()->resizeType());
             return nullptr;
         }
-        return new InterpExecution(inputs, op, backend);
+        OPENCL_CREATOR_CHECK(new InterpExecution(inputs, op, backend));
     }
 };
 

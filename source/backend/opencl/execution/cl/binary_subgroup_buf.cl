@@ -19,8 +19,23 @@ __kernel void binary_buf_c4_c4_c4(__private int global_dim0, __private int globa
     const int batch_idx = get_global_id(2);
     const int channel_idx = get_global_id(1);
 
-    const int offset = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset*isFull.x));
+    int4 in1 = convert_int4(vload4(0, input1 + offset*isFull.x));
+    if(isFull.x == 0) {
+        in0 = (int4)(in0.x, in0.x, in0.x, in0.x);
+    }
+    if(isFull.y == 0) {
+        in1 = (int4)(in1.x, in1.x, in1.x, in1.x);
+    }
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    if(activationType == 1) {
+        out = out > 0 ? out : 0;
+    }
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset*isFull.x));
     float4 in1 = convert_float4(vload4(0, input1 + offset*isFull.y));
     if(isFull.x == 0) {
@@ -35,6 +50,7 @@ __kernel void binary_buf_c4_c4_c4(__private int global_dim0, __private int globa
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + offset);
 }
 
@@ -57,9 +73,23 @@ __kernel void binary_buf_c4_c4_c16(__private int global_dim0, __private int glob
     const int dst_width = shape.z + output_pad_left + output_pad_right;
     const int channe_out_idx = channel_idx >> 2;
 
-    const int offset = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int dst_offset =  (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width+w_idx+output_pad_left) * 16 + (channel_idx % 4) * 4;
-    
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset*isFull.x));
+    int4 in1 = convert_int4(vload4(0, input1 + offset*isFull.x));
+    if(isFull.x == 0) {
+        in0 = (int4)(in0.x, in0.x, in0.x, in0.x);
+    }
+    if(isFull.y == 0) {
+        in1 = (int4)(in1.x, in1.x, in1.x, in1.x);
+    }
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    if(activationType == 1) {
+        out = out > 0 ? out : 0;
+    }
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset*isFull.x));
     float4 in1 = convert_float4(vload4(0, input1 + offset*isFull.y));
     if(isFull.x == 0) {
@@ -73,6 +103,7 @@ __kernel void binary_buf_c4_c4_c16(__private int global_dim0, __private int glob
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + dst_offset);
     if(w_idx == 0){
         int pad_offset = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width) * 16 + (channel_idx % 4) * 4;
@@ -105,9 +136,23 @@ __kernel void binary_buf_c4_c16_c4(__private int global_dim0, __private int glob
     const int src_width = shape.z + input1_pad_left + input1_pad_right;
     const int channe_out_idx = channel_idx >> 2;
 
-    const int offset0 = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset0 = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int offset1 = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*src_width+w_idx+input1_pad_left) * 16 + (channel_idx % 4) * 4;
-
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset0*isFull.x));
+    int4 in1 = convert_int4(vload4(0, input1 + offset1*isFull.x));
+    if(isFull.x == 0) {
+        in0 = (int4)(in0.x, in0.x, in0.x, in0.x);
+    }
+    if(isFull.y == 0) {
+        in1 = (int4)(in1.x, in1.x, in1.x, in1.x);
+    }
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    if(activationType == 1) {
+        out = out > 0 ? out : 0;
+    }
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset0*isFull.x));
     float4 in1 = convert_float4(vload4(0, input1 + offset1*isFull.y));
     if(isFull.x == 0) {
@@ -120,6 +165,7 @@ __kernel void binary_buf_c4_c16_c4(__private int global_dim0, __private int glob
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + offset0);
 }
 
@@ -142,9 +188,23 @@ __kernel void binary_buf_c16_c4_c4(__private int global_dim0, __private int glob
     const int src_width = shape.z + input0_pad_left + input0_pad_right;
     const int channe_out_idx = channel_idx >> 2;
 
-    const int offset1 = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset1 = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int offset0 = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*src_width+w_idx+input0_pad_left) * 16 + (channel_idx % 4) * 4;
-    
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset0*isFull.x));
+    int4 in1 = convert_int4(vload4(0, input1 + offset1*isFull.x));
+    if(isFull.x == 0) {
+        in0 = (int4)(in0.x, in0.x, in0.x, in0.x);
+    }
+    if(isFull.y == 0) {
+        in1 = (int4)(in1.x, in1.x, in1.x, in1.x);
+    }
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    if(activationType == 1) {
+        out = out > 0 ? out : 0;
+    }
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset0*isFull.x));
     float4 in1 = convert_float4(vload4(0, input1 + offset1*isFull.y));
     if(isFull.x == 0) {
@@ -158,6 +218,7 @@ __kernel void binary_buf_c16_c4_c4(__private int global_dim0, __private int glob
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + offset1);
 }
 
@@ -181,10 +242,24 @@ __kernel void binary_buf_c4_c16_c16(__private int global_dim0, __private int glo
     const int dst_width = shape.z + output_pad_left + output_pad_right;
     const int channe_out_idx = channel_idx >> 2;
 
-    const int offset0 = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset0 = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int offset1 = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*src_width+w_idx+input1_pad_left) * 16 + (channel_idx % 4) * 4;
     const int dst_offset =  (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width+w_idx+output_pad_left) * 16 + (channel_idx % 4) * 4;
-    
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset0*isFull.x));
+    int4 in1 = convert_int4(vload4(0, input1 + offset1*isFull.x));
+    if(isFull.x == 0) {
+        in0 = (int4)(in0.x, in0.x, in0.x, in0.x);
+    }
+    if(isFull.y == 0) {
+        in1 = (int4)(in1.x, in1.x, in1.x, in1.x);
+    }
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    if(activationType == 1) {
+        out = out > 0 ? out : 0;
+    }
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset0*isFull.x));
     float4 in1 = convert_float4(vload4(0, input1 + offset1*isFull.y));
     if(isFull.x == 0) {
@@ -198,6 +273,7 @@ __kernel void binary_buf_c4_c16_c16(__private int global_dim0, __private int glo
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + dst_offset);
     if(w_idx == 0){
         int pad_offset = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width) * 16 + (channel_idx % 4) * 4;
@@ -231,10 +307,24 @@ __kernel void binary_buf_c16_c4_c16(__private int global_dim0, __private int glo
     const int dst_width = shape.z + output_pad_left + output_pad_right;
     const int channe_out_idx = channel_idx >> 2;
 
-    const int offset1 = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset1 = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int offset0 = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*src_width+w_idx+input0_pad_left) * 16 + (channel_idx % 4) * 4;
     const int dst_offset =  (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width+w_idx+output_pad_left) * 16 + (channel_idx % 4) * 4;
-   
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset0*isFull.x));
+    int4 in1 = convert_int4(vload4(0, input1 + offset1*isFull.x));
+    if(isFull.x == 0) {
+        in0 = (int4)(in0.x, in0.x, in0.x, in0.x);
+    }
+    if(isFull.y == 0) {
+        in1 = (int4)(in1.x, in1.x, in1.x, in1.x);
+    }
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    if(activationType == 1) {
+        out = out > 0 ? out : 0;
+    }
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset0*isFull.x));
     float4 in1 = convert_float4(vload4(0, input1 + offset1*isFull.y));
     if(isFull.x == 0) {
@@ -248,6 +338,7 @@ __kernel void binary_buf_c16_c4_c16(__private int global_dim0, __private int glo
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + dst_offset);
     if(w_idx == 0){
         int pad_offset = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width) * 16 + (channel_idx % 4) * 4;
@@ -277,13 +368,18 @@ __kernel void prelu_buf_c4_c4(__private int global_dim0, __private int global_di
     const int batch_idx = get_global_id(2);
     const int channel_idx = get_global_id(1);
     
-    const int offset0 = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset0 = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int offset1 = channel_idx * 4;
-    
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset0));
+    int4 in1 = convert_int4(vload4(0, input1 + offset1));
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset0));
     float4 in1 = convert_float4(vload4(0, input1 + offset1));
     float4 out = OPERATOR;
-
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + offset0);
 }
 
@@ -304,14 +400,19 @@ __kernel void prelu_buf_c4_c16(__private int global_dim0, __private int global_d
     const int dst_width = shape.z + output_pad_left + output_pad_right;
     const int channe_out_idx = channel_idx >> 2;
     
-    const int offset0 = (((batch_idx*channel4+channel_idx)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    const int offset0 = (((batch_idx+channel_idx*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
     const int offset1 = channel_idx * 4;
     const int offset =  (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width+w_idx+output_pad_left) * 16 + (channel_idx % 4) * 4;
-
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(vload4(0, input0 + offset0));
+    int4 in1 = convert_int4(vload4(0, input1 + offset1));
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    #else
     float4 in0 = convert_float4(vload4(0, input0 + offset0));
     float4 in1 = convert_float4(vload4(0, input1 + offset1));
     float4 out = OPERATOR;
-    
+    #endif
     vstore4(CONVERT_OUTPUT4(out), 0, output + offset);
     if(w_idx == 0){
         int pad_offset = (((batch_idx*channel16+channe_out_idx)*shape.y+h_idx)*dst_width) * 16 + (channel_idx % 4) * 4;
@@ -344,11 +445,17 @@ __kernel void prelu_buf_c16_c16(__private int global_dim0, __private int global_
     const int offset0 = (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*src_width+w_idx+input0_pad_left) * 16;
     const int offset1 = channel_idx * 16;
     const int offset =  (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*dst_width+w_idx+output_pad_left) * 16;
-
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0))));
+    int4 in1 = (int4)(AS_INPUT_DATA(INTEL_SUB_GROUP_READ((__global INTEL_DATA*)(input1 + offset1))));
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    #else
     float4 in0 = convert_float4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0))));
     float4 in1 = (float4)(AS_INPUT_DATA(INTEL_SUB_GROUP_READ((__global INTEL_DATA*)(input1 + offset1))));
     
     float4 out = OPERATOR;
+    #endif
     {
         if (w_idx + 4 > shape.z) {
             for (int i = 0; i < shape.z % 4; i++) {
@@ -385,22 +492,28 @@ __kernel void prelu_buf_c16_c4(__private int global_dim0, __private int global_d
     const int channel_idx = get_group_id(1);
     const int sglid = get_sub_group_local_id();
     const int src_width = shape.z + input0_pad_left + input0_pad_right;
-    const int width_height = shape.z * shape.y * 4;
+    const int batch_width_height = shape.x * shape.z * shape.y * 4;
 
     const int offset0 = (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*src_width+w_idx+input0_pad_left) * 16;
     const int offset1 = channel_idx * 16;
-    const int offset =  (((batch_idx*channel4+(channel_idx<<2))*shape.y+h_idx)*shape.z+w_idx) * 4;
-
+    const int offset =  (((batch_idx+(channel_idx<<2)*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = convert_int4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0))));
+    int4 in1 = (int4)(AS_INPUT_DATA(INTEL_SUB_GROUP_READ((__global INTEL_DATA*)(input1 + offset1))));
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    #else
     float4 in0 = convert_float4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0))));
     float4 in1 = (float4)(AS_INPUT_DATA(INTEL_SUB_GROUP_READ((__global INTEL_DATA*)(input1 + offset1))));
     
     float4 out = OPERATOR;
+    #endif
 
     const int lid_x = sglid % 4;
     const int lid_y = sglid / 4;
     int block_size = w_idx + 4 > shape.z ? (shape.z % 4) : 4;
     for (int i = 0; i < block_size; i++) {
-        output[offset + i * 4 + lid_y * width_height + lid_x] = (OUTPUT_TYPE)out[i];
+        output[offset + i * 4 + lid_y * batch_width_height + lid_x] = (OUTPUT_TYPE)out[i];
     }
 }
 
@@ -429,11 +542,17 @@ __kernel void binary_buf_c16_c16_c16(__private int global_dim0, __private int gl
     const int offset0 = (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*src0_width+w_idx+input0_pad_left) * 16;
     const int offset1 = (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*src1_width+w_idx+input1_pad_left) * 16;
     const int offset =  (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*dst_width+w_idx+output_pad_left) * 16;
-
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = isFull.x ? convert_int4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0)))) : (int4)(input0[0]);
+    int4 in1 = isFull.y ? convert_int4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input1 + offset1)))) : (int4)(input1[0]);
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    #else
     float4 in0 = isFull.x ? convert_float4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0)))) : (float4)(input0[0]);
     float4 in1 = isFull.y ? convert_float4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input1 + offset1)))) : (float4)(input1[0]);
     
     float4 out = OPERATOR;
+    #endif
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
@@ -478,16 +597,22 @@ __kernel void binary_buf_c16_c16_c4(__private int global_dim0, __private int glo
     const int sglid = get_sub_group_local_id();
     const int src0_width = shape.z + input0_pad_left + input0_pad_right;
     const int src1_width = shape.z + input1_pad_left + input1_pad_right;
-    const int width_height = shape.z * shape.y * 4;
+    const int batch_width_height = shape.x * shape.z * shape.y * 4;
 
     const int offset0 = (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*src0_width+w_idx+input0_pad_left) * 16;
     const int offset1 = (((batch_idx*channel16+channel_idx)*shape.y+h_idx)*src1_width+w_idx+input1_pad_left) * 16;
-    const int offset =  (((batch_idx*channel4+(channel_idx << 2))*shape.y+h_idx)*shape.z+w_idx) * 4;
-
+    const int offset =  (((batch_idx+(channel_idx << 2)*shape.x)*shape.y+h_idx)*shape.z+w_idx) * 4;
+    #ifdef INT_COMPUTE_MOD
+    int4 in0 = isFull.x ? convert_int4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0)))) : (int4)(input0[0]);
+    int4 in1 = isFull.y ? convert_int4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input1 + offset1)))) : (int4)(input1[0]);
+    int4 out = in0 % in1;
+    out = ((out < (int4)0 && in1 > (int4)0) || (out > (int4)0 && in1 < (int4)0)) ? out + in1 : out;
+    #else
     float4 in0 = isFull.x ? convert_float4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input0 + offset0)))) : (float4)(input0[0]);
     float4 in1 = isFull.y ? convert_float4(AS_INPUT_DATA4(INTEL_SUB_GROUP_READ4((__global INTEL_DATA*)(input1 + offset1)))) : (float4)(input1[0]);
     
     float4 out = OPERATOR;
+    #endif
     if(activationType == 1) {
         out = fmax(out, (float4)0);
     }
@@ -496,6 +621,6 @@ __kernel void binary_buf_c16_c16_c4(__private int global_dim0, __private int glo
     const int lid_y = sglid / 4;
     int block_size = w_idx + 4 > shape.z ? (shape.z % 4) : 4;
     for (int i = 0; i < block_size; i++) {
-        output[offset + i * 4 + lid_y * width_height + lid_x] = (OUTPUT_TYPE)out[i];
+        output[offset + i * 4 + lid_y * batch_width_height + lid_x] = (OUTPUT_TYPE)out[i];
     }
 }

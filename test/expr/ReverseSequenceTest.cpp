@@ -15,6 +15,11 @@ class ReverseSequenceTest : public MNNTestCase {
 public:
     virtual bool run(int precision) {
         // high dimension, batch_dim ahead
+        float threshold = 0.0001;
+        if (precision == 2) {
+            threshold = 0.01;
+        }
+        
         {
             auto y               = _Input({4}, NHWC, halide_type_of<int32_t>());
             std::vector<int> seq = {7, 2, 3, 5};
@@ -27,7 +32,7 @@ public:
                     for (int m = 0; m < 7; ++m) {
                         for (int j = 0; j < 10; ++j) {
                             for (int k = 0; k < 8; ++k) {
-                                xPtr[2240 * o + 560 * i + 80 * m + 8 * j + k] = 10000 * o + 1000 * i + 100 * m + 10 * j + k;
+                                xPtr[2240 * o + 560 * i + 80 * m + 8 * j + k] = 0.1 * o + i + m + j + 0.2 * k;
                             }
                         }
                     }
@@ -37,8 +42,8 @@ public:
             auto ry    = _ReverseSequence(x, y, 1, 3);
             auto ryPtr = ry->readMap<float>();
 
-            auto func_equal = [](float a, float b) -> bool {
-                if (a - b > 0.0001 || a - b < -0.0001) {
+            auto func_equal = [threshold](float a, float b) -> bool {
+                if (a - b > threshold || a - b < -threshold) {
                     return false;
                 } else {
                     return true;
@@ -53,12 +58,13 @@ public:
                         for (int j = 0; j < 10; ++j) {
                             for (int k = 0; k < 8; ++k) {
                                 float compute = ryPtr[2240 * o + 560 * i + 80 * m + 8 * j + k];
-                                float need    = 10000 * o + 1000 * i + 100 * m + 10 * j + k;
+                                float need    = 0.1 * o + i + m + j + 0.2 * k;
                                 if (j < req) {
-                                    need = 10000 * o + 1000 * i + 100 * m + 10 * (req - j - 1) + k;
+                                    need = 0.1 * o + i + m + (req - j - 1) + 0.2 * k;
                                 }
 
                                 if (!func_equal(need, compute)) {
+                                    MNN_PRINT("case 1 error\n");
                                     return false;
                                 }
                             }
@@ -66,7 +72,28 @@ public:
                     }
                 }
             }
-            return true;
+        }
+        
+        {   // test SizeComputer::needInputContent
+            int dim0 = 1, dim1 = 6, dim2 = 7, dim3 = 10, dim4 = 8;
+            auto x    = _Input({dim0, dim1, dim2, dim3, dim4}, NHWC, halide_type_of<float>());
+            auto x_transpose = _Transpose(x, {1, 0, 2, 3, 4});
+            auto x_shape = _Shape(x_transpose, NHWC);
+            int ii[]= {1};
+            auto x_gather = _Gather(x_shape, _Const(ii, {1}, NCHW, halide_type_of<int>()));
+            auto ry    = _ReverseSequence(x_transpose, x_gather, 1, 3);
+            auto xPtr = x->writeMap<float>();
+            
+            for (int i = 0; i < dim0 * dim1 * dim2 * dim3 * dim4; ++i) {
+                xPtr[i] = 1;
+            }
+
+            auto ryPtr = ry->readMap<float>();
+
+            if (ryPtr == nullptr) {
+                MNN_PRINT("case 2 error\n");
+                return false;
+            }
         }
 
         // high dimension, seq_dim ahead
@@ -82,7 +109,7 @@ public:
                     for (int m = 0; m < 7; ++m) {
                         for (int j = 0; j < 4; ++j) {
                             for (int k = 0; k < 8; ++k) {
-                                xPtr[2240 * o + 224 * i + 32 * m + 8 * j + k] = 10000 * o + 1000 * i + 100 * m + 10 * j + k;
+                                xPtr[2240 * o + 224 * i + 32 * m + 8 * j + k] = 0.1 * o + i + m + j + 0.2 * k;
                             }
                         }
                     }
@@ -92,8 +119,8 @@ public:
             auto ry    = _ReverseSequence(x, y, 3, 1);
             auto ryPtr = ry->readMap<float>();
 
-            auto func_equal = [](float a, float b) -> bool {
-                if (a - b > 0.0001 || a - b < -0.0001) {
+            auto func_equal = [threshold](float a, float b) -> bool {
+                if (a - b > threshold || a - b < (-1 * threshold)) {
                     return false;
                 } else {
                     return true;
@@ -108,11 +135,12 @@ public:
                             auto req = seq[j];
                             for (int k = 0; k < 8; ++k) {
                                 auto compute = ryPtr[2240 * o + 224 * i + 32 * m + 8 * j + k];
-                                auto need    = 10000 * o + 1000 * i + 100 * m + 10 * j + k;
+                                auto need    = 0.1 * o + i + m + j + 0.2 * k;
                                 if (i < req) {
-                                    need = 10000 * o + 1000 * (req - i - 1) + 100 * m + 10 * j + k;
+                                    need = 0.1 * o + (req - i - 1) + m + j + 0.2 * k;
                                 }
                                 if (!func_equal(need, compute)) {
+                                    MNN_PRINT("case 3 error\n");
                                     return false;
                                 }
                             }
@@ -120,7 +148,6 @@ public:
                     }
                 }
             }
-            return true;
         }
 
         // 3 dimension
@@ -134,7 +161,7 @@ public:
             for (int i = 0; i < 10; ++i) {
                 for (int j = 0; j < 4; ++j) {
                     for (int k = 0; k < 8; ++k) {
-                        xPtr[32 * i + 8 * j + k] = 100 * i + 10 * j + k;
+                        xPtr[32 * i + 8 * j + k] = 0.1 * i + j + k;
                     }
                 }
             }
@@ -142,8 +169,8 @@ public:
             auto ry    = _ReverseSequence(x, y, 1, 0);
             auto ryPtr = ry->readMap<float>();
 
-            auto func_equal = [](float a, float b) -> bool {
-                if (a - b > 0.0001 || a - b < -0.0001) {
+            auto func_equal = [threshold](float a, float b) -> bool {
+                if (a - b > threshold || a - b < (-1 * threshold)) {
                     return false;
                 } else {
                     return true;
@@ -155,18 +182,19 @@ public:
                     auto req = seq[j];
                     for (int k = 0; k < 8; ++k) {
                         auto compute = ryPtr[32 * i + 8 * j + k];
-                        auto need    = 100 * i + 10 * j + k;
+                        auto need    = 0.1 * i + j + k;
                         if (i < req) {
-                            need = 100 * (req - i - 1) + 10 * j + k;
+                            need = 0.1 * (req - i - 1) + j + k;
                         }
                         if (!func_equal(need, compute)) {
+                            MNN_PRINT("case 4 error\n");
                             return false;
                         }
                     }
                 }
             }
-            return true;
         }
+        return true;
     }
 };
 MNNTestSuiteRegister(ReverseSequenceTest, "expr/ReverseSequence");

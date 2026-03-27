@@ -47,7 +47,7 @@ import MNN.cv as cv
 import MNN.numpy as np
 import MNN.expr as expr
 
-# 配置执行后端，线程数，精度等信息；key-vlaue请查看API介绍
+# 配置执行后端，线程数，精度等信息；key-value请查看API介绍
 config = {}
 config['precision'] = 'low' # 当硬件支持（armv8.2）时使用fp16推理
 config['backend'] = 0       # CPU
@@ -266,7 +266,7 @@ cv模块提供了与OpenCV相似的接口函数，具备基础的图像处理能
 | [drawContours](../pymnn/cv.html#drawcontours-img-contours-contouridx-color-thickness-linetype) | 画轮廓 |
 | [fillPoly](../pymnn/cv.html#fillpoly-img-contours-color-linetype-shift-offset) | 填充多边形 |
 | [line](../pymnn/cv.html#line-img-pt1-pt2-color-thickness-linetype-shift) | 画线段 |
-| [rectangle](../pymnn/cv.html#rectangle-src-pt1-pt2-color-thickness-linetype-shift) | 画正方向 |
+| [rectangle](../pymnn/cv.html#rectangle-src-pt1-pt2-color-thickness-linetype-shift) | 画矩形 |
 
 #### 色彩空间转换
 

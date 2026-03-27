@@ -14,6 +14,10 @@ namespace OpenCL {
 
 DeconvExecution::DeconvExecution(const std::vector<Tensor *> &inputs, const MNN::Op *op, Backend *backend)
     : ConvCommonExecution(op->main_as_Convolution2D(), backend), CommonExecution(backend, op) {
+    if (!mConvComValid) {
+        mValid = false;
+        return;
+    }
     mOpenCLBackend                 = static_cast<OpenCLBackend *>(backend);
     const auto *conv2dParams       = op->main_as_Convolution2D();
     const auto *conv2dCommonParams = conv2dParams->common();
@@ -28,11 +32,9 @@ DeconvExecution::DeconvExecution(const std::vector<Tensor *> &inputs, const MNN:
     const float* filterDataPtr = nullptr;
     int weightSize = 0;
     std::shared_ptr<ConvolutionCommon::Int8Common> quanCommon;
-    ConvolutionCommon::getConvParameters(&quanCommon, backend, conv2dParams, &filterDataPtr, &weightSize);
+    ConvolutionCommon::getConvParameters(&quanCommon, backend, op, &filterDataPtr, &weightSize);
 
     int inputChannel  = weightSize / (kernelWidth * kernelHeight * outputChannel);
-    std::vector<int> filterShape{outputChannel, inputChannel, kernelHeight, kernelWidth};
-    std::vector<int> filterImageShape{(int)inputChannel, (int)UP_DIV(outputChannel, 4) * kernelWidth * kernelHeight};
     std::vector<float> filterDataPtrTransformed;
     filterDataPtrTransformed.resize(weightSize);
     IOHW2OIHW<float, int>(filterDataPtr, filterDataPtrTransformed.data(), outputChannel, inputChannel, kernelHeight,
@@ -41,38 +43,24 @@ DeconvExecution::DeconvExecution(const std::vector<Tensor *> &inputs, const MNN:
     std::shared_ptr<Tensor> filterBuffer(
         Tensor::createDevice<float>({outputChannel, inputChannel, kernelHeight, kernelWidth}));
         
-    int buffer_size = filterBuffer->elementSize();
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()) {
-        buffer_size *= sizeof(half_float::half);
-    } else {
-        buffer_size *= sizeof(float);
-    }
+    size_t buffer_size = filterBuffer->elementSize() * sizeof(float);
     cl::Buffer filterBufferCL(mOpenCLBackend->getOpenCLRuntime()->context(), CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, buffer_size);
     filterBuffer->buffer().device = (uint64_t)(&filterBufferCL);
     cl_int error;
     auto ptrCL = mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(filterBufferCL, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
     if(ptrCL != nullptr && error == CL_SUCCESS){
-        if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()){
-            for(int i=0; i<filterBuffer->elementSize(); i++) {
-                ((half_float::half*)ptrCL)[i] = (half_float::half)(filterDataPtrTransformed[i]);
-            }
-        }else{
-            ::memcpy(ptrCL, filterDataPtrTransformed.data(), filterBuffer->size());
-        }
+        ::memcpy(ptrCL, filterDataPtrTransformed.data(), filterBuffer->size());
     }else{
         MNN_ERROR("Map error ptrCL == nullptr \n");
     }
     mOpenCLBackend->getOpenCLRuntime()->commandQueue().enqueueUnmapMemObject(filterBufferCL, ptrCL);
 
-        mResource->mFilter.reset(Tensor::createDevice<float>({1, filterImageShape[1], 1, 4 * filterImageShape[0]}));
-    mOpenCLBackend->onAcquireBuffer(mResource->mFilter.get(), Backend::STATIC);
+        mResource->mFilter.reset(Tensor::createDevice<float>({1, UP_DIV(outputChannel, 4) * kernelWidth * kernelHeight, 1, 4 * inputChannel}));
+    OPENCL_CHECK_ALLOC_CTOR(mOpenCLBackend->onAcquireBuffer(mResource->mFilter.get(), Backend::STATIC));
     MNN::OpenCL::ImageBufferConvertor imageBufferConvertor{mOpenCLBackend->getOpenCLRuntime()};
     
-    std::string buildOption = "";
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf() == false){
-        buildOption = "-DBUFFER_INP_FP32";
-    }
-    imageBufferConvertor.convertBufferToImage(filterBuffer.get(), MNN::OpenCL::CONV2D_FILTER, mResource->mFilter.get(), false, buildOption);
+    std::string buildOption = "-DBUFFER_INP_FP32";
+    imageBufferConvertor.convertBufferToImage(filterBuffer.get(), MNN::OpenCL::CONV2D_FILTER, mResource->mFilter.get(), mOpenCLBackend->getPrecision(), false, buildOption);
         
     mResource->mBuildOptions.emplace("-DBIAS");
     if (conv2dCommonParams->relu() == true) {
@@ -88,6 +76,10 @@ DeconvExecution::~DeconvExecution() {
 
 DeconvExecution::DeconvExecution(std::shared_ptr<ConvResource> resource, const MNN::Op* op, Backend *backend)
     : ConvCommonExecution(backend), CommonExecution(backend, op) {
+    if (!mConvComValid) {
+        mValid = false;
+        return;
+    }
     mResource = resource;
     const auto *conv2dParams       = op->main_as_Convolution2D();
     const auto *conv2dCommonParams = conv2dParams->common();
@@ -141,7 +133,7 @@ ErrorCode DeconvExecution::onEncode(const std::vector<Tensor *> &inputs, const s
     const int alignWidth  = mResource->mStrides[1] - 1 - transPadW;
     
     auto runtime      = mOpenCLBackend->getOpenCLRuntime();
-    unit.kernel = runtime->buildKernel("deconv_2d", "deconv_2d", mResource->mBuildOptions);
+    unit.kernel = runtime->buildKernel("deconv_2d", "deconv_2d", mResource->mBuildOptions, mOpenCLBackend->getPrecision());
     auto maxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
     mGWS              = {static_cast<uint32_t>(outputChannelBlocks), static_cast<uint32_t>(outputWidth),
             static_cast<uint32_t>(outputHeight * outputBatch)};
@@ -173,7 +165,7 @@ ErrorCode DeconvExecution::onEncode(const std::vector<Tensor *> &inputs, const s
     
     std::string name = "deconv2d";
     std::string info = std::to_string(inputChannels) + "_" + std::to_string(outputChannels) + "_" + std::to_string(ky) + "_" + std::to_string(kx) + "_" + std::to_string(strideHeight) + "_" + std::to_string(strideWidth);
-    mLWS = localWS3DDefault(mGWS, maxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), name + info, unit.kernel).first;
+    mLWS = localWS3DDefault(mGWS, maxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), name + info, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "deconv_2d").first;
     mOpenCLBackend->recordKernel3d(unit.kernel, mGWS, mLWS);
     unit.globalWorkSize = {mGWS[0], mGWS[1], mGWS[2]};
     unit.localWorkSize = {mLWS[0], mLWS[1], mLWS[2]};
@@ -188,7 +180,7 @@ public:
         if(inputs.size() != 1){
             return nullptr;
         }
-        return new DeconvExecution(inputs, op, backend);
+        OPENCL_CREATOR_CHECK(new DeconvExecution(inputs, op, backend));
     }
 };
 

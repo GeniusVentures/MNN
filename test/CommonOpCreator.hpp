@@ -9,7 +9,7 @@
 #ifndef CommonOpCreator_hpp
 #define CommonOpCreator_hpp
 #include "TestUtils.h"
-#include "cpp/IDSTEncoder.hpp"
+#include "core/IDSTEncoder.hpp"
 namespace MNN {
 static PadMode _convertPadMode(Express::PaddingMode mode) {
     switch (mode) {
@@ -24,7 +24,7 @@ static PadMode _convertPadMode(Express::PaddingMode mode) {
     }
     return PadMode_CAFFE;
 }
-static Express::VARP _HybridConv(const std::vector<float>& weight, std::vector<float>&& bias, std::vector<float>&& alpha, Express::VARP x, std::vector<int> channel, std::vector<int> kernelSize,
+static Express::VARP _HybridConv(const std::vector<float>& weight, const std::vector<float>& bias, const std::vector<float>& alpha, Express::VARP x, std::vector<int> channel, std::vector<int> kernelSize,
                           Express::PaddingMode pad, std::vector<int> stride, std::vector<int> dilate, int group, std::vector<int> pads, bool relu, bool relu6, int nbits, bool async) {
     std::unique_ptr<OpT> convOp(new OpT);
     convOp->type = OpType_Convolution;
@@ -35,7 +35,13 @@ static Express::VARP _HybridConv(const std::vector<float>& weight, std::vector<f
     int kSize = kernelSize[0] * kernelSize[1] * channel[0] / group;
     int kNum = channel[1];
     int clampMin = -(1 << (nbits - 1));
-    conv2D->quanParameter = std::move(IDSTEncoder::encode(weight.data(), alpha, kSize, kNum, async, nullptr, clampMin, nbits));
+    auto alphasize = alpha.size();
+    if (async) {
+        alphasize /= 2;
+    }
+    int blocknum = alphasize / channel[1];
+    int blocksize = kSize / blocknum;
+    conv2D->quanParameter = std::move(IDSTEncoder::encode(weight.data(), alpha, blocksize, kNum * blocknum, async, nullptr, clampMin, nbits, false));
     conv2D->common->padMode     = _convertPadMode(pad);
     if (pads.size() == 2) {
         conv2D->common->padX        = pads[0];
@@ -56,7 +62,7 @@ static Express::VARP _HybridConv(const std::vector<float>& weight, std::vector<f
     conv2D->common->relu = relu;
     conv2D->weight.clear();
     MNN_ASSERT(bias.size() == channel[1]);
-    conv2D->bias = std::move(bias);
+    conv2D->bias = bias;
     return (Express::Variable::create(Express::Expr::create(convOp.get(), {x})));
 }
 

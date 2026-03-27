@@ -16,8 +16,8 @@
 #include "core/TensorUtils.hpp"
 #include "math/Vec.hpp"
 #include "core/BufferAllocator.hpp"
-#include "common/MemoryFormater.h"
-#include "common/CommonCompute.hpp"
+#include "core/MemoryFormater.h"
+#include "core/CommonCompute.hpp"
 
 using Vec4 = MNN::Math::Vec<float, 4>;
 namespace MNN {
@@ -273,6 +273,10 @@ ErrorCode SparseConvolutionTiledImpl::onResize(const std::vector<Tensor*>& input
     int bytes    = core->bytes;
     int unit     = core->pack;
     auto packA   = core->MNNPackC4ForMatMul_A;
+    if (core->matmulBytes != 0) {
+        // Use origin packC4
+        packA = MNNGetCoreFunctions()->MNNPackC4ForMatMul_A;
+    }
     int eP, lP, hP;
     getPackParameter(&eP, &lP, &hP, core);
     auto weightPtr     = weight->host<float>();
@@ -314,9 +318,9 @@ ErrorCode SparseConvolutionTiledImpl::onResize(const std::vector<Tensor*>& input
     bufferAlloc->free(tempPtr);
     auto threadNumberFirst = std::min(threadNumber, tileCount);
     auto postParameters    = getPostParameters();
-    mFunction.first        = threadNumberFirst;
+    mFunction.second        = threadNumberFirst;
 
-    mFunction.second       = [=](int tId) {
+    mFunction.first       = [=](int tId) {
         auto gemmBuffer = mTempBufferTranspose.host<uint8_t>() + mTempBufferTranspose.stride(0) * tId;
         auto srcPtr     = (float const **)(tempPtr.ptr() + tId * kernelSize * maxLine * (4 * sizeof(int32_t) + sizeof(float *)));
         auto el         = (int32_t *)(srcPtr + kernelSize * maxLine);

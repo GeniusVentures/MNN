@@ -7,6 +7,8 @@
 //
 
 #define FLATBUFFERS_PREFER_PRINTF
+#include <stack>
+#include "core/OpCommonUtils.hpp"
 #include <MNN/expr/Expr.hpp>
 #include <MNN/expr/Executor.hpp>
 #include <MNN/expr/ExprCreator.hpp>
@@ -56,6 +58,16 @@ void Variable::Info::syncSize() {
         }
     }
 }
+// Only valid for Input / Const / Trainable
+void VARP::setOrder(Dimensionformat format) {
+    if (nullptr != mContent->expr().first->get()) {
+        return;
+    }
+    auto index = mContent->expr().second;
+    auto inside = mContent->expr().first->inside();
+    inside->mOutputInfos[index].order = format;
+    TensorUtils::getDescribe(inside->mOutputTensors[index])->dimensionFormat = (MNN_DATA_FORMAT)Utils::convertFormat(format);
+}
 
 bool VARP::fix(VARP::InputType type) const {
     if (nullptr == mContent->expr().first->get()) {
@@ -91,6 +103,7 @@ bool VARP::fix(VARP::InputType type) const {
         newVARP->expr().first->inside()->mHoldBackend = pipelineInfo.first.cache.second;
     }
     Variable::replace(VARP(mContent), newVARP);
+    inputTensor->wait(MNN::Tensor::MAP_TENSOR_READ, true);
     return true;
 }
 
@@ -206,7 +219,7 @@ EXPRP Expr::create(std::shared_ptr<BufferStorage> extra, std::vector<VARP>&& inp
     expr->mInputs   = std::move(inputs);
     auto exe = ExecutorScope::Current();
     expr->mInside->mReq = exe->getRequirement(expr.get());
-    if (!(exe->getLazyMode() & Executor::LAZY_COMPUTE_ONCE)) {
+    if ((!(exe->getLazyMode() & Executor::LAZY_COMPUTE_ONCE)) && exe->lazyEval) {
         _addLinkForInputs(expr);
     }
     return expr;
@@ -224,7 +237,7 @@ EXPRP Expr::create(const OpT* op, std::vector<VARP> inputs, int outputSize) {
         return create(std::move(info), nullptr, VARP::INPUT);
     }
     if (OpType_Const == op->type || OpType_TrainableParam == op->type) {
-        if (!op->externalPath.empty()) {
+        if (!op->externalPath.empty() || (!op->main.AsBlob()->external.empty())) {
             flatbuffers::FlatBufferBuilder builder;
             auto offset = Op::Pack(builder, op);
             builder.Finish(offset);
@@ -367,12 +380,16 @@ VARP Variable::create(EXPRP expr, int index) {
 #endif
     }
 #endif
+    if (nullptr == expr->get()) {
+        return res;
+    }
     auto executor = ExecutorScope::Current();
     if (!executor->lazyEval) {
         res.fix(VARP::CONSTANT);
         return res;
     }
-    // CONTENT Mode
+#ifndef MNN_REDUCE_SIZE
+    // CONTENT Mode, Use Geometry Computer to Decompress Expr
     do {
         if (!(executor->getLazyMode() & Executor::LAZY_CONTENT)) {
             break;
@@ -398,7 +415,8 @@ VARP Variable::create(EXPRP expr, int index) {
             outputTensors[i] = expr->mInside->mOutputTensors[i];
         }
         auto bn = executor->getAttr()->constantBackend;
-        GeometryComputer::Context context(bn);
+        // TODO: Support set mask
+        GeometryComputer::Context context(Interpreter::GeometryComputeMask::GEOMETRCOMPUTEMASK_ALL, bn);
         auto geo = GeometryComputer::search(expr->get()->type(), Runtime::Compiler_Loop);
         CommandBuffer cmd;
         res = geo->onCompute(expr->get(), inputTensors, outputTensors, context, cmd);
@@ -479,6 +497,7 @@ VARP Variable::create(EXPRP expr, int index) {
         }
         return varMap.find(expr->inside()->mOutputTensors[index])->second;
     } while (false);
+#endif
     return res;
 }
 void Expr::replace(EXPRP old, EXPRP from) {
@@ -562,7 +581,7 @@ bool Variable::setDevicePtr(const void* devicePtr, int memoryType) {
         return false;
     }
     informDirty();
-    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->type == DataType_DT_FLOAT);
+    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || (!TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->applyQuant));
     mFrom->mInside->mContentDirty = false;
     // Clear host address, Don't malloc hostPtr afterwards
     Utils::releaseMemoryForHostTensor(mFrom->inside()->mOutputTensors[0]);
@@ -786,7 +805,7 @@ void* Variable::readInternal(bool forShape) {
         auto inside = mFrom->inside();
         auto originTensor = inside->mOutputTensors[mFromIndex];
         auto des = TensorUtils::getDescribe(originTensor);
-        if (WrapExecution::needWrap(originTensor, nullptr) || (des->quantAttr != nullptr && des->type == DataType_DT_INT8)) {
+        if (WrapExecution::needWrap(originTensor, nullptr) || (des->quantAttr != nullptr && des->applyQuant)) {
             // For StaticModule will other-device runtime, we may create Variable with other-device's memory
             // The case won't occurred for varibale = INPUT
             // Need Copy
@@ -794,12 +813,28 @@ void* Variable::readInternal(bool forShape) {
                 // The Varp will not be created as input, so we just need copy once
                 return inside->mHostTensor->host<void>();
             }
+            
             inside->mHostTensor = new Tensor;
             TensorUtils::copyShape(originTensor, inside->mHostTensor, true);
             inside->mHostTensor->buffer().type = originTensor->getType();
             inside->mHostTensor->buffer().host = (uint8_t*)MNNMemoryAllocAlign(inside->mHostTensor->size(), MNN_MEMORY_ALIGN_DEFAULT);
             TensorUtils::getDescribe(inside->mHostTensor)->memoryType = Tensor::InsideDescribe::MEMORY_HOST;
             originTensor->copyToHostTensor(inside->mHostTensor);
+            bool hasNoExecution = false;
+            if (nullptr != originTensor) {
+                auto backend = TensorUtils::getDescribeOrigin(originTensor)->getBackend();
+                if (nullptr != backend) {
+                    // Try to sync to check execution status
+                    int syncResult = backend->onSync(Tensor::MAP_TENSOR_READ, false, originTensor);
+                    if (NO_EXECUTION == syncResult) {
+                        hasNoExecution = true;
+                    }
+                }
+            }
+            if (hasNoExecution) {
+                MNN_PRINT("\nWarning, Backend has stop execute, return nullptr for current varp\n");
+                return nullptr;
+            }
             return inside->mHostTensor->host<void>();
         }
         return originTensor->buffer().host;
@@ -868,6 +903,9 @@ void Variable::prepareCompute(const std::vector<VARP>& vars, bool forceCpu) {
             v->expr().first->setVisited(false);
         }
     }
+    if (exprs.empty()) {
+        return;
+    }
     ExecutorScope::Current()->makeCache(std::move(exprs), forceCpu);
 }
 
@@ -890,13 +928,13 @@ void* Variable::writeInternal(bool inform) {
     if (inform) {
         informDirty();
     }
-    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->type == DataType_DT_FLOAT);
+    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || !TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->applyQuant);
     mFrom->mInside->mContentDirty = false;
     return mFrom->inside()->mOutputTensors[0]->host<void>();
 }
 
 void Variable::writeScaleInternal(float scaleValue, float zeroPoint, bool inform) {
-    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->type == DataType_DT_FLOAT);
+    MNN_ASSERT(TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->quantAttr == nullptr || !TensorUtils::getDescribe(mFrom->inside()->mOutputTensors[0])->applyQuant);
     if (inform) {
        informDirty();
     }
@@ -943,9 +981,7 @@ bool Expr::setInfoDirty() {
     mInside->mInfoDirty    = true;
     mInside->mContentDirty = true;
     mValid = true;
-    if (mInside->mCache != nullptr) {
-        mInside->mCache->setShapeDirty();
-    }
+    mInside->mCache = nullptr;
     for (auto o : mInside->mOutputTensors) {
         Utils::releaseMemoryForHostTensor(o);
     }
@@ -973,17 +1009,11 @@ std::vector<VARP> Variable::load(const char* fileName) {
 }
 std::vector<VARP> Variable::load(const uint8_t* buffer, size_t length) {
     AUTOTIME;
-    flatbuffers::Verifier verify((const uint8_t*)(buffer), length);
-    if (false == VerifyNetBuffer(verify)) {
-        MNN_PRINT("Invalidate buffer to create variable\n");
+    if (false == OpCommonUtils::checkNet(buffer, length)) {
         return {};
     }
     std::unique_ptr<NetT> source(UnPackNet(buffer));
     if (nullptr == source) {
-        return {};
-    }
-    if (source->oplists.empty()) {
-        MNN_ERROR("Invalid net\n");
         return {};
     }
     // FUNC_PRINT(source->oplists.size());
@@ -998,10 +1028,8 @@ std::vector<VARP> Variable::load(const uint8_t* buffer, size_t length) {
     std::map<int, VARP> variableMap;
     bool isStatic = source->usage == Usage_INFERENCE_STATIC;
     std::vector<std::shared_ptr<Tensor>> allTensors;
-    if (isStatic) {
-        allTensors.resize(source->tensorName.size());
-        initTensors(allTensors, flatbuffers::GetRoot<MNN::Net>(buffer));
-    }
+    allTensors.resize(source->tensorName.size());
+    initTensors(allTensors, flatbuffers::GetRoot<MNN::Net>(buffer));
 
     // Generate All Exprs by order of net
     for (int i = 0; i < opSize; ++i) {
@@ -1020,6 +1048,8 @@ std::vector<VARP> Variable::load(const uint8_t* buffer, size_t length) {
         if (isStatic && nullptr != expr->get()) {
             // Set tensor shape from net
             expr->mCanDecompose = false;
+        }
+        if (nullptr != expr->get() || expr->inputType() == VARP::INPUT) {
             for (int index = 0; index < op->outputIndexes.size(); ++index) {
                 auto outputIndex = op->outputIndexes[index];
                 delete expr->inside()->mOutputTensors[index];
@@ -1080,6 +1110,7 @@ void Variable::save(const std::vector<VARP>& vars, NetT* dest) {
     // Search subgraphs
     std::map<std::string, std::shared_ptr<Executor::SubGraph>> subgraphs;
     auto exe = ExecutorScope::Current();
+#ifndef MNN_REDUCE_SIZE
     for (int index = 0; index < executeOrder.size(); ++index) {
         auto expr = executeOrder[index];
         auto op = expr->get();
@@ -1110,7 +1141,7 @@ void Variable::save(const std::vector<VARP>& vars, NetT* dest) {
         std::unique_ptr<MNN::SubGraphProtoT> subgraph(flatbuffers::GetRoot<MNN::SubGraphProto>(builder.GetBufferPointer())->UnPack());
         dest->subgraphs.emplace_back(std::move(subgraph));
     }
-
+#endif
     // Get Expr - TensorOffset Map
     std::map<EXPRP, int> varIndexInfo;
     {
@@ -1227,30 +1258,33 @@ void Variable::save(const std::vector<VARP>& vars, NetT* dest) {
                 auto des = TensorUtils::getDescribe(tensor);
                 auto describe = std::unique_ptr<MNN::TensorDescribeT>(new MNN::TensorDescribeT);
                 describe->index = varIndexInfo[expr] + v;
-                describe->blob = std::unique_ptr<MNN::BlobT>(new MNN::BlobT);
                 describe->name = dest->tensorName[subindex];
-                auto& blob = describe->blob;
-                blob->dataFormat = des->dimensionFormat;
-                if (tensor->getType() == halide_type_of<float>()) {
-                    blob->dataType = DataType_DT_FLOAT;
-                } else {
-                    SET_TYPE(INT8, int8)}
-                    SET_TYPE(UINT8, uint8)}
-                    SET_TYPE(INT32, int32)}
-                    SET_TYPE(INT64, int64)}
-                }
-                for (int d = 0; d < tensor->dimensions();d++) {
-                    describe->blob->dims.push_back(tensor->buffer().dim[d].extent);
-                }
+
                 auto tensorDes = TensorUtils::getDescribe(tensor);
                 if (nullptr != tensorDes->quantAttr) {
                     describe->quantInfo.reset(new TensorQuantInfoT);
+                    describe->quantInfo->type = tensorDes->quantAttr->type;
                     describe->quantInfo->max = tensorDes->quantAttr->max;
                     describe->quantInfo->min = tensorDes->quantAttr->min;
                     describe->quantInfo->zero = tensorDes->quantAttr->zero;
                     describe->quantInfo->scale = tensorDes->quantAttr->scale;
                 }
+#ifndef MNN_REDUCE_SIZE
                 if (staticModel) {
+                    describe->blob = std::unique_ptr<MNN::BlobT>(new MNN::BlobT);
+                    auto& blob = describe->blob;
+                    blob->dataFormat = des->dimensionFormat;
+                    if (tensor->getType() == halide_type_of<float>()) {
+                    blob->dataType = DataType_DT_FLOAT;
+                    } else {
+                        SET_TYPE(INT8, int8)}
+                        SET_TYPE(UINT8, uint8)}
+                        SET_TYPE(INT32, int32)}
+                        SET_TYPE(INT64, int64)}
+                    }
+                    for (int d = 0; d < tensor->dimensions();d++) {
+                        describe->blob->dims.push_back(tensor->buffer().dim[d].extent);
+                    }
                     for (auto& reg : des->regions) {
                         auto regionT = std::unique_ptr<MNN::RegionT>(new MNN::RegionT);
                         regionT->src = std::unique_ptr<MNN::ViewT>(new MNN::ViewT);
@@ -1265,13 +1299,16 @@ void Variable::save(const std::vector<VARP>& vars, NetT* dest) {
                         describe->regions.emplace_back(std::move(regionT));
                     }
                 }
+#endif
                 dest->extraTensorDescribe.emplace_back(std::move(describe));
             }
         }
     }
+#ifndef MNN_REDUCE_SIZE
     if (staticModel) {
         dest->usage = Usage_INFERENCE_STATIC;
     }
+#endif
     // add version number
     dest->extraInfo.reset(new ExtraInfoT);
     dest->extraInfo->version = MNN_VERSION;
@@ -1294,26 +1331,7 @@ void Variable::save(const std::vector<VARP>& vars, const char* fileName) {
     flatbuffers::FlatBufferBuilder builder(1024);
     auto offset = Net::Pack(builder, net.get());
     builder.Finish(offset);
-    // TODO, use FileWriter instead
-    FILE* f = fopen(fileName, "wb");
-    if (nullptr == f) {
-        MNN_ERROR("Open %s error\n", fileName);
-        return;
-    }
-    static const size_t block = 4096;
-    size_t totalSize    = builder.GetSize();
-    size_t blockSize    = UP_DIV(totalSize, block);
-    for (size_t i = 0; i < blockSize; ++i) {
-        size_t sta = block * i;
-        size_t fin = std::min(sta + block, totalSize);
-        if (fin > sta) {
-            auto realSize = fwrite((const char*)builder.GetBufferPointer() + sta, 1, fin - sta, f);
-            if (realSize != fin - sta) {
-                MNN_ERROR("Write %s error\n", fileName);
-            }
-        }
-    }
-    fclose(f);
+    FileLoader::write(fileName, std::make_pair(builder.GetBufferPointer(), builder.GetSize()));
 }
 std::pair<std::map<std::string, VARP>, std::map<std::string, VARP>> Variable::getInputAndOutput(const std::map<std::string, VARP>& allVariable) {
     std::pair<std::map<std::string, VARP>, std::map<std::string, VARP>> res;
@@ -1331,17 +1349,48 @@ std::pair<std::map<std::string, VARP>, std::map<std::string, VARP>> Variable::ge
 
 std::vector<EXPRP> Variable::getExecuteOrder(const std::vector<VARP>& outputs) {
     std::vector<EXPRP> sequence;
+    std::stack<EXPRP> workStack;
     for (auto output : outputs) {
-        Expr::visit(
-                        output->mFrom, [](EXPRP expr) { return !expr->visited(); },
-                        [&sequence](EXPRP expr) {
-                            //FUNC_PRINT_ALL(var->name().c_str(), s);
-                            if (!expr->visited()) {
-                                sequence.emplace_back(expr);
-                                expr->setVisited(true);
-                            }
-                            return true;
-                        });
+        if (nullptr == output) {
+            continue;
+        }
+        if (nullptr == output->expr().first) {
+            continue;
+        }
+        auto op = output->expr().first->get();
+        bool isConst = ((op && op->type() == OpType_Const) || (!op && output->expr().first->inputType() == VARP::CONSTANT));
+        if (isConst) {
+            if (!output->expr().first->visited()){
+                output->expr().first->setVisited(true);
+                sequence.emplace_back(output->expr().first);
+                continue;
+            }
+        }
+        workStack.push(output->expr().first);
+    }
+    while (!workStack.empty()) {
+        auto expr = workStack.top();
+        bool valid = true;
+        if (expr->visited()) {
+            workStack.pop();
+            continue;
+        }
+        for (auto input : expr->inputs()) {
+            if (input == nullptr) {
+                continue;
+            }
+            if (input->expr().first->visited()) {
+                continue;
+            }
+            valid = false;
+            workStack.push(input->expr().first);
+            break;
+        }
+        if (valid) {
+            sequence.emplace_back(expr);
+            expr->setVisited(true);
+            workStack.pop();
+        }
     }
     for (auto expr : sequence) {
         expr->setVisited(false);

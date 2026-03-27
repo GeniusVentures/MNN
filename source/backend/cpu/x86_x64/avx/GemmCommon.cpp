@@ -336,7 +336,8 @@ _mm256_storeu_ps(temp2 + 7 * 8, t7);\
     }
 }
 
-void _AVX_MNNPackForMatMul_B(float* dest, const float* source, size_t h, size_t l, bool transpose) {
+void _AVX_MNNPackForMatMul_B(float* dest, const float* source, size_t h, size_t kernelsize, size_t ic, bool transpose) {
+    auto l = kernelsize * ic;
     int offset[2] = {
         (int)l,
         (int)l
@@ -348,10 +349,11 @@ void _AVX_MNNPackForMatMul_B(float* dest, const float* source, size_t h, size_t 
     MNNPackC4(dest, source, l, h, offset);
 }
 
-void _AVX_MNNPackForMatMul_B_EShort(float* dest, const float* source, size_t h, size_t l, bool transpose) {
+void _AVX_MNNPackForMatMul_B_EShort(float* dest, const float* source, size_t h, size_t kernelsize, size_t ic, bool transpose) {
     const int unit = 16;
     auto hP = h / unit;
     auto hR = hP * unit;
+    auto l = kernelsize * ic;
     if (hR != h) {
         ::memset(dest, 0, UP_DIV(h, unit)*unit*l*sizeof(float));
     }
@@ -418,13 +420,13 @@ void _AVX_MNNPackedSparseMatMul(float* C, const float* A, const float* B, unsign
     return;
 }
 
-void _AVX_MNNComputeScaleZeroScalar(float* source, float* min, float* max, size_t size) {
+void _AVX_MNNCountMinMaxValue(const float* source, float* min, float* max, size_t size) {
     int pack = 8;
-    int sizeDiv8 = UP_DIV(size, pack);
-    __m256 minVal = _mm256_loadu_ps(source);
+    int sizeDiv8 = size / pack;
+    __m256 minVal = _mm256_set1_ps(source[0]);
     __m256 maxVal = minVal;
     float maxArr[8], minArr[8];
-    for (int i = 1; i < sizeDiv8; ++i) {
+    for (int i = 0; i < sizeDiv8; ++i) {
         auto src0 = source + pack * i;
         __m256 vecA = _mm256_loadu_ps(src0);
         __m256 maskMax = _mm256_cmp_ps(vecA, maxVal, 14);
@@ -432,7 +434,6 @@ void _AVX_MNNComputeScaleZeroScalar(float* source, float* min, float* max, size_
         maxVal = _mm256_blendv_ps(maxVal, vecA, maskMax);
         minVal = _mm256_blendv_ps(minVal, vecA, maskMin);
     }
-
     _mm256_storeu_ps(maxArr, maxVal);
     _mm256_storeu_ps(minArr, minVal);
     float max_ = maxArr[0], min_ = minArr[0];
@@ -444,12 +445,11 @@ void _AVX_MNNComputeScaleZeroScalar(float* source, float* min, float* max, size_
             min_ = minArr[k];
         }
     }
+    for (int i = pack * sizeDiv8; i < size; ++i) {
+        max_ = std::max(max_, source[i]);
+        min_ = std::min(min_, source[i]);
+    }
     min[0] = min_;
     max[0] = max_;
-    // float range = max_ - min_;
-    // MNN_ASSERT(range != 0);
-    // *quantScale = 255.0f / range;
-    // *dequantScale = range / 255.0f;
-    // *zeroPoint = std::min(255.f, std::max(roundf(-(min_ * 255.f) / range), 0.f)) - 128.f;
 
 }

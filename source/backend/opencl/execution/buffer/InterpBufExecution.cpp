@@ -27,14 +27,17 @@ InterpBufExecution::InterpBufExecution(const std::vector<Tensor *> &inputs, cons
     std::set<std::string> buildOptions;
     if (op->main_as_Interp()->resizeType() == 1) {
         mKernelName = "nearest_buf";
-        unit.kernel             = runtime->buildKernel("interp_buf", mKernelName, buildOptions);
+        unit.kernel             = runtime->buildKernel("interp_buf", mKernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     } else if(op->main_as_Interp()->resizeType() == 4) {
         mKernelName = "nearest_buf";
         buildOptions.emplace("-DUSE_ROUND");
-        unit.kernel             = runtime->buildKernel("interp_buf", mKernelName, buildOptions);
+        unit.kernel             = runtime->buildKernel("interp_buf", mKernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     }else {
         mKernelName = "bilinear_buf";
-        unit.kernel             = runtime->buildKernel("interp_buf", mKernelName, buildOptions);
+        unit.kernel             = runtime->buildKernel("interp_buf", mKernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     }
 
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
@@ -80,10 +83,10 @@ ErrorCode InterpBufExecution::onEncode(const std::vector<Tensor *> &inputs, cons
     ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(inputWidth));
     ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(outputHeight));
     ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(outputWidth));
-    ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(channelBlocks));
+    ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(inputBatch));
     MNN_CHECK_CL_SUCCESS(ret, "setArg InterpBufExecution");
 
-    mLWS = localWS3DDefault(mGWS, mMaxWorkGroupSize, runtime, mKernelName, unit.kernel).first;
+    mLWS = localWS3DDefault(mGWS, mMaxWorkGroupSize, runtime, mKernelName, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "interp_buf").first;
     mOpenCLBackend->recordKernel3d(unit.kernel, mGWS, mLWS);
     unit.globalWorkSize = {mGWS[0], mGWS[1], mGWS[2]};
     unit.localWorkSize = {mLWS[0], mLWS[1], mLWS[2]};
@@ -105,7 +108,7 @@ public:
             MNN_PRINT("openCL buffer not support interp type:%d, fallback to cpu\n", op->main_as_Interp()->resizeType());
             return nullptr;
         }
-        return new InterpBufExecution(inputs, op, backend);
+        OPENCL_CREATOR_CHECK(new InterpBufExecution(inputs, op, backend));
     }
 };
     

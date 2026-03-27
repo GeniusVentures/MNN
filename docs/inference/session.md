@@ -181,7 +181,10 @@ struct BackendConfig {
     PrecisionMode precision = Precision_Normal;
     
     /** user defined context */
-    void* sharedContext = nullptr;
+    union {
+        void* sharedContext = nullptr;
+        size_t flags; // Valid for CPU Backend
+    };
 };
 ```
 
@@ -196,6 +199,39 @@ struct BackendConfig {
 **precision 为 Low_BF16 时，根据设备情况开启 BF16 计算**
 
 `sharedContext`用于自定义后端，用户可以根据自身需要赋值。
+
+#### CPU 核心绑定
+MNN 支持将计算任务绑定到指定的 CPU 核心上执行。这对于需要精细控制 CPU 资源，避免线程在不同核心之间切换，或者希望将 MNN 的计算任务限制在特定核心上，以减少对其他应用干扰的场景非常有用。
+
+通过 `Interpreter::setSessionHint` 方法，并使用 `HintMode::CPU_CORE_IDS`，可以指定一个或多个 CPU 核心的 ID。
+
+```cpp
+#include <MNN/Interpreter.hpp>
+
+// ...
+
+// 创建 Interpreter
+auto interpreter = std::shared_ptr<MNN::Interpreter>(MNN::Interpreter::createFromFile("your_model.mnn"));
+
+// 设置 CPU 核心绑定
+// 假设我们希望将计算任务绑定到 0 号和 1 号 CPU 核心
+std::vector<int> cpu_ids = {0, 1};
+interpreter->setSessionHint(MNN::Interpreter::HintMode::CPU_CORE_IDS, cpu_ids.data(), cpu_ids.size());
+
+// 创建 Session
+MNN::ScheduleConfig config;
+config.type = MNN_FORWARD_CPU;
+config.numThread = 2; // 线程数最好和绑定的核心数一致
+auto session = interpreter->createSession(config);
+
+// ... 运行推理
+```
+
+**注意事项:**
+
+*   `CPU_CORE_IDS` 的设置必须在 `createSession` 之前完成。
+*   `numThread` 的数量最好设置为与绑定的 CPU 核心数量一致，以达到最佳的性能。
+*   如果指定的 CPU 核心 ID 不存在或无效，MNN 将会忽略该配置，并使用默认的线程调度策略。
 
 ### 创建多段路径Session
 需要对推理路径做出更为复杂的配置时，可以通过调度配置组来实现：
@@ -246,6 +282,8 @@ net2->runSession(session2);
 net3->runSession(session3);
 ```
 
+*** 使用共享运行时的情况下，输入数据需要采用拷贝填充/映射填充，不能使用直接填充：如果后续的Session所需的中间内存比前面的Session大，则会重新申请中间内存，此时前面的Session所使用的中间内存会被释放，若采用拷贝填充/映射填充，MNN中保证了下一次使用Session时中间内存会重新适配，若是采用直接填充，则可能由于使用非法指针而出现内存异常。 *
+
 ## 输入数据
 ### 获取输入tensor
 ```cpp
@@ -270,7 +308,16 @@ const std::map<std::string, Tensor*>& getSessionInputAll(const Session* session)
 
 在只有一个输入tensor时，可以在调用`getSessionInput`时传入NULL以获取tensor。
 
-### 拷贝数据
+### 【推荐】映射填充数据
+**映射输入Tensor的内存，部分后端可以免数据拷贝**
+```cpp
+auto input = interpreter->getSessionInput(session, NULL);
+void* host = input->map(MNN::Tensor::MAP_TENSOR_WRITE, input->getDimensionType());
+// fill host memory data
+input->unmap(MNN::Tensor::MAP_TENSOR_WRITE,  input->getDimensionType(), host);
+```
+
+### 【不推荐】拷贝填充数据
 NCHW示例，适用 ONNX / Caffe / Torchscripts 转换而来的模型：
 ```cpp
 auto inputTensor = interpreter->getSessionInput(session, NULL);
@@ -293,7 +340,7 @@ delete nhwcTensor;
 通过这类拷贝数据的方式，用户只需要关注自己创建的tensor的数据布局，`copyFromHostTensor`会负责处理数据布局上的转换（如需）和后端间的数据拷贝（如需）。
 
 
-### 直接填充数据
+### 【已废弃】直接填充数据
 ```cpp
 auto inputTensor = interpreter->getSessionInput(session, NULL);
 inputTensor->host<float>()[0] = 1.f;
@@ -331,7 +378,19 @@ struct Config
 
 - 通过`sourceFormat`和`destFormat`指定输入和输出的格式，当前支持`RGBA`、`RGB`、`BGR`、`GRAY`、`BGRA`、`YUV_NV21、YUV_NV12`
 - 通过`filterType`指定插值的类型，当前支持`NEAREST`、`BILINEAR`和`BICUBIC`三种插值方式
-- 通过`mean`和`normal`指定均值归一化，但数据类型不是浮点类型时，设置会被忽略
+- 通过`mean`和`normal`指定均值归一化，但数据类型不是浮点类型时，设置会被忽略，内部计算过程参考如下伪码
+```cpp
+for (int i=0; i<bpp; ++i) {
+    y[i] = (x[i] - mean[i]) * normal[i];
+}
+```
+
+- `mean`, `normal` 与 torchvision.transforms.Normalize(mean, std) 的对应关系是：
+```
+mnn.cv.mean = torch.mean * 255.0
+mnn.cv.normal = 1.0 / torch.std /255.0
+```
+
 
 #### 图像变换矩阵
 `CV::Matrix`移植自Android 系统使用的Skia引擎，用法可参考Skia的Matrix：[https://skia.org/user/api/SkMatrix_Reference](https://skia.org/user/api/SkMatrix_Reference)。
@@ -549,8 +608,16 @@ const std::map<std::string, Tensor*>& getSessionOutputAll(const Session* session
 
 **注意：当`Session`析构之后使用`getSessionOutput`获取的`Tensor`将不可用**
 
-### 拷贝数据
-**不熟悉MNN源码的用户，必须使用这种方式获取输出！！！**
+### 【推荐】映射输出数据
+**映射输出Tensor的内存数据，部分后端可以免数据拷贝**
+```cpp
+auto outputTensor = net->getSessionOutput(session, NULL);
+void* host = outputTensor->map(MNN::Tensor::MAP_TENSOR_READ,  outputTensor->getDimensionType());
+// use host memory by yourself
+outputTensor->unmap(MNN::Tensor::MAP_TENSOR_READ,  outputTensor->getDimensionType(), host);
+```
+### 【不推荐】拷贝输出数据
+**采用纯内存拷贝的方式，拷贝需要花费时间**
 NCHW （适用于 Caffe / TorchScript / Onnx 转换而来的模型）示例：
 ```cpp
 auto outputTensor = interpreter->getSessionOutput(session, NULL);
@@ -577,7 +644,7 @@ delete nhwcTensor;
 
 
 
-### 直接读取数据
+### 【已废弃】直接读取数据
 **由于绝大多数用户都不熟悉MNN底层数据布局，所以不要使用这种方式！！！**
 ```cpp
 auto outputTensor = interpreter->getSessionOutput(session, NULL);

@@ -27,37 +27,23 @@ ScaleExecution::ScaleExecution(const std::vector<Tensor *> &inputs, const MNN::O
     int scaleSize             = scaleParams->scaleData()->size();
     const float *scaleDataPtr = scaleParams->scaleData()->data();
         
-    int buffer_size = ALIGN_UP4(scaleSize);
-    if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()) {
-        buffer_size *= sizeof(half_float::half);
-    } else {
-        buffer_size *= sizeof(float);
-    }
+    size_t buffer_size = ALIGN_UP4(scaleSize) * sizeof(float);
     cl::Buffer scaleBuffer(openclBackend->getOpenCLRuntime()->context(), CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, buffer_size);
     cl_int error;
     auto scalePtrCL = openclBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(
         scaleBuffer, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
     if(nullptr != scalePtrCL && error == CL_SUCCESS){
-        if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()){
-            for (int i = 0; i < scaleSize; i++) {
-                ((half_float::half *)scalePtrCL)[i] = (half_float::half)(scaleDataPtr[i]);
-            }
-            for(int i=scaleSize; i<ALIGN_UP4(scaleSize); i++) {
-                ((half_float::half*)scalePtrCL)[i] = (half_float::half)(0.0f);
-            }
-        } else {
-            ::memset(scalePtrCL, 0, buffer_size);
-            ::memcpy(scalePtrCL, scaleDataPtr, scaleSize * sizeof(float));
-        }
+        ::memset(scalePtrCL, 0, buffer_size);
+        ::memcpy(scalePtrCL, scaleDataPtr, scaleSize * sizeof(float));
     }else{
         MNN_ERROR("Map error scalePtrCL == nullptr \n");
     }
     openclBackend->getOpenCLRuntime()->commandQueue().enqueueUnmapMemObject(scaleBuffer, scalePtrCL);
 
     mScale.reset(Tensor::createDevice<float>({1, 1, 1, scaleSize}));
-    backend->onAcquireBuffer(mScale.get(), Backend::STATIC);
+    OPENCL_CHECK_ALLOC_CTOR(backend->onAcquireBuffer(mScale.get(), Backend::STATIC));
     copyBufferToImage(openclBackend->getOpenCLRuntime(), scaleBuffer, openCLImage(mScale.get()), UP_DIV(scaleSize, 4),
-                      1);
+                      1, mOpenCLBackend->getPrecision());
 
     std::set<std::string> buildOptions;
     if (nullptr != scaleParams->biasData() && nullptr != scaleParams->biasData()->data()) {
@@ -65,44 +51,31 @@ ScaleExecution::ScaleExecution(const std::vector<Tensor *> &inputs, const MNN::O
         MNN_ASSERT(biasSize == scaleSize);
         const float *biasDataPtr = scaleParams->biasData()->data();
         
-        int buffer_size = ALIGN_UP4(biasSize);
-        if(openclBackend->getOpenCLRuntime()->isWeightCpuTransHalf()) {
-            buffer_size *= sizeof(half_float::half);
-        } else {
-            buffer_size *= sizeof(float);
-        }
+        int buffer_size = ALIGN_UP4(biasSize) * sizeof(float);
         cl::Buffer biasBuffer(openclBackend->getOpenCLRuntime()->context(), CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, buffer_size);
         cl_int error;
         auto biasPtrCL = openclBackend->getOpenCLRuntime()->commandQueue().enqueueMapBuffer(
             biasBuffer, true, CL_MAP_WRITE, 0, buffer_size, nullptr, nullptr, &error);
         if(nullptr != biasPtrCL && error == CL_SUCCESS){
-            if(mOpenCLBackend->getOpenCLRuntime()->isWeightCpuTransHalf()){
-                for (int i = 0; i < biasSize; i++) {
-                    ((half_float::half *)biasPtrCL)[i] = (half_float::half)(biasDataPtr[i]);
-                }
-                for(int i=biasSize; i<ALIGN_UP4(biasSize); i++) {
-                    ((half_float::half*)biasPtrCL)[i] = (half_float::half)(0.0f);
-                }
-            } else {
-                ::memset(biasPtrCL, 0, buffer_size);
-                ::memcpy(biasPtrCL, biasDataPtr, biasSize * sizeof(float));
-            }
+            ::memset(biasPtrCL, 0, buffer_size);
+            ::memcpy(biasPtrCL, biasDataPtr, biasSize * sizeof(float));
         }else{
             MNN_ERROR("Map error biasPtrCL == nullptr \n");
         }
         openclBackend->getOpenCLRuntime()->commandQueue().enqueueUnmapMemObject(biasBuffer, biasPtrCL);
         std::shared_ptr<Tensor> bias;
         bias.reset(Tensor::createDevice<float>({1, 1, 1, biasSize}));
-        backend->onAcquireBuffer(bias.get(), Backend::STATIC);
+        OPENCL_CHECK_ALLOC_CTOR(backend->onAcquireBuffer(bias.get(), Backend::STATIC));
         copyBufferToImage(openclBackend->getOpenCLRuntime(), biasBuffer, openCLImage(bias.get()), UP_DIV(biasSize, 4),
-                          1);
+                          1, mOpenCLBackend->getPrecision());
         mBias = bias;
         buildOptions.emplace("-DHAS_BIAS");
         mHasBias = true;
     }
     std::string kernelName = "scale";
     auto runtime           = mOpenCLBackend->getOpenCLRuntime();
-    unit.kernel          = runtime->buildKernel("scale", kernelName, buildOptions);
+    unit.kernel          = runtime->buildKernel("scale", kernelName, buildOptions, mOpenCLBackend->getPrecision());
+    OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     mMaxWorkGroupSize      = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
 
 #ifdef LOG_VERBOSE
@@ -153,7 +126,7 @@ ErrorCode ScaleExecution::onEncode(const std::vector<Tensor *> &inputs, const st
     std::string name = "scale";
     std::vector<uint32_t> mGWS{1, 1, 1, 1};
     std::vector<uint32_t> mLWS{1, 1, 1, 1};
-    mLWS = localWS3DDefault(gws, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), name, unit.kernel).first;
+    mLWS = localWS3DDefault(gws, mMaxWorkGroupSize, mOpenCLBackend->getOpenCLRuntime(), name, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "scale").first;
     for (size_t i = 0; i < gws.size(); ++i) {
         mGWS[i] = ROUND_UP(gws[i], std::max((uint32_t)1, mLWS[i]));
     }

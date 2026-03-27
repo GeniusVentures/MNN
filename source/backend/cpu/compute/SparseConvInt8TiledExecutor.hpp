@@ -31,13 +31,13 @@ struct SparseQuantMatMulParam {
 class SparseConvInt8TiledExecutor : public ConvInt8TiledExecutor {
 public:
     // given weight+bias+scale, do post process
-    SparseConvInt8TiledExecutor(Backend* backend, const Convolution2D* convOp, std::shared_ptr<ResourceInt8> res);
+    SparseConvInt8TiledExecutor(Backend* backend, const Op* op, std::shared_ptr<ResourceInt8> res);
     virtual ~SparseConvInt8TiledExecutor();
     virtual ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
     virtual ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
     virtual bool onClone(Backend* bn, const Op* op, Execution** dst) override;
 
-    void getPackParameter(int* Unit, int* SrcUnit, int* DestUnit, const CoreInt8Functions* core) override;
+    void getPackParameter(int* Unit, int* SrcUnit, int* DestUnit, const CoreInt8Functions* core);
     bool reorderWeight(Backend* b, const Convolution2DCommon* common, const std::shared_ptr<Tensor>& weightOrigin,
                        std::shared_ptr<Tensor>& weight, const SparseCommon* sparseCommon);
 
@@ -50,7 +50,7 @@ public:
     }
 
 private:
-    SparseConvInt8TiledExecutor(Backend* backend, const Convolution2DCommon* common, const SparseConvInt8TiledExecutor& exe);
+    SparseConvInt8TiledExecutor(Backend* backend, const Op* op, const SparseConvInt8TiledExecutor& exe);
 
     SparseQuantMatMulParam mSparseQuantParam;
     decltype(CoreInt8Functions::MNNPackedSparseQuantMatMulEpx1) mSparseQuantMatMulKernel;

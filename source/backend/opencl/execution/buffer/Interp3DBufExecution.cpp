@@ -28,11 +28,13 @@ Interp3DBufExecution::Interp3DBufExecution(const std::vector<Tensor *> &inputs, 
     std::set<std::string> buildOptions;
     if (op->main_as_Interp()->resizeType() == 1) {
         mKernelName = "nearest3D_buf";
-        unit.kernel                = runtime->buildKernel("interp_buf", mKernelName, buildOptions);
+        unit.kernel                = runtime->buildKernel("interp_buf", mKernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     } else {
         MNN_ERROR("Resize type other than nearest is not supported in Interp3DBuf, change to nearest!");
         mKernelName = "nearest3D_buf";
-        unit.kernel                = runtime->buildKernel("interp_buf", mKernelName, buildOptions);
+        unit.kernel                = runtime->buildKernel("interp_buf", mKernelName, buildOptions, mOpenCLBackend->getPrecision());
+        OPENCL_CHECK_KERNEL_CTOR(unit.kernel);
     }
 
     mMaxWorkGroupSize = static_cast<uint32_t>(runtime->getMaxWorkGroupSize(unit.kernel));
@@ -86,10 +88,10 @@ ErrorCode Interp3DBufExecution::onEncode(const std::vector<Tensor *> &inputs, co
     ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(outputDepth));
     ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(outputHeight));
     ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(outputWidth));
-    ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(channelBlocks));
+    ret |= unit.kernel->get().setArg(idx++, static_cast<int32_t>(inputBatch));
     MNN_CHECK_CL_SUCCESS(ret, "setArg Interp3DBufExecution");
 
-    mLWS = localWS3DDefault(mGWS, mMaxWorkGroupSize, runtime, mKernelName, unit.kernel).first;
+    mLWS = localWS3DDefault(mGWS, mMaxWorkGroupSize, runtime, mKernelName, unit.kernel, mOpenCLBackend->getCLTuneLevel(), "interp_buf").first;
     mOpenCLBackend->recordKernel3d(unit.kernel, mGWS, mLWS);
     unit.globalWorkSize = {mGWS[0], mGWS[1], mGWS[2]};
     unit.localWorkSize = {mLWS[0], mLWS[1], mLWS[2]};
@@ -108,7 +110,7 @@ public:
         for (int i = 0; i < outputs.size(); ++i) {
             TensorUtils::setTensorSupportPack(outputs[i], false);
         }
-        return new Interp3DBufExecution(inputs, op, backend);
+        OPENCL_CREATOR_CHECK(new Interp3DBufExecution(inputs, op, backend));
         ;
     }
 };

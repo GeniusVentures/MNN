@@ -41,13 +41,13 @@ void dispatch(std::function<void(MNNForwardType)> payload, MNNForwardType backen
  @param threshold
  */
 template <typename T>
-bool checkVector(const T* result, const T* rightData, int size, T threshold){
+bool checkVector(const T* result, const T* rightData, size_t size, T threshold){
     MNN_ASSERT(result != nullptr);
     MNN_ASSERT(rightData != nullptr);
     MNN_ASSERT(size >= 0);
     for(int i = 0; i < size; ++i){
         if(fabs(result[i] - rightData[i]) > threshold){
-            std::cout << i << " error, right: " << rightData[i] << ", compute: " << result[i] << std::endl;
+            std::cout << "No." << i << " error, right: " << rightData[i] << ", compute: " << result[i] << std::endl;
             return false;
         }
     }
@@ -88,6 +88,7 @@ bool checkVectorByRelativeError(const T* result, const T* rightData, const T* al
     for(int i = 0; i < size; ++i) {
         if (fabs(result[i] - rightData[i]) > reltiveError && fabs(result[i] - alterRightData[i]) > reltiveError) {
             std::cout << i << ": right: " << rightData[i] << " or " << alterRightData[i] << ", compute: " << result[i] << std::endl;
+            std::cout << "abs error is " << fabs(result[i] - rightData[i]) << ", but relative error is required: " << reltiveError << std::endl;
             return false;
         }
     }
@@ -102,10 +103,13 @@ float convertFP32ToFP16(float fp32Value);
 inline float keepFP32Precision(float fp32Value) {
     return fp32Value;
 }
+MNNForwardType getCurrentType();
+
+std::shared_ptr<MNN::Express::Executor> cloneCurrentExecutor();
 
 using ConvertFP32 = float(*)(float fp32Value);
 
-const static ConvertFP32 FP32Converter[MNN::BackendConfig::Precision_Low + 2] = {
+const static std::vector<ConvertFP32> FP32Converter = {
     keepFP32Precision,
     keepFP32Precision,
 #ifdef MNN_SUPPORT_BF16

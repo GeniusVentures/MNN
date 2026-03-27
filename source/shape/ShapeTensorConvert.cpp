@@ -23,6 +23,7 @@ public:
             sourceFmt = MNN_DATA_FORMAT_NCHW;
         }
         auto destFmt                                          = info->dest();
+
         TensorUtils::getDescribe(outputs[0])->dimensionFormat = destFmt;
         if (destFmt == MNN_DATA_FORMAT_NC4HW4) {
             destFmt = MNN_DATA_FORMAT_NCHW;

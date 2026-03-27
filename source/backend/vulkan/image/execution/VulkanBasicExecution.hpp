@@ -26,6 +26,16 @@ public:
     Backend* backend() {
         return mBackend;
     }
+#ifdef ENABLE_VULKAN_TIME_PROFILE
+    void setName(const char * name) {
+        mName = name;
+    }
+    std::string getName() {
+        return mName;
+    }
+protected:
+    std::string mName;
+#endif
 private:
     Backend* mBackend;
 };

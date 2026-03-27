@@ -17,6 +17,7 @@
 #include "math/Vec.hpp"
 
 namespace MNN {
+#ifdef MNN_SUPPORT_QUANT_EXTEND
 
 ErrorCode CPUBinaryInt8::onResize(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) {
     auto input0DataCount = TensorUtils::getRawSize(inputs[0]);
@@ -80,16 +81,16 @@ ErrorCode CPUBinaryInt8::onExecute(const std::vector<Tensor*>& inputs, const std
 
     int inpBytes = 1;
     int outBytes = 1;
+    QuanPrePostParameters params;
+    
+    params.inputScale = mInputScales.data();
+    params.outputScale = mOutputScales.data();
+    params.outputZeroPoint = mOutputZeros.data();
+    params.inputZeroPoint = mInputZeros.data();
+    params.minValue = (ssize_t)mMinValue;
+    params.maxValue = (ssize_t)TensorUtils::getDescribe(outputs[0])->quantAttr->max;
 
     MNN_CONCURRENCY_BEGIN(tId, schedule.second) {
-        QuanPrePostParameters params;
-        
-        params.inputScale = mInputScales.data();
-        params.outputScale = mOutputScales.data();
-        params.outputZeroPoint = mOutputZeros.data();
-        params.inputZeroPoint = mInputZeros.data();
-        params.minValue = (ssize_t)mMinValue;
-        params.maxValue = (ssize_t)TensorUtils::getDescribe(outputs[0])->quantAttr->max;
 
         int start = schedule.first * (int)tId;
         int realSize = schedule.first;
@@ -113,7 +114,6 @@ ErrorCode CPUBinaryInt8::onExecute(const std::vector<Tensor*>& inputs, const std
         }
     }
     MNN_CONCURRENCY_END();
-
     return NO_ERROR;
 }
 
@@ -143,11 +143,20 @@ MNNBinaryExecInt8 CPUBinaryInt8::selectForInt8(int type) {
             return executeInt8<int8_t, int8_t, BinaryAtan2<float, float, float>>;
         case BinaryOpOperation_MOD:
             return executeInt8<int8_t, int8_t, BinaryMod<float, float, float>>;
+        case BinaryOpOperation_LESS:
+            return executeInt8<int8_t, int8_t, BinaryLess<float, float, float>>;
+        case BinaryOpOperation_LESS_EQUAL:
+            return executeInt8<int8_t, int8_t, BinaryLessEqual<float, float, float>>;
+        case BinaryOpOperation_GREATER:
+            return executeInt8<int8_t, int8_t, BinaryGreater<float, float, float>>;
+        case BinaryOpOperation_GREATER_EQUAL:
+            return executeInt8<int8_t, int8_t, BinaryGreaterEqual<float, float, float>>;
         default:
             MNN_ASSERT(false);
             break;
     }
     return nullptr;
 }
+#endif
 
 } // namespace MNN

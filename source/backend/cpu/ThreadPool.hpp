@@ -22,32 +22,31 @@ class MNN_PUBLIC ThreadPool {
 public:
     typedef std::pair<std::function<void(int)>, int> TASK;
 
-    int number() const {
+    int numberThread() const {
         return mNumberThread;
     }
-    static void enqueue(TASK&& task, int index);
+    void enqueue(TASK* task, int index);
 
-    static void active();
-    static void deactive();
+    void active();
+    void deactive();
 
-    static int acquireWorkIndex();
-    static void releaseWorkIndex(int index);
+    int acquireWorkIndex();
+    void releaseWorkIndex(int index);
 
-    static int init(int number);
+    static int init(int numberThread, unsigned long cpuMask, ThreadPool*& threadPool);
     static void destroy();
 
 private:
-    void enqueueInternal(TASK&& task, int index);
+    void enqueueInternal(TASK* task, int index);
 
-    static ThreadPool* gInstance;
-    ThreadPool(int number = 0);
+    ThreadPool(int numberThread = 0);
     ~ThreadPool();
 
     std::vector<std::thread> mWorkers;
     std::vector<bool> mTaskAvailable;
     std::atomic<bool> mStop = {false};
 
-    std::vector<std::pair<TASK, std::vector<std::atomic_bool*>>> mTasks;
+    std::vector<std::pair<TASK*, std::vector<std::atomic_bool*>>> mTasks;
     std::condition_variable mCondition;
     std::mutex mQueueMutex;
 

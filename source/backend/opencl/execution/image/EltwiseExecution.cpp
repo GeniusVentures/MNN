@@ -32,11 +32,16 @@ EltwiseExecution::EltwiseExecution(const std::vector<Tensor *> &inputs, const st
     MNN_ASSERT(inputs.size() >= 2);
     mUnits.resize(inputs.size() - 1);
     mMaxWorkGroupSize.resize(inputs.size() - 1);
-    auto runTime = static_cast<OpenCLBackend*>(backend)->getOpenCLRuntime();
+    mOpenCLBackend =static_cast<OpenCLBackend*>(backend);
+    auto runTime = mOpenCLBackend->getOpenCLRuntime();
     std::set<std::string> buildOptions;
     buildOptions.emplace("-DOPERATOR=" + compute);
+    if(op->type() == OpType_BinaryOp && op->main_as_BinaryOp()->opType() == BinaryOpOperation_MOD && (outputs[0]->getType().code == halide_type_int || outputs[0]->getType().code == halide_type_uint)){
+        buildOptions.emplace("-DINT_COMPUTE_MOD");
+    }
     for(int i = 0; i < mUnits.size(); ++i){
-        mUnits[i].kernel = runTime->buildKernel("binary", "binary", buildOptions, inputs[i], outputs[0]);
+        mUnits[i].kernel = runTime->buildKernel("binary", "binary", buildOptions, mOpenCLBackend->getPrecision(), inputs[i], outputs[0]);
+        OPENCL_CHECK_KERNEL_CTOR(mUnits[i].kernel);
         mMaxWorkGroupSize[i]  = static_cast<uint32_t>(runTime->getMaxWorkGroupSize(mUnits[i].kernel));
     }
 }
@@ -88,7 +93,7 @@ ErrorCode EltwiseExecution::onEncode(const std::vector<Tensor *> &inputs, const 
         MNN_CHECK_CL_SUCCESS(ret, "setArg eltwiseExecution");
 
         std::string name = "binary";
-        std::vector<uint32_t> localWorkSize = localWS2DDefault(globalWorkSize, mMaxWorkGroupSize[0], openCLBackend->getOpenCLRuntime(), name, unit.kernel).first;
+        std::vector<uint32_t> localWorkSize = localWS2DDefault(globalWorkSize, mMaxWorkGroupSize[0], openCLBackend->getOpenCLRuntime(), name, unit.kernel, openCLBackend->getCLTuneLevel(), "binary").first;
         
         unit.globalWorkSize = {globalWorkSize[0], globalWorkSize[1]};
         unit.localWorkSize  = {localWorkSize[0], localWorkSize[1]};
@@ -143,7 +148,7 @@ ErrorCode EltwiseExecution::onEncode(const std::vector<Tensor *> &inputs, const 
 
         if(i == 0) {
             std::string name = "binary";
-            lws = localWS2DDefault(globalWorkSize, mMaxWorkGroupSize[i], openCLBackend->getOpenCLRuntime(), name, unit.kernel).first;
+            lws = localWS2DDefault(globalWorkSize, mMaxWorkGroupSize[i], openCLBackend->getOpenCLRuntime(), name, unit.kernel, openCLBackend->getCLTuneLevel(), "binary").first;
         }
         
         unit.globalWorkSize = {globalWorkSize[0], globalWorkSize[1]};
@@ -160,14 +165,10 @@ public:
                                 const MNN::Op *op, Backend *backend) const override {
         if (op->type() == OpType_Eltwise) {
             switch (op->main_as_Eltwise()->type()) {
-                case EltwiseType_SUM:
-                    return new EltwiseExecution(inputs, outputs, "in0+in1", op, backend);
-                case EltwiseType_SUB:
-                    return new EltwiseExecution(inputs, outputs, "in0-in1", op, backend);
-                case EltwiseType_PROD:
-                    return new EltwiseExecution(inputs, outputs, "in0*in1", op, backend);
-                case EltwiseType_MAXIMUM:
-                    return new EltwiseExecution(inputs, outputs, "in0>in1?in0:in1", op, backend);
+                case EltwiseType_SUM: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0+in1", op, backend));
+                case EltwiseType_SUB: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0-in1", op, backend));
+                case EltwiseType_PROD: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0*in1", op, backend));
+                case EltwiseType_MAXIMUM: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0>in1?in0:in1", op, backend));
                 default:
                     break;
             }
@@ -178,42 +179,24 @@ public:
             MNN_ASSERT(inputs.size() > 1);
 
             switch (op->main_as_BinaryOp()->opType()) {
-                case BinaryOpOperation_MUL:
-                    return new EltwiseExecution(inputs, outputs, "in0*in1", op, backend);
-                case BinaryOpOperation_ADD:
-                    return new EltwiseExecution(inputs, outputs, "in0+in1", op, backend);
-                case BinaryOpOperation_SUB:
-                    return new EltwiseExecution(inputs, outputs, "in0-in1", op, backend);
-                case BinaryOpOperation_REALDIV:
-                    return new EltwiseExecution(inputs, outputs, "sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001))", op, backend);
-                case BinaryOpOperation_MINIMUM:
-                    return new EltwiseExecution(inputs, outputs, "in0>in1?in1:in0", op, backend);
-                case BinaryOpOperation_MAXIMUM:
-                    return new EltwiseExecution(inputs, outputs, "in0>in1?in0:in1", op, backend);
-                case BinaryOpOperation_GREATER:
-                    return new EltwiseExecution(inputs, outputs, "convert_float4(-isgreater(in0,in1))", op, backend);
-                case BinaryOpOperation_LESS:
-                    return new EltwiseExecution(inputs, outputs, "convert_float4(-isless(in0,in1))", op, backend);
-                case BinaryOpOperation_LESS_EQUAL:
-                    return new EltwiseExecution(inputs, outputs, "convert_float4(-islessequal(in0,in1))", op, backend);
-                case BinaryOpOperation_GREATER_EQUAL:
-                    return new EltwiseExecution(inputs, outputs, "convert_float4(-isgreaterequal(in0,in1))", op, backend);
-                case BinaryOpOperation_EQUAL:
-                    return new EltwiseExecution(inputs, outputs, "convert_float4(-isequal(in0,in1))", op, backend);
-                case BinaryOpOperation_FLOORDIV:
-                    return new EltwiseExecution(inputs, outputs, "floor(sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001)))", op, backend);
-                case BinaryOpOperation_FLOORMOD:
-                    return new EltwiseExecution(inputs, outputs, "in0-floor(sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001)))*in1", op, backend);
-                case BinaryOpOperation_POW:
-                    return new EltwiseExecution(inputs, outputs, "pow(in0,in1)", op, backend);
-                case BinaryOpOperation_SquaredDifference:
-                    return new EltwiseExecution(inputs, outputs, "(in0-in1)*(in0-in1)", op, backend);
-                case BinaryOpOperation_ATAN2:
-                    return new EltwiseExecution(inputs, outputs, "(in1==(float4)0?(sign(in0)*(float4)(PI/2)):(atan(in0/in1)+(in1>(float4)0?(float4)0:sign(in0)*(float4)PI)))", op, backend);
-                case BinaryOpOperation_NOTEQUAL:
-                    return new EltwiseExecution(inputs, outputs, "convert_float4(-isnotequal(in0,in1))", op, backend);
-                case BinaryOpOperation_MOD:
-                    return new EltwiseExecution(inputs, outputs, "in0-floor(sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001)))*in1", op, backend);
+                case BinaryOpOperation_MUL: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0*in1", op, backend));
+                case BinaryOpOperation_ADD: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0+in1", op, backend));
+                case BinaryOpOperation_SUB: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0-in1", op, backend));
+                case BinaryOpOperation_REALDIV: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001))", op, backend));
+                case BinaryOpOperation_MINIMUM: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0>in1?in1:in0", op, backend));
+                case BinaryOpOperation_MAXIMUM: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0>in1?in0:in1", op, backend));
+                case BinaryOpOperation_GREATER: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "convert_float4(-isgreater(in0,in1))", op, backend));
+                case BinaryOpOperation_LESS: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "convert_float4(-isless(in0,in1))", op, backend));
+                case BinaryOpOperation_LESS_EQUAL: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "convert_float4(-islessequal(in0,in1))", op, backend));
+                case BinaryOpOperation_GREATER_EQUAL: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "convert_float4(-isgreaterequal(in0,in1))", op, backend));
+                case BinaryOpOperation_EQUAL: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "convert_float4(-isequal(in0,in1))", op, backend));
+                case BinaryOpOperation_FLOORDIV: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "floor(sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001)))", op, backend));
+                case BinaryOpOperation_FLOORMOD: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0-floor(sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001)))*in1", op, backend));
+                case BinaryOpOperation_POW: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "pow(in0,in1)", op, backend));
+                case BinaryOpOperation_SquaredDifference: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "(in0-in1)*(in0-in1)", op, backend));
+                case BinaryOpOperation_ATAN2: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "(in1==(float4)0?(sign(in0)*(float4)(PI/2)):(atan(in0/in1)+(in1>(float4)0?(float4)0:sign(in0)*(float4)PI)))", op, backend));
+                case BinaryOpOperation_NOTEQUAL: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "convert_float4(-isnotequal(in0,in1))", op, backend));
+                case BinaryOpOperation_MOD: OPENCL_CREATOR_CHECK(new EltwiseExecution(inputs, outputs, "in0-floor(sign(in1)*in0/(fabs(in1)>(float4)((float)0.0000001)?fabs(in1):(float4)((float)0.0000001)))*in1", op, backend));
                 default:
                     break;
             }

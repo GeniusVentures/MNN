@@ -11,6 +11,8 @@
 
 #include "backend/cpu/CPUConvolution.hpp"
 #include "backend/cpu/compute/Int8FunctionsOpt.h"
+#include "ConvInt8TiledExecutor.hpp"
+#ifndef MNN_REDUCE_SIZE
 
 namespace MNN {
 class ConvInt8Winograd : public CPUConvolution {
@@ -36,6 +38,7 @@ private:
     std::vector<Unit> mUnits;
     std::shared_ptr<CPUConvolution::ResourceInt8> mResource;
     std::shared_ptr<Tensor> mInputFloat;
+    std::shared_ptr<Tensor> mFusedBias;
     
     struct WinoResource {
         std::shared_ptr<Tensor> weight;
@@ -73,4 +76,5 @@ private:
     };
 };
 } // namespace MNN
+#endif
 #endif /* ConvInt8Winograd_hpp */

@@ -15,15 +15,47 @@
 namespace MNN {
 struct Op;
 struct CoreFunctions;
+#ifdef MNN_SUPPORT_TRANSFORMER_FUSE
+struct KVMeta {
+    enum {
+        NoChange,
+        PendingWrite,
+        PendingRead
+    } file_operation;
+    size_t block = 4096;
+    size_t previous = 0;
+    size_t remove = 0;
+    int* reserve = nullptr;
+    int n_reserve = 0;
+    size_t add = 0;
+    std::string file_name = "";
+    int file_flag = NoChange;
+    int seqlen_in_disk = 0;
+    int layer_index = 0;
+    int layer_nums = 0;
+    int computeReverseSize() const {
+        int sum = 0;
+        for (int i=0; i<n_reserve; ++i) {
+            int reserveUnit = reserve[2*i+1];
+            if (reserveUnit <= 0) {
+                // Invalid
+                return -1;
+            }
+            sum += reserveUnit;
+        }
+        return sum;
+    }
+};
+#endif
 
 class MNN_PUBLIC OpCommonUtils {
 #define USE_EXTERNAL_DATA(param) (param->external() && param->external()->size() > 1)
 public:
+    static bool checkNet(const void* buffer, size_t length);
     static Tensor::DimensionType convertDimType(MNN_DATA_FORMAT dimensionFormat);
     static bool supportDynamicInputMemory(MNNForwardType type);
     static void broastCastComputeDim(int* dims, int* stride, int* iStride0, int* iStride1, const Tensor* input0,
                                      const Tensor* input1, const Tensor* output);
-    static std::vector<std::tuple<int, int, int>> computeReduceDims(const std::vector<Tensor*>& inputs, const Op* op);
     static void unravelIndexHelper(int32_t* coordinate, const int32_t* mod, int size,
                                    int indice);
     static int computeStride(int32_t* strides, const int* shape, int length);
@@ -63,6 +95,8 @@ public:
     static bool computeMatMulSize(bool transposeA, bool transposeB, const Tensor* A, const Tensor* B, int& e, int& l, int& h);
     static Execution* createExecutionWithExternal(Backend* backend, const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                                   const MNN::Op* op, FileLoader* externalFile, std::shared_ptr<BufferStorage>& tmpstore);
+    static DataType convertDataType(halide_type_t type);
+
 };
 } // namespace MNN
 
