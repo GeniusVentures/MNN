@@ -30,7 +30,7 @@ layout(set=0, binding=7) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-    vec4 f0;  // scale, 0, 0, 0
+    vec4 f0;  // scale, sparseVTau, 0, 0
 } uConst;
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -61,6 +61,7 @@ void main() {
     const int maxLen = uConst.s2.w;
 
     const float scale = uConst.f0.x;
+    const float sparseVTau = uConst.f0.y;
 
     const int kvh = h / group;
     if (kvh >= kvHeadNum) {
@@ -123,6 +124,9 @@ void main() {
         }
 
         // cacheV (kvh-major, packed-D): [kvHeadNum, maxLen, headDim/4, 4]
+        if (w < sparseVTau) {
+            continue;
+        }
         const int vOff4Base = ((kvh * maxLen + k) * d4Size);
         for (int i = 0; i < d4Size; ++i) {
             vec4 vv = vec4(uCacheValue.data[vOff4Base + i]);

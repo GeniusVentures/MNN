@@ -18,7 +18,7 @@ layout(set=0, binding=4) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-    vec4 f0;  // scale, 0, 0, 0
+    vec4 f0;  // scale, sparseVTau, 0, 0
 } uConst;
 
 layout(push_constant) uniform PushConsts {
@@ -69,6 +69,7 @@ void main() {
     const int blockLen4_4 = blockLen4 / 4;
 
     const int maxLen = uConst.s2.w;
+    const float sparseVTau = uConst.f0.y;
     const int d = d4 * 4;
 
     const int row0 = (q0 + 0) * headNum + h;
@@ -98,29 +99,56 @@ void main() {
         vec4 w0 = vec4(uW.data[wBase0 + k4]);
         vec4 w1 = q1Valid ? vec4(uW.data[wBase1 + k4]) : vec4(0.0);
 
-        if ((gk0 + 0) < totalLen) {
+        const bool keep00 = w0.x >= sparseVTau;
+        const bool keep10 = q1Valid && (w1.x >= sparseVTau);
+        if ((gk0 + 0) < totalLen && (keep00 || keep10)) {
             const int vOff4 = ((kvh * maxLen + (gk0 + 0)) * d4Size) + d4;
             vec4 v = vec4(uCacheValue.data[vOff4]);
-            outVec0 += w0.x * v;
-            if (q1Valid) outVec1 += w1.x * v;
+            if (keep00) {
+                outVec0 += w0.x * v;
+            }
+            if (keep10) {
+                outVec1 += w1.x * v;
+            }
         }
-        if ((gk0 + 1) < totalLen) {
+
+        const bool keep01 = w0.y >= sparseVTau;
+        const bool keep11 = q1Valid && (w1.y >= sparseVTau);
+        if ((gk0 + 1) < totalLen && (keep01 || keep11)) {
             const int vOff4 = ((kvh * maxLen + (gk0 + 1)) * d4Size) + d4;
             vec4 v = vec4(uCacheValue.data[vOff4]);
-            outVec0 += w0.y * v;
-            if (q1Valid) outVec1 += w1.y * v;
+            if (keep01) {
+                outVec0 += w0.y * v;
+            }
+            if (keep11) {
+                outVec1 += w1.y * v;
+            }
         }
-        if ((gk0 + 2) < totalLen) {
+
+        const bool keep02 = w0.z >= sparseVTau;
+        const bool keep12 = q1Valid && (w1.z >= sparseVTau);
+        if ((gk0 + 2) < totalLen && (keep02 || keep12)) {
             const int vOff4 = ((kvh * maxLen + (gk0 + 2)) * d4Size) + d4;
             vec4 v = vec4(uCacheValue.data[vOff4]);
-            outVec0 += w0.z * v;
-            if (q1Valid) outVec1 += w1.z * v;
+            if (keep02) {
+                outVec0 += w0.z * v;
+            }
+            if (keep12) {
+                outVec1 += w1.z * v;
+            }
         }
-        if ((gk0 + 3) < totalLen) {
+
+        const bool keep03 = w0.w >= sparseVTau;
+        const bool keep13 = q1Valid && (w1.w >= sparseVTau);
+        if ((gk0 + 3) < totalLen && (keep03 || keep13)) {
             const int vOff4 = ((kvh * maxLen + (gk0 + 3)) * d4Size) + d4;
             vec4 v = vec4(uCacheValue.data[vOff4]);
-            outVec0 += w0.w * v;
-            if (q1Valid) outVec1 += w1.w * v;
+            if (keep03) {
+                outVec0 += w0.w * v;
+            }
+            if (keep13) {
+                outVec1 += w1.w * v;
+            }
         }
     }
 
@@ -136,4 +164,3 @@ void main() {
         uOAcc.data[accBase1 + 3] = outVec1.w;
     }
 }
-

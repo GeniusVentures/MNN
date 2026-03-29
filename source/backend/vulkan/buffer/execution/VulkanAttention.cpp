@@ -487,14 +487,14 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
         int pastLenForPrefill = 0;
         if (mNeedKvCache) {
             MNN_ASSERT(nullptr != mMeta);
-            MNN_ASSERT(mMeta->n_reserve == 0);
-            MNN_ASSERT(mMeta->computeReverseSize() == 0);
+            const int reverseSize = mMeta->computeReverseSize();
+            const int reverse = reverseSize > 0 ? reverseSize : 0;
             const int previous = (int)mMeta->previous;
             const int remove = (int)mMeta->remove;
             MNN_ASSERT(previous >= 0);
             MNN_ASSERT(remove >= 0);
             MNN_ASSERT(remove <= previous);
-            pastLenForPrefill = previous - remove;
+            pastLenForPrefill = previous - remove + reverse;
         }
         mPrefillTotalLen = pastLenForPrefill + mKeyLen;
         mQueryLen4 = UP_DIV(mQueryLen, 4) * 4;
@@ -811,8 +811,8 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     int pastLenForCompute = 0;
     if (mNeedKvCache) {
         MNN_ASSERT(nullptr != mMeta);
-        MNN_ASSERT(mMeta->n_reserve == 0);
-        MNN_ASSERT(mMeta->computeReverseSize() == 0);
+        const int reverseSize = mMeta->computeReverseSize();
+        const int reverse = reverseSize > 0 ? reverseSize : 0;
         const int previous = (int)mMeta->previous;
         const int remove = (int)mMeta->remove;
         const int add = (int)mMeta->add;
@@ -821,9 +821,90 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
         MNN_ASSERT(add >= 0);
         MNN_ASSERT(add <= mKeyLen);
         MNN_ASSERT(remove <= previous);
-        pastLenForCompute = previous - remove;
+
+        const int start = previous - remove;
+        pastLenForCompute = start + reverse;
+
         // Ensure capacity for compute window (pastLen + keyLen), because shaders read only from KV cache.
         mKVCache->ensureCapacity(vkBn, pastLenForCompute + mKeyLen, mKvHeadNum, mHeadDim, mUseFP16);
+
+        // Compact reserved spans into a contiguous kept region: dst starts at (previous - remove).
+        if (mMeta->n_reserve > 0 && reverse > 0) {
+            MNN_ASSERT(nullptr != mMeta->reserve);
+            MNN_ASSERT(start >= 0);
+            MNN_ASSERT(nullptr != mKVCache->key && nullptr != mKVCache->value);
+
+            const size_t bytes = mUseFP16 ? sizeof(uint16_t) : sizeof(float);
+            const int d4Size = mHeadDim / 4;
+            MNN_ASSERT(d4Size > 0);
+
+            std::shared_ptr<VulkanBuffer> compactKey(new VulkanBuffer(vkBn->getMemoryPool(), false, mKVCache->key->size(), nullptr,
+                                                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+            std::shared_ptr<VulkanBuffer> compactValue(new VulkanBuffer(vkBn->getMemoryPool(), false, mKVCache->value->size(), nullptr,
+                                                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+
+            const VkDeviceSize vec4Bytes = (VkDeviceSize)(4 * bytes);
+            const VkDeviceSize keyRowStride = (VkDeviceSize)mKVCache->maxLen * vec4Bytes;
+            const VkDeviceSize valueTokenBytes = (VkDeviceSize)mHeadDim * (VkDeviceSize)bytes;
+            const VkDeviceSize valueHeadStride = (VkDeviceSize)mKVCache->maxLen * valueTokenBytes;
+
+            std::vector<VkBufferCopy> keyRegions;
+            std::vector<VkBufferCopy> valueRegions;
+            keyRegions.reserve((size_t)mKvHeadNum * (size_t)d4Size * (size_t)mMeta->n_reserve);
+            valueRegions.reserve((size_t)mKvHeadNum * (size_t)mMeta->n_reserve);
+
+            int dstPos = 0;
+            for (int n = 0; n < mMeta->n_reserve; ++n) {
+                const int begin = mMeta->reserve[2 * n + 0];
+                const int length = mMeta->reserve[2 * n + 1];
+                MNN_ASSERT(begin >= 0);
+                MNN_ASSERT(length > 0);
+
+                const int srcPos = start + begin;
+                const int dstBase = start + dstPos;
+                MNN_ASSERT(srcPos >= 0);
+                MNN_ASSERT(srcPos + length <= previous);
+                MNN_ASSERT(srcPos + length <= mKVCache->maxLen);
+                MNN_ASSERT(dstBase >= 0);
+                MNN_ASSERT(dstBase + length <= mKVCache->maxLen);
+
+                for (int kvh = 0; kvh < mKvHeadNum; ++kvh) {
+                    VkBufferCopy valueCopy;
+                    valueCopy.srcOffset = (VkDeviceSize)kvh * valueHeadStride + (VkDeviceSize)srcPos * valueTokenBytes;
+                    valueCopy.dstOffset = (VkDeviceSize)kvh * valueHeadStride + (VkDeviceSize)dstBase * valueTokenBytes;
+                    valueCopy.size = (VkDeviceSize)length * valueTokenBytes;
+                    valueRegions.emplace_back(valueCopy);
+                }
+
+                const int rowBase = mKvHeadNum * d4Size;
+                for (int row = 0; row < rowBase; ++row) {
+                    VkBufferCopy keyCopy;
+                    keyCopy.srcOffset = (VkDeviceSize)row * keyRowStride + (VkDeviceSize)srcPos * vec4Bytes;
+                    keyCopy.dstOffset = (VkDeviceSize)row * keyRowStride + (VkDeviceSize)dstBase * vec4Bytes;
+                    keyCopy.size = (VkDeviceSize)length * vec4Bytes;
+                    keyRegions.emplace_back(keyCopy);
+                }
+
+                dstPos += length;
+            }
+            MNN_ASSERT(dstPos == reverse);
+
+            if (!keyRegions.empty()) {
+                vkBn->copyGPUToGPUBufferRegions(mKVCache->key->buffer(), compactKey->buffer(), keyRegions.data(),
+                                                (uint32_t)keyRegions.size());
+            }
+            if (!valueRegions.empty()) {
+                vkBn->copyGPUToGPUBufferRegions(mKVCache->value->buffer(), compactValue->buffer(), valueRegions.data(),
+                                                (uint32_t)valueRegions.size());
+            }
+
+            mKVCache->key = compactKey;
+            mKVCache->value = compactValue;
+        }
     }
 
     const int group = mHeadNum / mKvHeadNum;
@@ -835,14 +916,17 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     const Tensor* mask = nullptr;
     if (inputs.size() > 3 && nullptr != inputs[3]) {
         mask = inputs[3];
-        hasMask = 1;
-        MNN_ASSERT(mask->getType() == halide_type_of<float>());
-        const int md = mask->dimensions();
-        MNN_ASSERT(md >= 2);
-        maskQlen = mask->length(md - 2);
-        maskKvlen = mask->length(md - 1);
-        MNN_ASSERT(maskQlen == mQueryLen);
-        MNN_ASSERT(maskKvlen > 0);
+        // Keep CUDA/OpenCL compatibility: scalar mask is a placeholder in kv-cache mode.
+        if (!(mNeedKvCache && mask->elementSize() == 1)) {
+            hasMask = 1;
+            MNN_ASSERT(mask->getType() == halide_type_of<float>());
+            const int md = mask->dimensions();
+            MNN_ASSERT(md >= 2);
+            maskQlen = mask->length(md - 2);
+            maskKvlen = mask->length(md - 1);
+            MNN_ASSERT(maskQlen == mQueryLen);
+            MNN_ASSERT(maskKvlen > 0);
+        }
     }
 
     auto gpuParam = reinterpret_cast<GpuParam*>(mParam->map());
@@ -859,7 +943,8 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     gpuParam->s2[2] = hasMask;
     gpuParam->s2[3] = mNeedKvCache ? mKVCache->maxLen : 0;
     gpuParam->f0[0] = _invSqrt((float)mHeadDim);
-    gpuParam->f0[1] = 0.0f;
+    const float sparseTau = (mNeedKvCache && nullptr != mMeta && mMeta->sparse_v_enable) ? mMeta->sparse_v_tau : -1.0f;
+    gpuParam->f0[1] = sparseTau;
     gpuParam->f0[2] = 0.0f;
     gpuParam->f0[3] = 0.0f;
     mParam->unmap();

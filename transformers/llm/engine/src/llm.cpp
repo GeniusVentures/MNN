@@ -161,6 +161,8 @@ void Llm::setRuntimeHint(std::shared_ptr<Express::Executor::RuntimeManager> &rtg
     rtg->setExternalPath(mConfig->npu_model_dir(), MNN::Interpreter::EXTERNAL_NPU_FILE_DIR);
     rtg->setHint(MNN::Interpreter::DYNAMIC_QUANT_OPTIONS, mConfig->config_.value("dynamic_option", 0));
 
+    mMeta->sparse_v_enable = mConfig->config_.value("sparse_v_enable", false);
+    mMeta->sparse_v_tau = mConfig->config_.value("sparse_v_tau", 1.0e-6f);
     rtg->setHintPtr(Interpreter::KVCACHE_INFO, mMeta.get());
     if (backend_type_convert(mConfig->backend_type()) != 0) { // not cpu
         std::string cacheFilePath = tmpPath.length() != 0 ? tmpPath : ".";
@@ -1029,6 +1031,8 @@ Llm::Llm(std::shared_ptr<LlmConfig> config) : mConfig(config) {
     mContext.reset(new LlmContext);
     mMeta.reset(new KVMeta);
     mMeta->layer_nums = mConfig->layer_nums();
+    mMeta->sparse_v_enable = mConfig->config_.value("sparse_v_enable", false);
+    mMeta->sparse_v_tau = mConfig->config_.value("sparse_v_tau", 1.0e-6f);
     mGenerateParam.reset(new GenerationParams);
     mGenerateParam->timeout_ms = mConfig->timeout_ms();
 }

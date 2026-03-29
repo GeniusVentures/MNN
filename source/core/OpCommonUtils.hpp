@@ -33,6 +33,8 @@ struct KVMeta {
     int seqlen_in_disk = 0;
     int layer_index = 0;
     int layer_nums = 0;
+    bool sparse_v_enable = false;
+    float sparse_v_tau = 1.0e-6f;
     int computeReverseSize() const {
         int sum = 0;
         for (int i=0; i<n_reserve; ++i) {

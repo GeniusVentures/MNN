@@ -23,7 +23,7 @@ private:
         ivec4 s0; // qLen, kLen, headNum, kvHeadNum
         ivec4 s1; // headDim, group, pastLen, totalLen
         ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-        vec4 f0;  // scale, 0, 0, 0
+        vec4 f0;  // scale, sparseVTau, 0, 0
     };
 
     struct KVCache {
