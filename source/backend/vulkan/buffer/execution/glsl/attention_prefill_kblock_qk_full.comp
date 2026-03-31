@@ -18,7 +18,7 @@ layout(set=0, binding=4) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-    vec4 f0;  // scale, 0, 0, 0
+    vec4 f0;  // scale, sparseVTau, lowerTriangularMask, 0
 } uConst;
 
 layout(push_constant) uniform PushConsts {
@@ -29,6 +29,17 @@ layout(push_constant) uniform PushConsts {
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 const int MAX_D4 = 64; // headDim <= 256
+
+int cacheKeyOffset(int kvh, int d4, int token, int d4Size, int maxLen) {
+    const int turboBlockSize = int(uConst.f0.w);
+    if (turboBlockSize > 0) {
+        const int turboBlockCount = (maxLen + turboBlockSize - 1) / turboBlockSize;
+        const int turboBlock = token / turboBlockSize;
+        const int turboOffset = token - turboBlock * turboBlockSize;
+        return ((kvh * d4Size + d4) * turboBlockCount + turboBlock) * turboBlockSize + turboOffset;
+    }
+    return (kvh * d4Size + d4) * maxLen + token;
+}
 
 // Fast path for full K-block (blockLen == 512):
 // - No per-lane bounds checks / conditional loads.
@@ -88,11 +99,10 @@ void main() {
         vec4 qv2 = vec4(uQuery.data[qBase + 2]);
         vec4 qv3 = vec4(uQuery.data[qBase + 3]);
 
-        const int kBase = (kvh * d4Size + i) * maxLen + gk0;
-        vec4 kv0 = vec4(uCacheKey.data[kBase + 0]);
-        vec4 kv1 = vec4(uCacheKey.data[kBase + 1]);
-        vec4 kv2 = vec4(uCacheKey.data[kBase + 2]);
-        vec4 kv3 = vec4(uCacheKey.data[kBase + 3]);
+        vec4 kv0 = vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 0, d4Size, maxLen)]);
+        vec4 kv1 = vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 1, d4Size, maxLen)]);
+        vec4 kv2 = vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 2, d4Size, maxLen)]);
+        vec4 kv3 = vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 3, d4Size, maxLen)]);
 
         out0 += vec4(dot(qv0, kv0), dot(qv0, kv1), dot(qv0, kv2), dot(qv0, kv3));
         out1 += vec4(dot(qv1, kv0), dot(qv1, kv1), dot(qv1, kv2), dot(qv1, kv3));
@@ -101,6 +111,8 @@ void main() {
     }
 
     const float scale = uConst.f0.x;
+    const int pastLen = uConst.s1.z;
+    const bool lowerTriangularMask = uConst.f0.z > 0.5;
     out0 *= scale;
     out1 *= scale;
     out2 *= scale;
@@ -111,6 +123,25 @@ void main() {
     const int maskQlen = uConst.s2.x;
     const int maskKvlen = uConst.s2.y;
     const int maskKStart = (hasMask != 0 && maskKvlen > 0 && totalLen > maskKvlen) ? (totalLen - maskKvlen) : 0;
+
+    if (lowerTriangularMask) {
+        for (int qi = 0; qi < 4; ++qi) {
+            const int q = q0 + qi;
+            if (q >= qLen) {
+                continue;
+            }
+            const int causalLimit = pastLen + q;
+            for (int kj = 0; kj < 4; ++kj) {
+                const int gk = gk0 + kj;
+                if (gk > causalLimit) {
+                    if (qi == 0) out0[kj] = -3.402823466e38;
+                    if (qi == 1) out1[kj] = -3.402823466e38;
+                    if (qi == 2) out2[kj] = -3.402823466e38;
+                    if (qi == 3) out3[kj] = -3.402823466e38;
+                }
+            }
+        }
+    }
 
     if (hasMask != 0 && maskKvlen > 0) {
         for (int qi = 0; qi < 4; ++qi) {

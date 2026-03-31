@@ -37,6 +37,17 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 const int MAX_D4 = 64; // headDim <= 256
 
+int cacheKeyOffset(int kvh, int d4, int token, int d4Size, int maxLen) {
+    const int turboBlockSize = int(uConst.f0.w);
+    if (turboBlockSize > 0) {
+        const int turboBlockCount = (maxLen + turboBlockSize - 1) / turboBlockSize;
+        const int turboBlock = token / turboBlockSize;
+        const int turboOffset = token - turboBlock * turboBlockSize;
+        return ((kvh * d4Size + d4) * turboBlockCount + turboBlock) * turboBlockSize + turboOffset;
+    }
+    return (kvh * d4Size + d4) * maxLen + token;
+}
+
 void main() {
     const int h = int(gl_GlobalInvocationID.x);
     const int q = int(gl_GlobalInvocationID.y);
@@ -93,7 +104,7 @@ void main() {
             const int d = i * 4;
             const int qOff = qBase + d;
             // cacheK (packed): [kvHeadNum, headDim/4, maxLen, 4]
-            const int kOff = (kvh * d4Size + i) * maxLen + k;
+            const int kOff = cacheKeyOffset(kvh, i, k, d4Size, maxLen);
             vec4 qv = vec4(float(uQuery.data[qOff + 0]), float(uQuery.data[qOff + 1]), float(uQuery.data[qOff + 2]),
                            float(uQuery.data[qOff + 3]));
             vec4 kv = vec4(uCacheKey.data[kOff]);

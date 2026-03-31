@@ -14,11 +14,15 @@ layout(set=0, binding=3) writeonly buffer s3 {
     FLOAT4 data[];
 } uCacheValue;
 
-layout(set=0, binding=4) readonly uniform constBuffer {
+layout(set=0, binding=4) writeonly buffer s4 {
+    FLOAT4 data[];
+} uPackedCacheKey;
+
+layout(set=0, binding=5) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-    vec4 f0;  // scale, 0, 0, 0
+    vec4 f0;  // scale, sparseVTau, lowerTriangularMask, turboQuantKBlockSize
 } uConst;
 
 layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
@@ -55,6 +59,15 @@ void main() {
     const int d4Size = headDim / 4;
     const int outBase = (kvh * d4Size + d4) * maxLen + cacheToken;
     uCacheKey.data[outBase] = uKey.data[inBase / 4];
+
+    const int turboBlockSize = int(uConst.f0.w);
+    if (turboBlockSize > 0) {
+        const int turboBlockCount = (maxLen + turboBlockSize - 1) / turboBlockSize;
+        const int turboBlock = cacheToken / turboBlockSize;
+        const int turboOffset = cacheToken - turboBlock * turboBlockSize;
+        const int turboOutBase = ((kvh * d4Size + d4) * turboBlockCount + turboBlock) * turboBlockSize + turboOffset;
+        uPackedCacheKey.data[turboOutBase] = uKey.data[inBase / 4];
+    }
 
     // cacheV (kvh-major, packed-D): [kvHeadNum, maxLen, headDim/4, 4]
     // Index: ((kvh * maxLen + token) * d4Size + d4)
