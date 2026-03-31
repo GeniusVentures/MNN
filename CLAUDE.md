@@ -8,6 +8,13 @@ MNN is a lightweight deep learning **inference engine** (not a training framewor
 > - `schema/private/`
 > - `source/internal/`
 
+## Task Scoping
+
+- For simple, localized task requests, start with only the directly relevant files instead of analyzing the whole project.
+- Expand to neighboring files, subsystem-level code, or broader architecture only when the task clearly requires it.
+- Use whole-project analysis for cross-cutting changes, dependency/debugging issues, architectural questions, or when the relevant ownership is unclear.
+- Minimal changes do not justify magic numbers; when adding or touching non-obvious literals, use short named constants or helpers so the code remains human-readable.
+
 ## Architecture Overview
 
 MNN uses a **graph optimization + heterogeneous backend scheduling** architecture.

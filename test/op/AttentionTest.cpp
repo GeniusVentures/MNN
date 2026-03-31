@@ -42,6 +42,12 @@ struct KVMeta {
     int seqlen_in_disk = 0;
     int layer_index = 0;
     int layer_nums = 0;
+    bool sparse_v_enable = false;
+    float sparse_v_tau = 1.0e-6f;
+    bool turboquant_k_enable = false;
+    bool turboquant_v_enable = false;
+    int turboquant_block_size = 32;
+    int turboquant_format = 0;
     std::vector<int> reserveHost;
     void sync() {
         int revertNumber = 0;
@@ -316,9 +322,26 @@ protected:
     std::vector< std::vector< std::vector<float> > > expected_result;
     VARP Query, Key, Value, Mask, Output;
     VARP Query1, Key1, Value1, Mask1;
+    virtual void prepareRuntimeMeta() {
+        gMeta.sparse_v_enable = false;
+        gMeta.sparse_v_tau = 1.0e-6f;
+        gMeta.turboquant_k_enable = false;
+        gMeta.turboquant_v_enable = false;
+        gMeta.turboquant_block_size = 32;
+        gMeta.turboquant_format = 0;
+    }
 public:
     AttentionTest() = default;
     virtual ~AttentionTest() = default;
+    virtual bool useExprOracle() const {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                return false;
+            }
+        }
+        return true;
+    }
     void generateInput(int seq_len, int precision, bool genDecodeInput = false) {
         query = generateRandTensor(seq_len, NumHead, HeadDim, precision);
         key   = generateRandTensor(seq_len, KvNumHead, HeadDim, precision);
@@ -441,6 +464,7 @@ public:
             int seq_len = 10;
             generateInput(seq_len, precision);
             generateMask(seq_len, seq_len);
+            prepareRuntimeMeta();
             expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
             auto attn = _makeAttentionModule();
             gMeta.add = seq_len;
@@ -453,24 +477,26 @@ public:
                 return false;
             }
 
-            /* generate mask expr */
-            /* generate mask expr */
-            auto MaskExpr = vector_to_var(mask);
-            MaskExpr = (_Scalar<float>(1.0) - _Cast<float>(MaskExpr)) * _Scalar<float>(std::numeric_limits<float>::lowest());
-            Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
-            pass = compareResult(seq_len);
-            if (!pass) {
-                FUNC_PRINT(1);
-                return false;
-            }
-            // naiveAttention with history is error, use expr to test
-            Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
-            gMeta.add = seq_len;
-            auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
-            gMeta.sync();
-            auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
-            if (diff >= 0.01f) {                 FUNC_PRINT_ALL(diff, f);
-                return false;
+            if (useExprOracle()) {
+                /* generate mask expr */
+                /* generate mask expr */
+                auto MaskExpr = vector_to_var(mask);
+                MaskExpr = (_Scalar<float>(1.0) - _Cast<float>(MaskExpr)) * _Scalar<float>(std::numeric_limits<float>::lowest());
+                Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
+                pass = compareResult(seq_len);
+                if (!pass) {
+                    FUNC_PRINT(1);
+                    return false;
+                }
+                // naiveAttention with history is error, use expr to test
+                Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
+                gMeta.add = seq_len;
+                auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
+                gMeta.sync();
+                auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
+                if (diff >= 0.01f) {                 FUNC_PRINT_ALL(diff, f);
+                    return false;
+                }
             }
         }
         // test2
@@ -484,6 +510,7 @@ public:
             int seq_len = 10;
             generateInput(seq_len, precision);
             generateChunkMask(seq_len, seq_len, 2);
+            prepareRuntimeMeta();
             expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
             auto attn = _makeAttentionModule();
             gMeta.previous = 0;
@@ -496,21 +523,23 @@ public:
                 printf("Error: Not LowerTriangular Attention with kv_cache unit test failed!\n");
                 return false;
             }
-            Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
-            pass = compareResult(seq_len);
-            if (!pass) {
-                FUNC_PRINT(1);
-                return false;
-            }
-            // naiveAttention with history is error, use expr to test
-            Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
-            gMeta.add = seq_len;
-            auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
-            gMeta.sync();
-            auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
-            if (diff >= 0.01f) {
-                FUNC_PRINT_ALL(diff, f);
-                return false;
+            if (useExprOracle()) {
+                Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
+                pass = compareResult(seq_len);
+                if (!pass) {
+                    FUNC_PRINT(1);
+                    return false;
+                }
+                // naiveAttention with history is error, use expr to test
+                Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
+                gMeta.add = seq_len;
+                auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
+                gMeta.sync();
+                auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
+                if (diff >= 0.01f) {
+                    FUNC_PRINT_ALL(diff, f);
+                    return false;
+                }
             }
         }
         // unit test 3
@@ -559,6 +588,9 @@ class SpeedAttentionTest : public AttentionTest {
 public:
 SpeedAttentionTest() = default;
     virtual ~SpeedAttentionTest() = default;
+    virtual bool turboQuantKEnabled() const {
+        return false;
+    }
 
     virtual bool run(int precision) {
         std::vector<int> seqs = {4096};
@@ -571,36 +603,145 @@ SpeedAttentionTest() = default;
         /* 3 attention module */
         std::vector<int> quantQKV = {8, 9, 10};
         std::vector<std::string> testNames = {"float qkv", "quant qk", "quant qkv"};
+        std::vector<int> sparseModes = {0, 1};
         for (int n = 0; n < seqs.size(); ++n) {
             int seq_len = seqs[n];
             MNN_PRINT(">>> seq_len=%d, decode_len=%d\n", seq_len, GENERATE_TOKENS);
             generateInput(seqs[n], precision, true);
             generateMask(seqs[n], seq_len, true);
             for (int m = 0; m < testNames.size(); ++m) {
-                gMeta.previous = 0;
-                gMeta.add = seq_len;
-                auto _module = _makeAttentionModule(quantQKV[m]);
-                MNN::Timer t1;
-                for (int x = 0; x < 5; ++x) {
-                    Output = _module->onForward({Query, Key, Value, Mask})[0];
-                }
-                auto time = (float)t1.durationInUs() / 1000.0f / 5.f;
-                MNN_PRINT("%s: prefill cost = %.2f\n", testNames[m].c_str(), time);
-                gMeta.sync();
-                MNN::Timer t2;
-                for (int x = 0; x < GENERATE_TOKENS; ++x) {
-                    gMeta.add = 1;
-                    auto output2 = _module->onForward({Query1, Key1, Value1, Mask1})[0];
+                for (int s = 0; s < sparseModes.size(); ++s) {
+                    const bool sparseEnable = sparseModes[s] != 0;
+                    const char* sparseTag = sparseEnable ? " + sparse_v" : " + dense_v";
+                    gMeta.previous = 0;
+                    gMeta.add = seq_len;
+                    gMeta.sparse_v_enable = sparseEnable;
+                    gMeta.sparse_v_tau = 1.0e-6f;
+                    gMeta.turboquant_k_enable = turboQuantKEnabled();
+                    gMeta.turboquant_v_enable = false;
+                    gMeta.turboquant_block_size = 32;
+                    gMeta.turboquant_format = 0;
+                    auto _module = _makeAttentionModule(quantQKV[m]);
+                    MNN::Timer t1;
+                    for (int x = 0; x < 5; ++x) {
+                        Output = _module->onForward({Query, Key, Value, Mask})[0];
+                    }
+                    auto time = (float)t1.durationInUs() / 1000.0f / 5.f;
+                    const char* turboTag = gMeta.turboquant_k_enable ? " + turboquant_k" : " + dense_k";
+                    MNN_PRINT("%s%s%s: prefill cost = %.2f\n", testNames[m].c_str(), sparseTag, turboTag, time);
                     gMeta.sync();
+                    MNN::Timer t2;
+                    for (int x = 0; x < GENERATE_TOKENS; ++x) {
+                        gMeta.add = 1;
+                        auto output2 = _module->onForward({Query1, Key1, Value1, Mask1})[0];
+                        gMeta.sync();
+                    }
+                    time = (float)t2.durationInUs() / 1000.0f;
+                    MNN_PRINT("%s%s%s: decode cost = %f\n", testNames[m].c_str(), sparseTag, turboTag, time);
                 }
-                time = (float)t2.durationInUs() / 1000.0f;
-                MNN_PRINT("%s: decode cost = %f\n", testNames[m].c_str(), time);
+                gMeta.sparse_v_enable = false;
+                gMeta.turboquant_k_enable = false;
             }
         }
         return true;
     }
 };
 
+class AttentionVulkanTest : public AttentionTest {
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+};
+
+class AttentionVulkanSparseVTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.sparse_v_enable = true;
+        gMeta.sparse_v_tau = 1.0e-6f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+};
+
+class AttentionVulkanTurboQuantTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_k_enable = true;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        return AttentionTest::run(precision);
+    }
+};
+
+class SpeedAttentionVulkanTest : public SpeedAttentionTest {
+protected:
+    bool turboQuantKEnabled() const override {
+        return false;
+    }
+public:
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        return SpeedAttentionTest::run(precision);
+    }
+};
+
+class SpeedAttentionVulkanTurboQuantTest : public SpeedAttentionTest {
+protected:
+    bool turboQuantKEnabled() const override {
+        return true;
+    }
+public:
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        return SpeedAttentionTest::run(precision);
+    }
+};
+
 MNNTestSuiteRegister(AttentionTest, "op/attention");
+MNNTestSuiteRegister(AttentionVulkanTest, "op/attention/vulkan");
+MNNTestSuiteRegister(AttentionVulkanSparseVTest, "op/attention/vulkan/sparsev");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantTest, "op/attention/vulkan/turboquant");
 MNNTestSuiteRegister(SpeedAttentionTest, "speed/attention");
+MNNTestSuiteRegister(SpeedAttentionVulkanTest, "speed/attention/vulkan");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuantTest, "speed/attention/vulkan/turboquant");
 #endif

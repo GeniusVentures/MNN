@@ -19,33 +19,104 @@ layout(set=0, binding=4) readonly buffer s4 {
 } uCacheKey;
 
 layout(set=0, binding=5) readonly buffer s5 {
+    uvec4 data[];
+} uPackedCacheKey;
+
+layout(set=0, binding=6) readonly buffer s6 {
     FLOAT4 data[];
 } uCacheValue;
 
-layout(set=0, binding=6) readonly buffer s6 {
+layout(set=0, binding=7) readonly buffer s7 {
     FLOAT data[];
 } uMask;
 
-layout(set=0, binding=7) readonly uniform constBuffer {
+layout(set=0, binding=8) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-    vec4 f0;  // scale, sparseVTau, 0, 0
+    vec4 f0;  // scale, sparseVTau, lowerTriangularMask, turboQuantKBlockSize
 } uConst;
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+const int PACKED_VEC_SIZE = 4;
 const int MAX_D4 = 64; // headDim <= 256
+const int TQ3_BLOCK_D4 = 8;
+const int TQ3_BLOCK_SIZE = TQ3_BLOCK_D4 * PACKED_VEC_SIZE;
+const int TQ3_CODEBOOK_SIZE = 8;
+const int TQ3_GROUP_COUNT = 4;
+const int TQ3_GROUP_WIDTH = 8;
+const int TQ3_PACKED_BYTE_SPLIT = 4;
+const int TQ3_PACKED_BYTE_BITS = 8;
+const uint TQ3_PACKED_BYTE_MASK = 255u;
+const uint TQ3_INDEX_MASK = 7u;
+const float NEG_INF = -3.402823466e38;
+const float TQ3_CODEBOOK[TQ3_CODEBOOK_SIZE] = float[TQ3_CODEBOOK_SIZE](-2.1519, -1.3439, -0.7560, -0.2451, 0.2451, 0.7560, 1.3439, 2.1519);
+const float TQ3_SIGNS[TQ3_BLOCK_SIZE] = float[TQ3_BLOCK_SIZE](
+    1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0,
+    -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0
+);
 
 int cacheKeyOffset(int kvh, int d4, int token, int d4Size, int maxLen) {
-    const int turboBlockSize = int(uConst.f0.w);
-    if (turboBlockSize > 0) {
-        const int turboBlockCount = (maxLen + turboBlockSize - 1) / turboBlockSize;
-        const int turboBlock = token / turboBlockSize;
-        const int turboOffset = token - turboBlock * turboBlockSize;
-        return ((kvh * d4Size + d4) * turboBlockCount + turboBlock) * turboBlockSize + turboOffset;
-    }
     return (kvh * d4Size + d4) * maxLen + token;
+}
+
+void tq3WhtForward32(inout float values[TQ3_BLOCK_SIZE]) {
+    for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+        values[i] *= TQ3_SIGNS[i];
+    }
+    for (int step = 1; step < TQ3_BLOCK_SIZE; step <<= 1) {
+        for (int i = 0; i < TQ3_BLOCK_SIZE; i += (step << 1)) {
+            for (int j = i; j < i + step; ++j) {
+                const float a = values[j];
+                const float b = values[j + step];
+                values[j] = a + b;
+                values[j + step] = a - b;
+            }
+        }
+    }
+    const float norm = 1.0 / sqrt(float(TQ3_BLOCK_SIZE));
+    for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+        values[i] *= norm;
+    }
+}
+
+uint tq3GetPackedByte(uvec4 packed, int idx) {
+    if (idx < TQ3_PACKED_BYTE_SPLIT) {
+        return (packed.y >> (idx * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+    }
+    if (idx < TQ3_GROUP_WIDTH) {
+        return (packed.z >> ((idx - TQ3_PACKED_BYTE_SPLIT) * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+    }
+    return (packed.w >> ((idx - TQ3_GROUP_WIDTH) * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+}
+
+float tq3VecDotBlock(float qRotated[TQ3_BLOCK_SIZE], uvec4 packed) {
+    const float scale = unpackHalf2x16(packed.x).x;
+    float dotValue = 0.0;
+    for (int g = 0; g < TQ3_GROUP_COUNT; ++g) {
+        const uint b0 = tq3GetPackedByte(packed, g * 3 + 0);
+        const uint b1 = tq3GetPackedByte(packed, g * 3 + 1);
+        const uint b2 = tq3GetPackedByte(packed, g * 3 + 2);
+        const uint i0 = b0 & TQ3_INDEX_MASK;
+        const uint i1 = (b0 >> 3) & TQ3_INDEX_MASK;
+        const uint i2 = ((b0 >> 6) | (b1 << 2)) & TQ3_INDEX_MASK;
+        const uint i3 = (b1 >> 1) & TQ3_INDEX_MASK;
+        const uint i4 = (b1 >> 4) & TQ3_INDEX_MASK;
+        const uint i5 = ((b1 >> 7) | (b2 << 1)) & TQ3_INDEX_MASK;
+        const uint i6 = (b2 >> 2) & TQ3_INDEX_MASK;
+        const uint i7 = (b2 >> 5) & TQ3_INDEX_MASK;
+        const int base = g * TQ3_GROUP_WIDTH;
+        dotValue += qRotated[base + 0] * TQ3_CODEBOOK[i0];
+        dotValue += qRotated[base + 1] * TQ3_CODEBOOK[i1];
+        dotValue += qRotated[base + 2] * TQ3_CODEBOOK[i2];
+        dotValue += qRotated[base + 3] * TQ3_CODEBOOK[i3];
+        dotValue += qRotated[base + 4] * TQ3_CODEBOOK[i4];
+        dotValue += qRotated[base + 5] * TQ3_CODEBOOK[i5];
+        dotValue += qRotated[base + 6] * TQ3_CODEBOOK[i6];
+        dotValue += qRotated[base + 7] * TQ3_CODEBOOK[i7];
+    }
+    return dotValue * scale;
 }
 
 void main() {
@@ -73,6 +144,8 @@ void main() {
 
     const float scale = uConst.f0.x;
     const float sparseVTau = uConst.f0.y;
+    const int turboBlockSize = int(uConst.f0.w);
+    const bool useTurboQuantK = turboBlockSize == TQ3_BLOCK_SIZE;
 
     const int kvh = h / group;
     if (kvh >= kvHeadNum) {
@@ -93,22 +166,35 @@ void main() {
         outVec[i] = vec4(0.0);
     }
 
-    float m = -3.402823466e38;
+    float m = NEG_INF;
     float s = 0.0;
 
     const int kStart = (hasMask != 0 && maskKvlen > 0 && totalLen > maskKvlen) ? (totalLen - maskKvlen) : 0;
 
     for (int k = 0; k < totalLen; ++k) {
         float dotSum = 0.0;
-        for (int i = 0; i < d4Size; ++i) {
-            const int d = i * 4;
-            const int qOff = qBase + d;
-            // cacheK (packed): [kvHeadNum, headDim/4, maxLen, 4]
-            const int kOff = cacheKeyOffset(kvh, i, k, d4Size, maxLen);
-            vec4 qv = vec4(float(uQuery.data[qOff + 0]), float(uQuery.data[qOff + 1]), float(uQuery.data[qOff + 2]),
-                           float(uQuery.data[qOff + 3]));
-            vec4 kv = vec4(uCacheKey.data[kOff]);
-            dotSum += dot(qv, kv);
+        if (useTurboQuantK) {
+            const int turboBlockCount = headDim / TQ3_BLOCK_SIZE;
+            for (int block = 0; block < turboBlockCount; ++block) {
+                float qRotated[TQ3_BLOCK_SIZE];
+                const int qOff = qBase + block * TQ3_BLOCK_SIZE;
+                for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+                    qRotated[i] = float(uQuery.data[qOff + i]);
+                }
+                tq3WhtForward32(qRotated);
+                const int packedIndex = (kvh * maxLen + k) * turboBlockCount + block;
+                dotSum += tq3VecDotBlock(qRotated, uPackedCacheKey.data[packedIndex]);
+            }
+        } else {
+            for (int i = 0; i < d4Size; ++i) {
+                const int d = i * PACKED_VEC_SIZE;
+                const int qOff = qBase + d;
+                const int kOff = cacheKeyOffset(kvh, i, k, d4Size, maxLen);
+                vec4 qv = vec4(float(uQuery.data[qOff + 0]), float(uQuery.data[qOff + 1]), float(uQuery.data[qOff + 2]),
+                               float(uQuery.data[qOff + 3]));
+                vec4 kv = vec4(uCacheKey.data[kOff]);
+                dotSum += dot(qv, kv);
+            }
         }
         float score = dotSum * scale;
         if (hasMask != 0) {
@@ -150,7 +236,7 @@ void main() {
     const int outBase = (q * headNum + h) * headDim;
     for (int i = 0; i < d4Size; ++i) {
         vec4 v = outVec[i] * invS;
-        const int d = i * 4;
+        const int d = i * PACKED_VEC_SIZE;
         uOutput.data[outBase + d + 0] = FLOAT(v.x);
         uOutput.data[outBase + d + 1] = FLOAT(v.y);
         uOutput.data[outBase + d + 2] = FLOAT(v.z);

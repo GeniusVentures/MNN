@@ -163,6 +163,10 @@ void Llm::setRuntimeHint(std::shared_ptr<Express::Executor::RuntimeManager> &rtg
 
     mMeta->sparse_v_enable = mConfig->config_.value("sparse_v_enable", false);
     mMeta->sparse_v_tau = mConfig->config_.value("sparse_v_tau", 1.0e-6f);
+    mMeta->turboquant_k_enable = mConfig->config_.value("vulkan_turboquant_k_enable", false);
+    mMeta->turboquant_v_enable = mConfig->config_.value("vulkan_turboquant_v_enable", false);
+    mMeta->turboquant_block_size = mConfig->config_.value("vulkan_turboquant_block_size", 32);
+    mMeta->turboquant_format = mConfig->config_.value("vulkan_turboquant_format", 0);
     rtg->setHintPtr(Interpreter::KVCACHE_INFO, mMeta.get());
     if (backend_type_convert(mConfig->backend_type()) != 0) { // not cpu
         std::string cacheFilePath = tmpPath.length() != 0 ? tmpPath : ".";
@@ -1033,6 +1037,10 @@ Llm::Llm(std::shared_ptr<LlmConfig> config) : mConfig(config) {
     mMeta->layer_nums = mConfig->layer_nums();
     mMeta->sparse_v_enable = mConfig->config_.value("sparse_v_enable", false);
     mMeta->sparse_v_tau = mConfig->config_.value("sparse_v_tau", 1.0e-6f);
+    mMeta->turboquant_k_enable = mConfig->config_.value("vulkan_turboquant_k_enable", false);
+    mMeta->turboquant_v_enable = mConfig->config_.value("vulkan_turboquant_v_enable", false);
+    mMeta->turboquant_block_size = mConfig->config_.value("vulkan_turboquant_block_size", 32);
+    mMeta->turboquant_format = mConfig->config_.value("vulkan_turboquant_format", 0);
     mGenerateParam.reset(new GenerationParams);
     mGenerateParam->timeout_ms = mConfig->timeout_ms();
 }

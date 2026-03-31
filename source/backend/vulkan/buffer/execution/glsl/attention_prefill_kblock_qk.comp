@@ -11,10 +11,14 @@ layout(set=0, binding=2) readonly buffer s2 {
 } uCacheKey;
 
 layout(set=0, binding=3) readonly buffer s3 {
+    uvec4 data[];
+} uPackedCacheKey;
+
+layout(set=0, binding=4) readonly buffer s4 {
     FLOAT data[];
 } uMask;
 
-layout(set=0, binding=4) readonly uniform constBuffer {
+layout(set=0, binding=5) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
@@ -28,18 +32,95 @@ layout(push_constant) uniform PushConsts {
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+const int TQ3_BLOCK_D4 = 8;
+const int PACKED_VEC_SIZE = 4;
 const int MAX_D4 = 64; // headDim <= 256
 const float NEG_INF = -3.402823466e38;
+const int TQ3_BLOCK_SIZE = TQ3_BLOCK_D4 * PACKED_VEC_SIZE;
+const int TQ3_CODEBOOK_SIZE = 8;
+const int TQ3_GROUP_COUNT = 4;
+const int TQ3_GROUP_WIDTH = 8;
+const int TQ3_PACKED_BYTE_SPLIT = 4;
+const int TQ3_PACKED_BYTE_BITS = 8;
+const uint TQ3_PACKED_BYTE_MASK = 255u;
+const uint TQ3_INDEX_MASK = 7u;
+const float TQ3_CODEBOOK[TQ3_CODEBOOK_SIZE] = float[TQ3_CODEBOOK_SIZE](-2.1519, -1.3439, -0.7560, -0.2451, 0.2451, 0.7560, 1.3439, 2.1519);
+const float TQ3_SIGNS[TQ3_BLOCK_SIZE] = float[TQ3_BLOCK_SIZE](
+    1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0,
+    -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0
+);
 
 int cacheKeyOffset(int kvh, int d4, int token, int d4Size, int maxLen) {
-    const int turboBlockSize = int(uConst.f0.w);
-    if (turboBlockSize > 0) {
-        const int turboBlockCount = (maxLen + turboBlockSize - 1) / turboBlockSize;
-        const int turboBlock = token / turboBlockSize;
-        const int turboOffset = token - turboBlock * turboBlockSize;
-        return ((kvh * d4Size + d4) * turboBlockCount + turboBlock) * turboBlockSize + turboOffset;
-    }
     return (kvh * d4Size + d4) * maxLen + token;
+}
+
+void tq3WhtForward32(inout float values[TQ3_BLOCK_SIZE]) {
+    for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+        values[i] *= TQ3_SIGNS[i];
+    }
+    for (int step = 1; step < TQ3_BLOCK_SIZE; step <<= 1) {
+        for (int i = 0; i < TQ3_BLOCK_SIZE; i += (step << 1)) {
+            for (int j = i; j < i + step; ++j) {
+                const float a = values[j];
+                const float b = values[j + step];
+                values[j] = a + b;
+                values[j + step] = a - b;
+            }
+        }
+    }
+    const float norm = 1.0 / sqrt(float(TQ3_BLOCK_SIZE));
+    for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+        values[i] *= norm;
+    }
+}
+
+uint tq3GetPackedByte(uvec4 packed, int idx) {
+    if (idx < TQ3_PACKED_BYTE_SPLIT) {
+        return (packed.y >> (idx * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+    }
+    if (idx < TQ3_GROUP_WIDTH) {
+        return (packed.z >> ((idx - TQ3_PACKED_BYTE_SPLIT) * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+    }
+    return (packed.w >> ((idx - TQ3_GROUP_WIDTH) * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+}
+
+float tq3VecDotBlock(float qRotated[TQ3_BLOCK_SIZE], uvec4 packed) {
+    const float scale = unpackHalf2x16(packed.x).x;
+    float dotValue = 0.0;
+    for (int g = 0; g < TQ3_GROUP_COUNT; ++g) {
+        const uint b0 = tq3GetPackedByte(packed, g * 3 + 0);
+        const uint b1 = tq3GetPackedByte(packed, g * 3 + 1);
+        const uint b2 = tq3GetPackedByte(packed, g * 3 + 2);
+        const uint i0 = b0 & TQ3_INDEX_MASK;
+        const uint i1 = (b0 >> 3) & TQ3_INDEX_MASK;
+        const uint i2 = ((b0 >> 6) | (b1 << 2)) & TQ3_INDEX_MASK;
+        const uint i3 = (b1 >> 1) & TQ3_INDEX_MASK;
+        const uint i4 = (b1 >> 4) & TQ3_INDEX_MASK;
+        const uint i5 = ((b1 >> 7) | (b2 << 1)) & TQ3_INDEX_MASK;
+        const uint i6 = (b2 >> 2) & TQ3_INDEX_MASK;
+        const uint i7 = (b2 >> 5) & TQ3_INDEX_MASK;
+        const int base = g * TQ3_GROUP_WIDTH;
+        dotValue += qRotated[base + 0] * TQ3_CODEBOOK[i0];
+        dotValue += qRotated[base + 1] * TQ3_CODEBOOK[i1];
+        dotValue += qRotated[base + 2] * TQ3_CODEBOOK[i2];
+        dotValue += qRotated[base + 3] * TQ3_CODEBOOK[i3];
+        dotValue += qRotated[base + 4] * TQ3_CODEBOOK[i4];
+        dotValue += qRotated[base + 5] * TQ3_CODEBOOK[i5];
+        dotValue += qRotated[base + 6] * TQ3_CODEBOOK[i6];
+        dotValue += qRotated[base + 7] * TQ3_CODEBOOK[i7];
+    }
+    return dotValue * scale;
+}
+
+void loadQueryBlock(float qBlock[TQ3_BLOCK_SIZE], int h, int q, int block, int d4Size, int qLen4) {
+    for (int i = 0; i < TQ3_BLOCK_D4; ++i) {
+        const int qBase = (h * d4Size + block * TQ3_BLOCK_D4 + i) * qLen4 + q;
+        vec4 qv = vec4(uQuery.data[qBase]);
+        qBlock[i * PACKED_VEC_SIZE + 0] = qv.x;
+        qBlock[i * PACKED_VEC_SIZE + 1] = qv.y;
+        qBlock[i * PACKED_VEC_SIZE + 2] = qv.z;
+        qBlock[i * PACKED_VEC_SIZE + 3] = qv.w;
+    }
 }
 
 // QK block prefill (q4 x k4 tile) with K-offset:
@@ -51,8 +132,8 @@ void main() {
     const int q4 = int(gl_GlobalInvocationID.y);
     const int h = int(gl_GlobalInvocationID.z);
 
-    const int q0 = q4 * 4;
-    const int k0 = k4 * 4;
+    const int q0 = q4 * PACKED_VEC_SIZE;
+    const int k0 = k4 * PACKED_VEC_SIZE;
 
     const int qLen = uConst.s0.x;
     const int headNum = uConst.s0.z;
@@ -88,13 +169,15 @@ void main() {
     if (blockLen <= 0 || kStart < 0 || kStart >= totalLen) {
         return;
     }
-    const int blockLen4 = ((blockLen + 3) / 4) * 4;
-    const int blockLen4_4 = blockLen4 / 4;
+    const int blockLen4 = ((blockLen + PACKED_VEC_SIZE - 1) / PACKED_VEC_SIZE) * PACKED_VEC_SIZE;
+    const int blockLen4_4 = blockLen4 / PACKED_VEC_SIZE;
     if (k4 >= blockLen4_4) {
         return;
     }
 
-    const int qLen4 = ((qLen + 3) / 4) * 4;
+    const int qLen4 = ((qLen + PACKED_VEC_SIZE - 1) / PACKED_VEC_SIZE) * PACKED_VEC_SIZE;
+    const int turboBlockSize = int(uConst.f0.w);
+    const bool useTurboQuantK = turboBlockSize == TQ3_BLOCK_SIZE;
 
     const int gk0 = kStart + k0;
     const bool v0 = (gk0 + 0) < totalLen;
@@ -108,22 +191,97 @@ void main() {
     vec4 out3 = vec4(0.0);
 
     // Qtmp base: [h, d4, q]
-    for (int i = 0; i < d4Size; ++i) {
-        const int qBase = (h * d4Size + i) * qLen4 + q0;
-        vec4 qv0 = vec4(uQuery.data[qBase + 0]);
-        vec4 qv1 = vec4(uQuery.data[qBase + 1]);
-        vec4 qv2 = vec4(uQuery.data[qBase + 2]);
-        vec4 qv3 = vec4(uQuery.data[qBase + 3]);
+    if (useTurboQuantK) {
+        const int turboBlockCount = headDim / TQ3_BLOCK_SIZE;
+        for (int block = 0; block < turboBlockCount; ++block) {
+            float qBlock0[TQ3_BLOCK_SIZE];
+            loadQueryBlock(qBlock0, h, q0 + 0, block, d4Size, qLen4);
+            tq3WhtForward32(qBlock0);
+            if (v0) {
+                out0.x += tq3VecDotBlock(qBlock0, uPackedCacheKey.data[(kvh * maxLen + gk0 + 0) * turboBlockCount + block]);
+            }
+            if (v1) {
+                out0.y += tq3VecDotBlock(qBlock0, uPackedCacheKey.data[(kvh * maxLen + gk0 + 1) * turboBlockCount + block]);
+            }
+            if (v2) {
+                out0.z += tq3VecDotBlock(qBlock0, uPackedCacheKey.data[(kvh * maxLen + gk0 + 2) * turboBlockCount + block]);
+            }
+            if (v3) {
+                out0.w += tq3VecDotBlock(qBlock0, uPackedCacheKey.data[(kvh * maxLen + gk0 + 3) * turboBlockCount + block]);
+            }
 
-        vec4 kv0 = v0 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 0, d4Size, maxLen)]) : vec4(0.0);
-        vec4 kv1 = v1 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 1, d4Size, maxLen)]) : vec4(0.0);
-        vec4 kv2 = v2 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 2, d4Size, maxLen)]) : vec4(0.0);
-        vec4 kv3 = v3 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 3, d4Size, maxLen)]) : vec4(0.0);
+            if ((q0 + 1) < qLen) {
+                float qBlock1[TQ3_BLOCK_SIZE];
+                loadQueryBlock(qBlock1, h, q0 + 1, block, d4Size, qLen4);
+                tq3WhtForward32(qBlock1);
+                if (v0) {
+                    out1.x += tq3VecDotBlock(qBlock1, uPackedCacheKey.data[(kvh * maxLen + gk0 + 0) * turboBlockCount + block]);
+                }
+                if (v1) {
+                    out1.y += tq3VecDotBlock(qBlock1, uPackedCacheKey.data[(kvh * maxLen + gk0 + 1) * turboBlockCount + block]);
+                }
+                if (v2) {
+                    out1.z += tq3VecDotBlock(qBlock1, uPackedCacheKey.data[(kvh * maxLen + gk0 + 2) * turboBlockCount + block]);
+                }
+                if (v3) {
+                    out1.w += tq3VecDotBlock(qBlock1, uPackedCacheKey.data[(kvh * maxLen + gk0 + 3) * turboBlockCount + block]);
+                }
+            }
 
-        out0 += vec4(dot(qv0, kv0), dot(qv0, kv1), dot(qv0, kv2), dot(qv0, kv3));
-        out1 += vec4(dot(qv1, kv0), dot(qv1, kv1), dot(qv1, kv2), dot(qv1, kv3));
-        out2 += vec4(dot(qv2, kv0), dot(qv2, kv1), dot(qv2, kv2), dot(qv2, kv3));
-        out3 += vec4(dot(qv3, kv0), dot(qv3, kv1), dot(qv3, kv2), dot(qv3, kv3));
+            if ((q0 + 2) < qLen) {
+                float qBlock2[TQ3_BLOCK_SIZE];
+                loadQueryBlock(qBlock2, h, q0 + 2, block, d4Size, qLen4);
+                tq3WhtForward32(qBlock2);
+                if (v0) {
+                    out2.x += tq3VecDotBlock(qBlock2, uPackedCacheKey.data[(kvh * maxLen + gk0 + 0) * turboBlockCount + block]);
+                }
+                if (v1) {
+                    out2.y += tq3VecDotBlock(qBlock2, uPackedCacheKey.data[(kvh * maxLen + gk0 + 1) * turboBlockCount + block]);
+                }
+                if (v2) {
+                    out2.z += tq3VecDotBlock(qBlock2, uPackedCacheKey.data[(kvh * maxLen + gk0 + 2) * turboBlockCount + block]);
+                }
+                if (v3) {
+                    out2.w += tq3VecDotBlock(qBlock2, uPackedCacheKey.data[(kvh * maxLen + gk0 + 3) * turboBlockCount + block]);
+                }
+            }
+
+            if ((q0 + 3) < qLen) {
+                float qBlock3[TQ3_BLOCK_SIZE];
+                loadQueryBlock(qBlock3, h, q0 + 3, block, d4Size, qLen4);
+                tq3WhtForward32(qBlock3);
+                if (v0) {
+                    out3.x += tq3VecDotBlock(qBlock3, uPackedCacheKey.data[(kvh * maxLen + gk0 + 0) * turboBlockCount + block]);
+                }
+                if (v1) {
+                    out3.y += tq3VecDotBlock(qBlock3, uPackedCacheKey.data[(kvh * maxLen + gk0 + 1) * turboBlockCount + block]);
+                }
+                if (v2) {
+                    out3.z += tq3VecDotBlock(qBlock3, uPackedCacheKey.data[(kvh * maxLen + gk0 + 2) * turboBlockCount + block]);
+                }
+                if (v3) {
+                    out3.w += tq3VecDotBlock(qBlock3, uPackedCacheKey.data[(kvh * maxLen + gk0 + 3) * turboBlockCount + block]);
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < d4Size; ++i) {
+            const int qBase = (h * d4Size + i) * qLen4 + q0;
+            vec4 qv0 = vec4(uQuery.data[qBase + 0]);
+            vec4 qv1 = vec4(uQuery.data[qBase + 1]);
+            vec4 qv2 = vec4(uQuery.data[qBase + 2]);
+            vec4 qv3 = vec4(uQuery.data[qBase + 3]);
+
+            vec4 kv0 = v0 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 0, d4Size, maxLen)]) : vec4(0.0);
+            vec4 kv1 = v1 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 1, d4Size, maxLen)]) : vec4(0.0);
+            vec4 kv2 = v2 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 2, d4Size, maxLen)]) : vec4(0.0);
+            vec4 kv3 = v3 ? vec4(uCacheKey.data[cacheKeyOffset(kvh, i, gk0 + 3, d4Size, maxLen)]) : vec4(0.0);
+
+            out0 += vec4(dot(qv0, kv0), dot(qv0, kv1), dot(qv0, kv2), dot(qv0, kv3));
+            out1 += vec4(dot(qv1, kv0), dot(qv1, kv1), dot(qv1, kv2), dot(qv1, kv3));
+            out2 += vec4(dot(qv2, kv0), dot(qv2, kv1), dot(qv2, kv2), dot(qv2, kv3));
+            out3 += vec4(dot(qv3, kv0), dot(qv3, kv1), dot(qv3, kv2), dot(qv3, kv3));
+        }
     }
 
     const float scale = uConst.f0.x;
@@ -141,13 +299,13 @@ void main() {
     const int maskKStart = (hasMask != 0 && maskKvlen > 0 && totalLen > maskKvlen) ? (totalLen - maskKvlen) : 0;
 
     if (lowerTriangularMask) {
-        for (int qi = 0; qi < 4; ++qi) {
+        for (int qi = 0; qi < PACKED_VEC_SIZE; ++qi) {
             const int q = q0 + qi;
             if (q >= qLen) {
                 continue;
             }
             const int causalLimit = pastLen + q;
-            for (int kj = 0; kj < 4; ++kj) {
+            for (int kj = 0; kj < PACKED_VEC_SIZE; ++kj) {
                 const int gk = gk0 + kj;
                 if (gk > causalLimit) {
                     if (qi == 0) out0[kj] = NEG_INF;
@@ -160,12 +318,12 @@ void main() {
     }
 
     if (hasMask != 0 && maskKvlen > 0) {
-        for (int qi = 0; qi < 4; ++qi) {
+        for (int qi = 0; qi < PACKED_VEC_SIZE; ++qi) {
             const int q = q0 + qi;
             if (q >= qLen || q >= maskQlen) {
                 continue;
             }
-            for (int kj = 0; kj < 4; ++kj) {
+            for (int kj = 0; kj < PACKED_VEC_SIZE; ++kj) {
                 const int gk = gk0 + kj;
                 const int mk = gk - maskKStart;
                 if (gk >= maskKStart && mk >= 0 && mk < maskKvlen) {

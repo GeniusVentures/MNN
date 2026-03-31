@@ -13,22 +13,91 @@ static inline float _invSqrt(float x) {
     return 1.0f / ::sqrtf(x);
 }
 
-static inline bool _useTurboQuantK(const KVMeta* meta) {
-    return nullptr != meta && meta->turboquant_k_enable && meta->turboquant_block_size > 0;
+static constexpr int kAttentionVecSize = 4;
+static constexpr int kAttentionDispatchTile = 8;
+static constexpr int kAttentionMaxHeadDim = 256;
+static constexpr uint32_t kAttentionSoftmaxLocalSizeCap = 128;
+static constexpr uint32_t kAttentionInitStateElementsPerDispatch = 256;
+static constexpr size_t kAttentionQueryInputIndex = 0;
+static constexpr size_t kAttentionKeyInputIndex = 1;
+static constexpr size_t kAttentionValueInputIndex = 2;
+static constexpr size_t kAttentionMaskInputIndex = 3;
+static constexpr size_t kAttentionRequiredInputCount = 3;
+static constexpr int kAttentionBatchSize = 1;
+static constexpr int kScalarMaskElementCount = 1;
+static constexpr int kMaskMinDimensions = 2;
+static constexpr int kMaskQueryAxisOffset = 2;
+static constexpr int kMaskKeyAxisOffset = 1;
+static constexpr int kTurboQuantKBlockD4 = 8;
+static constexpr int kTurboQuantKBlockSize = kTurboQuantKBlockD4 * kAttentionVecSize;
+static constexpr int kTurboQuantKPackedWordCount = 4;
+
+static inline int _getAttentionVecCount(int size) {
+    return size / kAttentionVecSize;
 }
 
-static inline int _getTurboQuantKStride(int maxLen, int turboQuantKBlockSize) {
-    if (turboQuantKBlockSize <= 0) {
-        return maxLen;
+static inline int _padToAttentionVec(int size) {
+    return UP_DIV(size, kAttentionVecSize) * kAttentionVecSize;
+}
+
+static inline const Tensor* _getOptionalAttentionMask(const std::vector<Tensor*>& inputs) {
+    if (inputs.size() <= kAttentionMaskInputIndex) {
+        return nullptr;
     }
-    return UP_DIV(maxLen, turboQuantKBlockSize) * turboQuantKBlockSize;
+    return inputs[kAttentionMaskInputIndex];
+}
+
+static inline bool _useTurboQuantK(const KVMeta* meta, int headDim) {
+    return nullptr != meta && meta->turboquant_k_enable && meta->turboquant_format == 0 &&
+           meta->turboquant_block_size == kTurboQuantKBlockSize && headDim > 0 && (headDim % kTurboQuantKBlockSize) == 0;
+}
+
+static inline bool _supportAttentionPrefill(const std::vector<Tensor*>& inputs, bool needKvCache, int queryLen) {
+    if (!needKvCache || queryLen <= 1) {
+        return false;
+    }
+    auto mask = _getOptionalAttentionMask(inputs);
+    if (nullptr == mask) {
+        return true;
+    }
+    if (mask->elementSize() == kScalarMaskElementCount) {
+        return mask->getType() == halide_type_of<float>();
+    }
+    MNN_ASSERT(mask->getType() == halide_type_of<float>());
+    const int md = mask->dimensions();
+    MNN_ASSERT(md >= kMaskMinDimensions);
+    MNN_ASSERT(mask->length(md - kMaskQueryAxisOffset) == queryLen);
+    MNN_ASSERT(mask->length(md - kMaskKeyAxisOffset) > 0);
+    return false;
+}
+
+static inline bool _supportTurboQuantKPrefill(const std::vector<Tensor*>& inputs, bool needKvCache, int queryLen) {
+    if (!needKvCache || queryLen <= 1) {
+        return false;
+    }
+    const Tensor* mask = _getOptionalAttentionMask(inputs);
+    if (nullptr == mask) {
+        return true;
+    }
+    // Scalar causal-mask placeholders keep the prefill route, but remain on the dense-K path until the compressed
+    // prefill implementation is proven numerically safe for that case.
+    return false;
+}
+
+static inline int _getTurboQuantKBlockCount(int headDim) {
+    return headDim / kTurboQuantKBlockSize;
+}
+
+static inline size_t _getTurboQuantKBufferSize(int maxLen, int kvHeadNum, int headDim) {
+    return (size_t)maxLen * (size_t)kvHeadNum * (size_t)_getTurboQuantKBlockCount(headDim) *
+           (size_t)kTurboQuantKPackedWordCount * sizeof(uint32_t);
 }
 
 static uint32_t _selectSoftmaxLocalSize(int totalLen, uint32_t maxSizeX, uint32_t maxInvocations) {
     if (totalLen <= 1) {
         return 1;
     }
-    uint32_t cap = 128;
+    uint32_t cap = kAttentionSoftmaxLocalSizeCap;
     cap = ALIMIN(cap, maxSizeX);
     cap = ALIMIN(cap, maxInvocations);
     cap = ALIMIN(cap, (uint32_t)totalLen);
@@ -73,7 +142,8 @@ void VulkanAttention::KVCache::ensureCapacity(VulkanBackend* vkBn, int requiredL
     MNN_ASSERT(kvH > 0);
     MNN_ASSERT(d > 0);
     if (useTurboQuantK) {
-        MNN_ASSERT(useTurboQuantKBlockSize > 0);
+        MNN_ASSERT(useTurboQuantKBlockSize == kTurboQuantKBlockSize);
+        MNN_ASSERT((d % kTurboQuantKBlockSize) == 0);
     }
     if (kvHeadNum != kvH || headDim != d || fp16 != useFP16 || nullptr == key || nullptr == value) {
         reset();
@@ -127,10 +197,10 @@ void VulkanAttention::KVCache::ensureCapacity(VulkanBackend* vkBn, int requiredL
             }
 
             // Key: repack rows with new stride.
-            const int d4Size = headDim / 4;
+            const int d4Size = _getAttentionVecCount(headDim);
             MNN_ASSERT(d4Size > 0);
             const uint32_t rowCount = (uint32_t)kvHeadNum * (uint32_t)d4Size;
-            const VkDeviceSize vec4Bytes = (VkDeviceSize)(4 * bytes);
+            const VkDeviceSize vec4Bytes = (VkDeviceSize)(kAttentionVecSize * bytes);
             const VkDeviceSize srcRowStride = (VkDeviceSize)oldMaxLen * vec4Bytes;
             const VkDeviceSize dstRowStride = (VkDeviceSize)maxLen * vec4Bytes;
             std::vector<VkBufferCopy> regions;
@@ -149,15 +219,14 @@ void VulkanAttention::KVCache::ensureCapacity(VulkanBackend* vkBn, int requiredL
     }
 
     if (!useTurboQuantK) {
+        packedKey = nullptr;
         turboQuantKBlockSize = 0;
         return;
     }
 
-    const size_t bytes = fp16 ? sizeof(uint16_t) : sizeof(float);
-    const int d4Size = headDim / 4;
-    MNN_ASSERT(d4Size > 0);
-    const int packedMaxLen = _getTurboQuantKStride(maxLen, useTurboQuantKBlockSize);
-    const size_t packedSize = (size_t)packedMaxLen * (size_t)kvHeadNum * (size_t)headDim * bytes;
+    const int turboQuantKBlockCount = _getTurboQuantKBlockCount(headDim);
+    MNN_ASSERT(turboQuantKBlockCount > 0);
+    const size_t packedSize = _getTurboQuantKBufferSize(maxLen, kvHeadNum, headDim);
     if (nullptr != packedKey && turboQuantKBlockSize == useTurboQuantKBlockSize && packedKey->size() == packedSize) {
         return;
     }
@@ -166,21 +235,20 @@ void VulkanAttention::KVCache::ensureCapacity(VulkanBackend* vkBn, int requiredL
                                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT));
-    if (nullptr != key) {
-        const uint32_t rowCount = (uint32_t)kvHeadNum * (uint32_t)d4Size;
-        const VkDeviceSize vec4Bytes = (VkDeviceSize)(4 * bytes);
-        const VkDeviceSize srcRowStride = (VkDeviceSize)maxLen * vec4Bytes;
-        const VkDeviceSize dstRowStride = (VkDeviceSize)packedMaxLen * vec4Bytes;
+    if (nullptr != packedKey) {
+        const VkDeviceSize srcStride = (VkDeviceSize)turboQuantKBlockCount * (VkDeviceSize)maxLen *
+                                       (VkDeviceSize)kTurboQuantKPackedWordCount * (VkDeviceSize)sizeof(uint32_t);
+        const VkDeviceSize dstStride = srcStride;
         std::vector<VkBufferCopy> regions;
-        regions.reserve(rowCount);
-        for (uint32_t r = 0; r < rowCount; ++r) {
+        regions.reserve((size_t)kvHeadNum);
+        for (int kvh = 0; kvh < kvHeadNum; ++kvh) {
             VkBufferCopy c;
-            c.srcOffset = (VkDeviceSize)r * srcRowStride;
-            c.dstOffset = (VkDeviceSize)r * dstRowStride;
-            c.size = srcRowStride;
+            c.srcOffset = (VkDeviceSize)kvh * srcStride;
+            c.dstOffset = (VkDeviceSize)kvh * dstStride;
+            c.size = srcStride;
             regions.emplace_back(c);
         }
-        vkBn->copyGPUToGPUBufferRegions(key->buffer(), newPackedKey->buffer(), regions.data(), (uint32_t)regions.size());
+        vkBn->copyGPUToGPUBufferRegions(packedKey->buffer(), newPackedKey->buffer(), regions.data(), (uint32_t)regions.size());
     }
     packedKey = newPackedKey;
     turboQuantKBlockSize = useTurboQuantKBlockSize;
@@ -276,6 +344,7 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // qk
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // query
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // cacheKey
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // packedCacheKey
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // mask
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER  // param
         };
@@ -369,12 +438,13 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
     }
 
     {
-        std::vector<VkDescriptorType> typesAttn{
+        std::vector<VkDescriptorType> typesAttnFused{
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // output
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // query
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // keyIn
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // valueIn
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // cacheKey
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // packedCacheKey
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // cacheValue
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // mask
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER  // param
@@ -384,11 +454,21 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
             attnName += "FP16_";
         }
         attnName += "comp";
-        mAttentionPipeline = vkBn->getPipeline(attnName, typesAttn);
+        mAttentionPipeline = vkBn->getPipeline(attnName, typesAttnFused);
         MNN_ASSERT(nullptr != mAttentionPipeline);
         mAttentionSet.reset(mAttentionPipeline->createSet());
 
         if (_supportDecodeQ1Subgroup(vkBn->getDevice())) {
+            std::vector<VkDescriptorType> typesAttnDense{
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // output
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // query
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // keyIn
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // valueIn
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // cacheKey
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // cacheValue
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // mask
+                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER  // param
+            };
             mDecodeQ1SubgroupLocalSize = vkBn->getDevice().getSubgroupSize();
             if (mDecodeQ1SubgroupLocalSize > 0) {
                 std::string decodeQ1Name = "glsl_attention_decode_q1_subgroup_";
@@ -396,7 +476,7 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
                     decodeQ1Name += "FP16_";
                 }
                 decodeQ1Name += "comp";
-                mDecodeQ1SubgroupPipeline = vkBn->getPipeline(decodeQ1Name, typesAttn, {mDecodeQ1SubgroupLocalSize});
+                mDecodeQ1SubgroupPipeline = vkBn->getPipeline(decodeQ1Name, typesAttnDense, {mDecodeQ1SubgroupLocalSize});
                 if (nullptr != mDecodeQ1SubgroupPipeline) {
                     mDecodeQ1SubgroupSet.reset(mDecodeQ1SubgroupPipeline->createSet());
                 }
@@ -406,7 +486,7 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
                     decodeQ1HD128Name += "FP16_";
                 }
                 decodeQ1HD128Name += "comp";
-                mDecodeQ1SubgroupHD128Pipeline = vkBn->getPipeline(decodeQ1HD128Name, typesAttn, {mDecodeQ1SubgroupLocalSize});
+                mDecodeQ1SubgroupHD128Pipeline = vkBn->getPipeline(decodeQ1HD128Name, typesAttnDense, {mDecodeQ1SubgroupLocalSize});
                 if (nullptr != mDecodeQ1SubgroupHD128Pipeline) {
                     mDecodeQ1SubgroupHD128Set.reset(mDecodeQ1SubgroupHD128Pipeline->createSet());
                 }
@@ -445,6 +525,10 @@ VulkanAttention::~VulkanAttention() {
         vkBn->onReleaseBuffer(mTempOAcc.get(), Backend::DYNAMIC);
         mTempOAcc.reset();
     }
+    if (mSyntheticMask) {
+        vkBn->onReleaseBuffer(mSyntheticMask.get(), Backend::DYNAMIC);
+        mSyntheticMask.reset();
+    }
     vkBn->recycleUniform(mParam);
 }
 
@@ -461,18 +545,18 @@ bool VulkanAttention::onClone(Backend* bn, const Op* op, VulkanBasicExecution** 
 
 ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                     const VulkanCommandPool::Buffer* cmdBuffer) {
-    MNN_ASSERT(!inputs.empty());
+    MNN_ASSERT(inputs.size() >= kAttentionRequiredInputCount);
     MNN_ASSERT(!outputs.empty());
-    auto query = inputs[0];
-    auto key = inputs[1];
-    auto value = inputs[2];
+    auto query = inputs[kAttentionQueryInputIndex];
+    auto key = inputs[kAttentionKeyInputIndex];
+    auto value = inputs[kAttentionValueInputIndex];
     MNN_ASSERT(nullptr != query && nullptr != key && nullptr != value);
     MNN_ASSERT(query->dimensions() == 4);
     MNN_ASSERT(key->dimensions() == 4);
     MNN_ASSERT(value->dimensions() == 4);
-    MNN_ASSERT(query->length(0) == 1);
-    MNN_ASSERT(key->length(0) == 1);
-    MNN_ASSERT(value->length(0) == 1);
+    MNN_ASSERT(query->length(0) == kAttentionBatchSize);
+    MNN_ASSERT(key->length(0) == kAttentionBatchSize);
+    MNN_ASSERT(value->length(0) == kAttentionBatchSize);
     mQueryLen = query->length(1);
     mKeyLen = key->length(1);
     mHeadNum = query->length(2);
@@ -481,8 +565,8 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
     MNN_ASSERT(mHeadNum > 0 && mKvHeadNum > 0);
     MNN_ASSERT(mHeadNum % mKvHeadNum == 0);
     MNN_ASSERT(mHeadDim > 0);
-    MNN_ASSERT((mHeadDim & 3) == 0);
-    MNN_ASSERT(mHeadDim <= 256);
+    MNN_ASSERT((mHeadDim & (kAttentionVecSize - 1)) == 0);
+    MNN_ASSERT(mHeadDim <= kAttentionMaxHeadDim);
     MNN_ASSERT(value->length(1) == mKeyLen);
     MNN_ASSERT(value->length(2) == mKvHeadNum);
     MNN_ASSERT(value->length(3) == mHeadDim);
@@ -513,8 +597,9 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
     };
 #endif
 
-    const bool useTurboQuantK = mNeedKvCache && _useTurboQuantK(mMeta);
-    const bool usePrefill = mNeedKvCache && mQueryLen > 1 && !mHasAttentionMask;
+    const bool usePrefill = _supportAttentionPrefill(inputs, mNeedKvCache, mQueryLen);
+    const bool useTurboQuantK = mNeedKvCache && _useTurboQuantK(mMeta, mHeadDim) &&
+                                (mQueryLen == 1 || _supportTurboQuantKPrefill(inputs, mNeedKvCache, mQueryLen));
     mUsePrefill = usePrefill;
 
     if (mNeedKvCache) {
@@ -523,7 +608,8 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
 
         // Dispatch: KV update (x=dim/4, y=keyLen, z=kvHeadNum).
         dispatchWithProfile(mUseFP16 ? "glsl_attention_kvcache_update_FP16_comp" : "glsl_attention_kvcache_update_comp",
-                            mUpdatePipeline, mUpdateSet, UP_DIV(mHeadDim / 4, 8), mKeyLen, mKvHeadNum);
+                            mUpdatePipeline, mUpdateSet, UP_DIV(_getAttentionVecCount(mHeadDim), kAttentionDispatchTile), mKeyLen,
+                            mKvHeadNum);
         // NOTE: KV cache buffers may be reallocated in onBeforeExecute (descriptor set updated there), so we must not
         // record a VkBufferMemoryBarrier with a stale VkBuffer handle here. Use a global memory barrier instead.
         {
@@ -551,7 +637,7 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
             pastLenForPrefill = previous - remove + reverse;
         }
         mPrefillTotalLen = pastLenForPrefill + mKeyLen;
-        mQueryLen4 = UP_DIV(mQueryLen, 4) * 4;
+        mQueryLen4 = _padToAttentionVec(mQueryLen);
         MNN_ASSERT(mPrefillTotalLen > 0);
 
         const int64_t queryElementsI64 = (int64_t)mHeadNum * (int64_t)mHeadDim * (int64_t)mQueryLen4;
@@ -573,7 +659,7 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
         MNN_ASSERT(nullptr != mRearrangeQPipeline);
         MNN_ASSERT(nullptr != mRearrangeQSet);
 
-        const int kBlock4 = UP_DIV(K_BLOCK, 4) * 4;
+        const int kBlock4 = _padToAttentionVec(K_BLOCK);
         const int64_t rowCountI64 = (int64_t)mQueryLen * (int64_t)mHeadNum;
         MNN_ASSERT(rowCountI64 > 0 && rowCountI64 <= (int64_t)INT_MAX);
         const int rowCount = (int)rowCountI64;
@@ -670,7 +756,8 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
 
         // 1) Rearrange Q to packed-D Qtmp: (x=qLen4, y=headDim/4, z=headNum)
         dispatchWithProfile(mUseFP16 ? "glsl_attention_prefill_rearrange_q_FP16_comp" : "glsl_attention_prefill_rearrange_q_comp",
-                            mRearrangeQPipeline, mRearrangeQSet, UP_DIV(mQueryLen4, 8), UP_DIV(mHeadDim / 4, 8), mHeadNum);
+                            mRearrangeQPipeline, mRearrangeQSet, UP_DIV(mQueryLen4, kAttentionDispatchTile),
+                            UP_DIV(_getAttentionVecCount(mHeadDim), kAttentionDispatchTile), mHeadNum);
         {
             auto qBuf = vkBn->getTensorBuffer(mTempQuery.get());
             cmdBuffer->barrierSource(qBuf.first->buffer(), qBuf.second, vkBn->getTensorSize(mTempQuery.get()));
@@ -683,7 +770,9 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
         auto oaccBuf = vkBn->getTensorBuffer(mTempOAcc.get());
 
         dispatchWithProfile(mUseFP16 ? "glsl_attention_prefill_kblock_init_state_FP16_comp" : "glsl_attention_prefill_kblock_init_state_comp",
-                            mInitStatePipeline, mInitStateSet, UP_DIV((uint32_t)mQueryLen * (uint32_t)mHeadNum * (uint32_t)mHeadDim, 256),
+                            mInitStatePipeline, mInitStateSet,
+                            UP_DIV((uint32_t)mQueryLen * (uint32_t)mHeadNum * (uint32_t)mHeadDim,
+                                   kAttentionInitStateElementsPerDispatch),
                             1, 1);
         cmdBuffer->barrierSource(stateMBuf.first->buffer(), stateMBuf.second, vkBn->getTensorSize(mTempM.get()));
         cmdBuffer->barrierSource(stateLBuf.first->buffer(), stateLBuf.second, vkBn->getTensorSize(mTempL.get()));
@@ -720,8 +809,8 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
         const int kBlock = K_BLOCK;
         for (int kStart = 0; kStart < totalLen; kStart += kBlock) {
             const int blockLen = ALIMIN(kBlock, totalLen - kStart);
-            const int blockLen4 = UP_DIV(blockLen, 4) * 4;
-            const int blockLen4_4 = UP_DIV(blockLen4, 4);
+            const int blockLen4 = _padToAttentionVec(blockLen);
+            const int blockLen4_4 = _getAttentionVecCount(blockLen4);
 
             // 2) QK block: (x=blockLen4/4, y=qLen4/4, z=headNum)
             QKPushConst pcQK{(uint32_t)kStart, (uint32_t)blockLen};
@@ -734,8 +823,9 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
             } else {
                 qkName = mUseFP16 ? "glsl_attention_prefill_kblock_qk_FP16_comp" : "glsl_attention_prefill_kblock_qk_comp";
             }
-            dispatchWithPushConst(qkName, qkPipe, qkSet, UP_DIV((uint32_t)blockLen4_4, 8),
-                                  UP_DIV((uint32_t)UP_DIV(mQueryLen4, 4), 8), (uint32_t)mHeadNum, &pcQK, sizeof(pcQK));
+            dispatchWithPushConst(qkName, qkPipe, qkSet, UP_DIV((uint32_t)blockLen4_4, kAttentionDispatchTile),
+                                  UP_DIV((uint32_t)_getAttentionVecCount(mQueryLen4), kAttentionDispatchTile), (uint32_t)mHeadNum,
+                                  &pcQK, sizeof(pcQK));
             {
                 auto qkBuf = vkBn->getTensorBuffer(mTempQKBlock.get());
                 cmdBuffer->barrierSource(qkBuf.first->buffer(), qkBuf.second, vkBn->getTensorSize(mTempQKBlock.get()));
@@ -766,15 +856,16 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
                 qkvName =
                     mUseFP16 ? "glsl_attention_prefill_kblock_qkv_acc_FP16_comp" : "glsl_attention_prefill_kblock_qkv_acc_comp";
             }
-            dispatchWithPushConst(qkvName, qkvPipe, qkvSet, UP_DIV((uint32_t)(mHeadDim / 4), 8),
-                                  UP_DIV((uint32_t)UP_DIV(mQueryLen, 2), 8), (uint32_t)mHeadNum, &pcQK, sizeof(pcQK));
+            dispatchWithPushConst(qkvName, qkvPipe, qkvSet, UP_DIV((uint32_t)_getAttentionVecCount(mHeadDim), kAttentionDispatchTile),
+                                  UP_DIV((uint32_t)UP_DIV(mQueryLen, 2), kAttentionDispatchTile), (uint32_t)mHeadNum, &pcQK,
+                                  sizeof(pcQK));
             cmdBuffer->barrierSource(oaccBuf.first->buffer(), oaccBuf.second, vkBn->getTensorSize(mTempOAcc.get()));
         }
 
         // 5) Finalize: output = oAcc / l
         dispatchWithProfile(mUseFP16 ? "glsl_attention_prefill_kblock_finalize_FP16_comp" : "glsl_attention_prefill_kblock_finalize_comp",
-                            mFinalizePipeline, mFinalizeSet, UP_DIV((uint32_t)(mHeadDim / 4), 8),
-                            UP_DIV((uint32_t)UP_DIV(mQueryLen, 2), 8), (uint32_t)mHeadNum);
+                            mFinalizePipeline, mFinalizeSet, UP_DIV((uint32_t)_getAttentionVecCount(mHeadDim), kAttentionDispatchTile),
+                            UP_DIV((uint32_t)UP_DIV(mQueryLen, 2), kAttentionDispatchTile), (uint32_t)mHeadNum);
         return NO_ERROR;
     }
 
@@ -842,11 +933,11 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
 }
 
 ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) {
-    MNN_ASSERT(!inputs.empty());
+    MNN_ASSERT(inputs.size() >= kAttentionRequiredInputCount);
     MNN_ASSERT(!outputs.empty());
-    auto query = inputs[0];
-    auto key = inputs[1];
-    auto value = inputs[2];
+    auto query = inputs[kAttentionQueryInputIndex];
+    auto key = inputs[kAttentionKeyInputIndex];
+    auto value = inputs[kAttentionValueInputIndex];
     auto output = outputs[0];
     MNN_ASSERT(nullptr != query && nullptr != key && nullptr != value && nullptr != output);
     MNN_ASSERT(query->length(1) == mQueryLen);
@@ -858,11 +949,36 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     MNN_ASSERT(value->length(1) == mKeyLen);
     MNN_ASSERT(value->length(2) == mKvHeadNum);
     MNN_ASSERT(value->length(3) == mHeadDim);
-    MNN_ASSERT(query->length(0) == 1);
+    MNN_ASSERT(query->length(0) == kAttentionBatchSize);
 
     auto vkBn = static_cast<VulkanBackend*>(backend());
-    const bool useTurboQuantK = mNeedKvCache && _useTurboQuantK(mMeta);
-    const int turboQuantKBlockSize = useTurboQuantK ? mMeta->turboquant_block_size : 0;
+
+    int hasMask = 0;
+    int lowerTriangularMask = 0;
+    int maskQlen = 0;
+    int maskKvlen = 0;
+    const Tensor* mask = _getOptionalAttentionMask(inputs);
+    if (nullptr != mask) {
+        // Keep CUDA/OpenCL compatibility: scalar mask is a placeholder in kv-cache mode.
+        if (mNeedKvCache && mask->elementSize() == kScalarMaskElementCount) {
+            if (mask->getType() == halide_type_of<float>()) {
+                lowerTriangularMask = 1;
+            }
+        } else {
+            hasMask = 1;
+            MNN_ASSERT(mask->getType() == halide_type_of<float>());
+            const int md = mask->dimensions();
+            MNN_ASSERT(md >= kMaskMinDimensions);
+            maskQlen = mask->length(md - kMaskQueryAxisOffset);
+            maskKvlen = mask->length(md - kMaskKeyAxisOffset);
+            MNN_ASSERT(maskQlen == mQueryLen);
+            MNN_ASSERT(maskKvlen > 0);
+        }
+    }
+
+    const bool turboQuantKRequested = mNeedKvCache && _useTurboQuantK(mMeta, mHeadDim) &&
+                                      (mQueryLen == 1 || _supportTurboQuantKPrefill(inputs, mNeedKvCache, mQueryLen));
+    const int turboQuantKBlockSize = turboQuantKRequested ? mMeta->turboquant_block_size : 0;
 
     int pastLenForCompute = 0;
     if (mNeedKvCache) {
@@ -882,7 +998,7 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
         pastLenForCompute = start + reverse;
 
         // Ensure capacity for compute window (pastLen + keyLen), because shaders read only from KV cache.
-        mKVCache->ensureCapacity(vkBn, pastLenForCompute + mKeyLen, mKvHeadNum, mHeadDim, mUseFP16, useTurboQuantK,
+        mKVCache->ensureCapacity(vkBn, pastLenForCompute + mKeyLen, mKvHeadNum, mHeadDim, mUseFP16, turboQuantKRequested,
                                  turboQuantKBlockSize);
 
         // Compact reserved spans into a contiguous kept region: dst starts at (previous - remove).
@@ -961,27 +1077,38 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
 
             mKVCache->key = compactKey;
             mKVCache->value = compactValue;
-            if (useTurboQuantK && nullptr != mKVCache->packedKey) {
-                const int packedMaxLen = _getTurboQuantKStride(mKVCache->maxLen, turboQuantKBlockSize);
-                const size_t packedSize = (size_t)packedMaxLen * (size_t)mKvHeadNum * (size_t)mHeadDim * bytes;
+            if (turboQuantKRequested && nullptr != mKVCache->packedKey) {
+                const int turboQuantKBlockCount = _getTurboQuantKBlockCount(mHeadDim);
+                const VkDeviceSize packedTokenBytes = (VkDeviceSize)turboQuantKBlockCount *
+                                                      (VkDeviceSize)kTurboQuantKPackedWordCount *
+                                                      (VkDeviceSize)sizeof(uint32_t);
+                const VkDeviceSize packedHeadStride = (VkDeviceSize)mKVCache->maxLen * packedTokenBytes;
+                const size_t packedSize = _getTurboQuantKBufferSize(mKVCache->maxLen, mKvHeadNum, mHeadDim);
                 std::shared_ptr<VulkanBuffer> compactPackedKey(new VulkanBuffer(vkBn->getMemoryPool(), false, packedSize, nullptr,
                                                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT));
-                const uint32_t rowCount = (uint32_t)mKvHeadNum * (uint32_t)d4Size;
-                const VkDeviceSize srcRowStride = (VkDeviceSize)mKVCache->maxLen * vec4Bytes;
-                const VkDeviceSize dstRowStride = (VkDeviceSize)packedMaxLen * vec4Bytes;
                 std::vector<VkBufferCopy> packedRegions;
-                packedRegions.reserve(rowCount);
-                for (uint32_t r = 0; r < rowCount; ++r) {
-                    VkBufferCopy c;
-                    c.srcOffset = (VkDeviceSize)r * srcRowStride;
-                    c.dstOffset = (VkDeviceSize)r * dstRowStride;
-                    c.size = srcRowStride;
-                    packedRegions.emplace_back(c);
+                packedRegions.reserve((size_t)mKvHeadNum * (size_t)mMeta->n_reserve);
+                int dstPosPacked = 0;
+                for (int n = 0; n < mMeta->n_reserve; ++n) {
+                    const int begin = mMeta->reserve[2 * n + 0];
+                    const int length = mMeta->reserve[2 * n + 1];
+                    const int srcPos = start + begin;
+                    const int dstBase = start + dstPosPacked;
+                    for (int kvh = 0; kvh < mKvHeadNum; ++kvh) {
+                        VkBufferCopy c;
+                        c.srcOffset = (VkDeviceSize)kvh * packedHeadStride + (VkDeviceSize)srcPos * packedTokenBytes;
+                        c.dstOffset = (VkDeviceSize)kvh * packedHeadStride + (VkDeviceSize)dstBase * packedTokenBytes;
+                        c.size = (VkDeviceSize)length * packedTokenBytes;
+                        packedRegions.emplace_back(c);
+                    }
+                    dstPosPacked += length;
                 }
-                vkBn->copyGPUToGPUBufferRegions(mKVCache->key->buffer(), compactPackedKey->buffer(), packedRegions.data(),
-                                                (uint32_t)packedRegions.size());
+                if (!packedRegions.empty()) {
+                    vkBn->copyGPUToGPUBufferRegions(mKVCache->packedKey->buffer(), compactPackedKey->buffer(), packedRegions.data(),
+                                                    (uint32_t)packedRegions.size());
+                }
                 mKVCache->packedKey = compactPackedKey;
             }
         }
@@ -989,30 +1116,6 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
 
     const int group = mHeadNum / mKvHeadNum;
     const int totalLenForCompute = pastLenForCompute + mKeyLen;
-
-    int hasMask = 0;
-    int lowerTriangularMask = 0;
-    int maskQlen = 0;
-    int maskKvlen = 0;
-    const Tensor* mask = nullptr;
-    if (inputs.size() > 3 && nullptr != inputs[3]) {
-        mask = inputs[3];
-        // Keep CUDA/OpenCL compatibility: scalar mask is a placeholder in kv-cache mode.
-        if (mNeedKvCache && mask->elementSize() == 1) {
-            if (mask->getType() == halide_type_of<float>()) {
-                lowerTriangularMask = 1;
-            }
-        } else {
-            hasMask = 1;
-            MNN_ASSERT(mask->getType() == halide_type_of<float>());
-            const int md = mask->dimensions();
-            MNN_ASSERT(md >= 2);
-            maskQlen = mask->length(md - 2);
-            maskKvlen = mask->length(md - 1);
-            MNN_ASSERT(maskQlen == mQueryLen);
-            MNN_ASSERT(maskKvlen > 0);
-        }
-    }
 
     if (lowerTriangularMask != 0) {
         const int maskElements = mQueryLen * totalLenForCompute;
@@ -1045,6 +1148,7 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
         lowerTriangularMask = 0;
     }
     mHasAttentionMask = (hasMask != 0);
+    const bool useTurboQuantK = turboQuantKRequested;
 
     auto gpuParam = reinterpret_cast<GpuParam*>(mParam->map());
     gpuParam->s0[0] = mQueryLen;
@@ -1063,7 +1167,7 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     const float sparseTau = (mNeedKvCache && nullptr != mMeta && mMeta->sparse_v_enable) ? mMeta->sparse_v_tau : -1.0f;
     gpuParam->f0[1] = sparseTau;
     gpuParam->f0[2] = (float)lowerTriangularMask;
-    gpuParam->f0[3] = (float)turboQuantKBlockSize;
+    gpuParam->f0[3] = useTurboQuantK ? (float)turboQuantKBlockSize : 0.0f;
     mParam->unmap();
 
     // Bind buffers (update + attention). Note: when hasMask == 0, bind query buffer as placeholder.
@@ -1073,26 +1177,34 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     auto outBuf = vkBn->getTensorBuffer(output);
     const VkDeviceSize queryOffset = queryBuf.second;
 
-    const VulkanBuffer* cacheKeyBuf = nullptr;
+    const VulkanBuffer* denseCacheKeyBuf = nullptr;
+    const VulkanBuffer* packedCacheKeyBuf = nullptr;
     const VulkanBuffer* cacheValueBuf = nullptr;
-    VkDeviceSize cacheKeyOffset = 0;
+    VkDeviceSize denseCacheKeyOffset = 0;
+    VkDeviceSize packedCacheKeyOffset = 0;
     VkDeviceSize cacheValueOffset = 0;
-    size_t cacheKeySize = 0;
+    size_t denseCacheKeySize = 0;
+    size_t packedCacheKeySize = 0;
     size_t cacheValueSize = 0;
 
     if (mNeedKvCache) {
-        cacheKeyBuf = useTurboQuantK ? mKVCache->packedKey.get() : mKVCache->key.get();
+        denseCacheKeyBuf = mKVCache->key.get();
+        packedCacheKeyBuf = useTurboQuantK ? mKVCache->packedKey.get() : mKVCache->key.get();
         cacheValueBuf = mKVCache->value.get();
-        MNN_ASSERT(nullptr != cacheKeyBuf && nullptr != cacheValueBuf);
-        cacheKeySize = cacheKeyBuf->size();
+        MNN_ASSERT(nullptr != denseCacheKeyBuf && nullptr != packedCacheKeyBuf && nullptr != cacheValueBuf);
+        denseCacheKeySize = denseCacheKeyBuf->size();
+        packedCacheKeySize = packedCacheKeyBuf->size();
         cacheValueSize = cacheValueBuf->size();
     } else {
         // KV cache disabled: alias cache buffers to current K/V (shaders read only from cache bindings).
-        cacheKeyBuf = keyBuf.first;
+        denseCacheKeyBuf = keyBuf.first;
+        packedCacheKeyBuf = keyBuf.first;
         cacheValueBuf = valueBuf.first;
-        cacheKeyOffset = keyBuf.second;
+        denseCacheKeyOffset = keyBuf.second;
+        packedCacheKeyOffset = keyBuf.second;
         cacheValueOffset = valueBuf.second;
-        cacheKeySize = vkBn->getTensorSize(key);
+        denseCacheKeySize = vkBn->getTensorSize(key);
+        packedCacheKeySize = vkBn->getTensorSize(key);
         cacheValueSize = vkBn->getTensorSize(value);
     }
 
@@ -1139,26 +1251,28 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
         // QK block set
         mQKBlockSet->writeBuffer(qkBuf.first->buffer(), 0, vkBn->getTensorSize(mTempQKBlock.get()), qkBuf.second);
         mQKBlockSet->writeBuffer(tqBuf.first->buffer(), 1, vkBn->getTensorSize(mTempQuery.get()), tqBuf.second);
-        mQKBlockSet->writeBuffer(cacheKeyBuf->buffer(), 2, cacheKeySize, cacheKeyOffset);
+        mQKBlockSet->writeBuffer(denseCacheKeyBuf->buffer(), 2, denseCacheKeySize, denseCacheKeyOffset);
+        mQKBlockSet->writeBuffer(packedCacheKeyBuf->buffer(), 3, packedCacheKeySize, packedCacheKeyOffset);
         if (hasMask) {
             auto maskBuf = vkBn->getTensorBuffer(mask);
-            mQKBlockSet->writeBuffer(maskBuf.first->buffer(), 3, vkBn->getTensorSize(mask), maskBuf.second);
+            mQKBlockSet->writeBuffer(maskBuf.first->buffer(), 4, vkBn->getTensorSize(mask), maskBuf.second);
         } else {
-            mQKBlockSet->writeBuffer(queryBuf.first->buffer(), 3, vkBn->getTensorSize(query), queryBuf.second);
+            mQKBlockSet->writeBuffer(queryBuf.first->buffer(), 4, vkBn->getTensorSize(query), queryBuf.second);
         }
-        mQKBlockSet->writeBuffer(mParam->buffer(), 4, mParam->size());
+        mQKBlockSet->writeBuffer(mParam->buffer(), 5, mParam->size());
 
         // QK full-block set (same bindings as tail-safe set)
         mQKBlockFullSet->writeBuffer(qkBuf.first->buffer(), 0, vkBn->getTensorSize(mTempQKBlock.get()), qkBuf.second);
         mQKBlockFullSet->writeBuffer(tqBuf.first->buffer(), 1, vkBn->getTensorSize(mTempQuery.get()), tqBuf.second);
-        mQKBlockFullSet->writeBuffer(cacheKeyBuf->buffer(), 2, cacheKeySize, cacheKeyOffset);
+        mQKBlockFullSet->writeBuffer(denseCacheKeyBuf->buffer(), 2, denseCacheKeySize, denseCacheKeyOffset);
+        mQKBlockFullSet->writeBuffer(packedCacheKeyBuf->buffer(), 3, packedCacheKeySize, packedCacheKeyOffset);
         if (hasMask) {
             auto maskBuf = vkBn->getTensorBuffer(mask);
-            mQKBlockFullSet->writeBuffer(maskBuf.first->buffer(), 3, vkBn->getTensorSize(mask), maskBuf.second);
+            mQKBlockFullSet->writeBuffer(maskBuf.first->buffer(), 4, vkBn->getTensorSize(mask), maskBuf.second);
         } else {
-            mQKBlockFullSet->writeBuffer(queryBuf.first->buffer(), 3, vkBn->getTensorSize(query), queryBuf.second);
+            mQKBlockFullSet->writeBuffer(queryBuf.first->buffer(), 4, vkBn->getTensorSize(query), queryBuf.second);
         }
-        mQKBlockFullSet->writeBuffer(mParam->buffer(), 4, mParam->size());
+        mQKBlockFullSet->writeBuffer(mParam->buffer(), 5, mParam->size());
 
         // Softmax online set (writes w, updates m/l/alpha)
         mSoftmaxOnlineSet->writeBuffer(wBuf.first->buffer(), 0, vkBn->getTensorSize(mTempWBlock.get()), wBuf.second);
@@ -1197,7 +1311,24 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
         set->writeBuffer(queryBuf.first->buffer(), 1, vkBn->getTensorSize(query), queryBuf.second);
         set->writeBuffer(keyBuf.first->buffer(), 2, vkBn->getTensorSize(key), keyBuf.second);
         set->writeBuffer(valueBuf.first->buffer(), 3, vkBn->getTensorSize(value), valueBuf.second);
-        set->writeBuffer(cacheKeyBuf->buffer(), 4, cacheKeySize, cacheKeyOffset);
+        set->writeBuffer(denseCacheKeyBuf->buffer(), 4, denseCacheKeySize, denseCacheKeyOffset);
+        set->writeBuffer(packedCacheKeyBuf->buffer(), 5, packedCacheKeySize, packedCacheKeyOffset);
+        set->writeBuffer(cacheValueBuf->buffer(), 6, cacheValueSize, cacheValueOffset);
+        if (hasMask) {
+            auto maskBuf = vkBn->getTensorBuffer(mask);
+            set->writeBuffer(maskBuf.first->buffer(), 7, vkBn->getTensorSize(mask), maskBuf.second);
+        } else {
+            set->writeBuffer(queryBuf.first->buffer(), 7, vkBn->getTensorSize(query), queryBuf.second);
+        }
+        set->writeBuffer(mParam->buffer(), 8, mParam->size());
+    };
+    auto writeDenseAttentionSet = [&](const std::shared_ptr<VulkanLayout::DescriptorSet>& set) {
+        MNN_ASSERT(nullptr != set);
+        set->writeBuffer(outBuf.first->buffer(), 0, vkBn->getTensorSize(output), outBuf.second);
+        set->writeBuffer(queryBuf.first->buffer(), 1, vkBn->getTensorSize(query), queryBuf.second);
+        set->writeBuffer(keyBuf.first->buffer(), 2, vkBn->getTensorSize(key), keyBuf.second);
+        set->writeBuffer(valueBuf.first->buffer(), 3, vkBn->getTensorSize(value), valueBuf.second);
+        set->writeBuffer(denseCacheKeyBuf->buffer(), 4, denseCacheKeySize, denseCacheKeyOffset);
         set->writeBuffer(cacheValueBuf->buffer(), 5, cacheValueSize, cacheValueOffset);
         if (hasMask) {
             auto maskBuf = vkBn->getTensorBuffer(mask);
@@ -1211,14 +1342,14 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
         MNN_ASSERT(nullptr != mAttentionSet);
         writeAttentionSet(mAttentionSet);
         if (mQueryLen == 1 && nullptr != mDecodeQ1SubgroupSet) {
-            writeAttentionSet(mDecodeQ1SubgroupSet);
+            writeDenseAttentionSet(mDecodeQ1SubgroupSet);
         }
         if (mQueryLen == 1 && nullptr != mDecodeQ1SubgroupHD128Set) {
-            writeAttentionSet(mDecodeQ1SubgroupHD128Set);
+            writeDenseAttentionSet(mDecodeQ1SubgroupHD128Set);
         }
     } else {
         MNN_ASSERT(nullptr != mAttentionLegacySet);
-        writeAttentionSet(mAttentionLegacySet);
+        writeDenseAttentionSet(mAttentionLegacySet);
     }
 
     return NO_ERROR;

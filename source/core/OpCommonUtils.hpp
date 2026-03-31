@@ -35,6 +35,10 @@ struct KVMeta {
     int layer_nums = 0;
     bool sparse_v_enable = false;
     float sparse_v_tau = 1.0e-6f;
+    bool turboquant_k_enable = false;
+    bool turboquant_v_enable = false;
+    int turboquant_block_size = 32;
+    int turboquant_format = 0;
     int computeReverseSize() const {
         int sum = 0;
         for (int i=0; i<n_reserve; ++i) {
