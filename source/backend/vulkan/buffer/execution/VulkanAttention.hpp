@@ -26,6 +26,10 @@ private:
         vec4 f0;  // scale, sparseVTau, lowerTriangularMask, turboQuantKBlockSize
     };
 
+    struct TurboQuantVParam {
+        vec4 f0; // vEnable, blockSize, 0, 0
+    };
+
     struct KVCache {
         int maxLen = 0;
         int kvHeadNum = 0;
@@ -35,11 +39,13 @@ private:
         std::shared_ptr<VulkanBuffer> key;
         std::shared_ptr<VulkanBuffer> packedKey;
         std::shared_ptr<VulkanBuffer> value;
+        std::shared_ptr<VulkanBuffer> packedValue;
         int turboQuantKBlockSize = 0;
+        int turboQuantVBlockSize = 0;
 
         void reset();
         void ensureCapacity(VulkanBackend* vkBn, int requiredLen, int kvH, int d, bool useFP16, bool useTurboQuantK,
-                            int turboQuantKBlockSize);
+                            bool useTurboQuantV, int turboQuantBlockSize);
     };
 
     const Op* mOp = nullptr;
@@ -57,6 +63,7 @@ private:
     std::shared_ptr<KVCache> mKVCache;
 
     std::shared_ptr<VulkanBuffer> mParam;
+    std::shared_ptr<VulkanBuffer> mTurboQuantVParam;
     const VulkanPipeline* mAttentionPipeline = nullptr;
     const VulkanPipeline* mAttentionLegacyPipeline = nullptr;
     const VulkanPipeline* mDecodeQ1SubgroupPipeline = nullptr;

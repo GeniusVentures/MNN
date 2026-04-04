@@ -36,11 +36,91 @@ layout(set=0, binding=7) readonly uniform constBuffer {
     vec4 f0;  // scale, sparseVTau, 0, 0
 } uConst;
 
+layout(set=0, binding=8) readonly uniform turboQuantVBuffer {
+    vec4 f0;  // vEnable, blockSize, 0, 0
+} uTurboQuantV;
+
+layout(set=0, binding=9) readonly buffer s9 {
+    uvec4 data[];
+} uPackedCacheValue;
+
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 const int MAX_D4 = 64; // headDim <= 256
+const int TQ3_BLOCK_D4 = 8;
+const int TQ3_BLOCK_SIZE = TQ3_BLOCK_D4 * 4;
+const int TQ3_CODEBOOK_SIZE = 8;
+const int TQ3_GROUP_COUNT = 4;
+const int TQ3_GROUP_WIDTH = 8;
+const int TQ3_PACKED_BYTE_SPLIT = 4;
+const int TQ3_PACKED_BYTE_BITS = 8;
+const uint TQ3_PACKED_BYTE_MASK = 255u;
+const uint TQ3_INDEX_MASK = 7u;
 const float NEG_INF = -3.402823466e38;
+const float TQ3_CODEBOOK[TQ3_CODEBOOK_SIZE] = float[TQ3_CODEBOOK_SIZE](-2.1519, -1.3439, -0.7560, -0.2451, 0.2451, 0.7560, 1.3439, 2.1519);
+const float TQ3_SIGNS[TQ3_BLOCK_SIZE] = float[TQ3_BLOCK_SIZE](
+    1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0,
+    -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0
+);
 shared vec4 sQuery[MAX_D4];
+
+uint tq3GetPackedByte(uvec4 packed, int idx) {
+    if (idx < TQ3_PACKED_BYTE_SPLIT) {
+        return (packed.y >> (idx * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+    }
+    if (idx < TQ3_GROUP_WIDTH) {
+        return (packed.z >> ((idx - TQ3_PACKED_BYTE_SPLIT) * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+    }
+    return (packed.w >> ((idx - TQ3_GROUP_WIDTH) * TQ3_PACKED_BYTE_BITS)) & TQ3_PACKED_BYTE_MASK;
+}
+
+void tq3WhtInverse32(inout float values[TQ3_BLOCK_SIZE]) {
+    for (int step = 1; step < TQ3_BLOCK_SIZE; step <<= 1) {
+        for (int i = 0; i < TQ3_BLOCK_SIZE; i += (step << 1)) {
+            for (int j = i; j < i + step; ++j) {
+                const float a = values[j];
+                const float b = values[j + step];
+                values[j] = a + b;
+                values[j + step] = a - b;
+            }
+        }
+    }
+    const float norm = 1.0 / sqrt(float(TQ3_BLOCK_SIZE));
+    for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+        values[i] *= norm;
+    }
+}
+
+vec4 tq3DecodeVec4(uvec4 packed, int d4InBlock) {
+    float block[TQ3_BLOCK_SIZE];
+    for (int g = 0; g < TQ3_GROUP_COUNT; ++g) {
+        const uint b0 = tq3GetPackedByte(packed, g * 3 + 0);
+        const uint b1 = tq3GetPackedByte(packed, g * 3 + 1);
+        const uint b2 = tq3GetPackedByte(packed, g * 3 + 2);
+        const uint i0 = b0 & TQ3_INDEX_MASK;
+        const uint i1 = (b0 >> 3) & TQ3_INDEX_MASK;
+        const uint i2 = ((b0 >> 6) | (b1 << 2)) & TQ3_INDEX_MASK;
+        const uint i3 = (b1 >> 1) & TQ3_INDEX_MASK;
+        const uint i4 = (b1 >> 4) & TQ3_INDEX_MASK;
+        const uint i5 = ((b1 >> 7) | (b2 << 1)) & TQ3_INDEX_MASK;
+        const uint i6 = (b2 >> 2) & TQ3_INDEX_MASK;
+        const uint i7 = (b2 >> 5) & TQ3_INDEX_MASK;
+        const int base = g * TQ3_GROUP_WIDTH;
+        block[base + 0] = TQ3_CODEBOOK[i0];
+        block[base + 1] = TQ3_CODEBOOK[i1];
+        block[base + 2] = TQ3_CODEBOOK[i2];
+        block[base + 3] = TQ3_CODEBOOK[i3];
+        block[base + 4] = TQ3_CODEBOOK[i4];
+        block[base + 5] = TQ3_CODEBOOK[i5];
+        block[base + 6] = TQ3_CODEBOOK[i6];
+        block[base + 7] = TQ3_CODEBOOK[i7];
+    }
+    tq3WhtInverse32(block);
+    const float scale = unpackHalf2x16(packed.x).x;
+    const int base = d4InBlock * 4;
+    return vec4(block[base + 0] * TQ3_SIGNS[base + 0], block[base + 1] * TQ3_SIGNS[base + 1],
+                block[base + 2] * TQ3_SIGNS[base + 2], block[base + 3] * TQ3_SIGNS[base + 3]) * scale;
+}
 
 void main() {
     const int h = int(gl_WorkGroupID.x);
@@ -82,6 +162,11 @@ void main() {
 
     const float scale = uConst.f0.x;
     const float sparseVTau = uConst.f0.y;
+    const bool turboQuantVEnabled = uTurboQuantV.f0.x > 0.5;
+    const int turboQuantVBlockSize = int(uTurboQuantV.f0.y);
+    const bool useTurboQuantV = turboQuantVEnabled && turboQuantVBlockSize == TQ3_BLOCK_SIZE &&
+                                (headDim % TQ3_BLOCK_SIZE) == 0;
+    const int turboQuantVBlockCount = useTurboQuantV ? (headDim / TQ3_BLOCK_SIZE) : 0;
     const int qBase = (q * headNum + h) * headDim;
     const int kMaskStart = (hasMask != 0 && maskKvlen > 0 && totalLen > maskKvlen) ? (totalLen - maskKvlen) : 0;
 
@@ -134,9 +219,18 @@ void main() {
         if (w < sparseVTau) {
             continue;
         }
-        for (int i = 0; i < d4Size; ++i) {
-            vec4 vv = vec4(uCacheValue.data[vBase + i]);
-            outVec[i] += w * vv;
+        if (useTurboQuantV) {
+            const int packedBase = (kvh * maxLen + k) * turboQuantVBlockCount;
+            for (int i = 0; i < d4Size; ++i) {
+                const int turboHeadBlock = i >> 3;
+                const int turboD4InBlock = i & 7;
+                const int packedIndex = packedBase + turboHeadBlock;
+                outVec[i] += w * tq3DecodeVec4(uPackedCacheValue.data[packedIndex], turboD4InBlock);
+            }
+        } else {
+            for (int i = 0; i < d4Size; ++i) {
+                outVec[i] += w * vec4(uCacheValue.data[vBase + i]);
+            }
         }
     }
 

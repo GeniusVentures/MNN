@@ -21,8 +21,6 @@ using namespace MNN::Express;
 int NumHead   = 16;
 int KvNumHead = 2;
 int HeadDim   = 128;
-const float diff_threshold = 0.001;
-const float diff_percent_threshold = 0.1;
 const int pastLength = 101;
 #define GENERATE_TOKENS 128
 struct KVMeta {
@@ -318,17 +316,69 @@ protected:
     std::vector< std::vector< std::vector<float> > > query;
     std::vector< std::vector< std::vector<float> > > key;
     std::vector< std::vector< std::vector<float> > > value;
+    std::vector< std::vector< std::vector<float> > > queryDecode;
+    std::vector< std::vector< std::vector<float> > > keyDecode;
+    std::vector< std::vector< std::vector<float> > > valueDecode;
     std::vector< std::vector<int> > mask;
     std::vector< std::vector< std::vector<float> > > expected_result;
     VARP Query, Key, Value, Mask, Output;
     VARP Query1, Key1, Value1, Mask1;
     virtual void prepareRuntimeMeta() {
+        gMeta = KVMeta();
         gMeta.sparse_v_enable = false;
         gMeta.sparse_v_tau = 1.0e-6f;
         gMeta.turboquant_k_enable = false;
         gMeta.turboquant_v_enable = false;
         gMeta.turboquant_block_size = 32;
         gMeta.turboquant_format = 0;
+    }
+    virtual void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const {
+        diffThreshold = 0.001f;
+        diffPercentThreshold = 0.1f;
+    }
+    bool runSingleCase(int seq_len, int precision, bool useChunkMask, int chunkSize = 2) {
+        std::shared_ptr<NaiveAttention> naiveAttention(new NaiveAttention);
+        generateInput(seq_len, precision);
+        if (useChunkMask) {
+            generateChunkMask(seq_len, seq_len, chunkSize);
+        } else {
+            generateMask(seq_len, seq_len);
+        }
+        prepareRuntimeMeta();
+        expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
+        auto attn = _makeAttentionModule();
+        gMeta.previous = 0;
+        gMeta.add = seq_len;
+        Output = attn->onForward({Query, Key, Value, Mask})[0];
+        gMeta.sync();
+        return compareResult(seq_len);
+    }
+    bool runPrefillDecodeTransitionCase(int seq_len, int precision, bool useChunkMask, int chunkSize = 2) {
+        std::shared_ptr<NaiveAttention> naiveAttention(new NaiveAttention);
+        generateInput(seq_len, precision, true);
+        if (useChunkMask) {
+            gMeta.previous = seq_len;
+            generateChunkMask(seq_len, seq_len, chunkSize, true);
+        } else {
+            generateMask(seq_len, seq_len, true);
+        }
+        prepareRuntimeMeta();
+        auto attn = _makeAttentionModule();
+        expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
+        gMeta.previous = 0;
+        gMeta.add = seq_len;
+        Output = attn->onForward({Query, Key, Value, Mask})[0];
+        gMeta.sync();
+        if (!compareResult(seq_len)) {
+            return false;
+        }
+        std::vector< std::vector<int> > decodeMask(1);
+        decodeMask[0].resize(seq_len + 1, 1);
+        expected_result = naiveAttention->onExecute(queryDecode, keyDecode, valueDecode, decodeMask, 1);
+        gMeta.add = 1;
+        Output = attn->onForward({Query1, Key1, Value1, Mask1})[0];
+        gMeta.sync();
+        return compareResult(1);
     }
 public:
     AttentionTest() = default;
@@ -350,12 +400,12 @@ public:
         Key   = vector_to_var(key);
         Value = vector_to_var(value);
         if (genDecodeInput) {
-            auto vecquery = generateRandTensor(1, NumHead, HeadDim, precision);
-            auto veckey   = generateRandTensor(1, KvNumHead, HeadDim, precision);
-            auto vecvalue = generateRandTensor(1, KvNumHead, HeadDim, precision);
-            Query1 = vector_to_var(vecquery);
-            Key1   = vector_to_var(veckey);
-            Value1 = vector_to_var(vecvalue);
+            queryDecode = generateRandTensor(1, NumHead, HeadDim, precision);
+            keyDecode   = generateRandTensor(1, KvNumHead, HeadDim, precision);
+            valueDecode = generateRandTensor(1, KvNumHead, HeadDim, precision);
+            Query1 = vector_to_var(queryDecode);
+            Key1   = vector_to_var(keyDecode);
+            Value1 = vector_to_var(valueDecode);
         }
     }
     void generateChunkMask(int seq_len, int kv_seq_len, int chunk_size, bool genDecodeInput = false) {
@@ -433,13 +483,16 @@ public:
     }
 
     bool compareResult(int seq_len) {
+        float diffThreshold = 0.0f;
+        float diffPercentThreshold = 0.0f;
+        getDiffTolerance(diffThreshold, diffPercentThreshold);
         const float * resultPtr = Output->readMap<float>();
         for (int i = 0; i < seq_len; i++) {
             for (int j = 0; j < NumHead; j++) {
                 for (int k = 0; k < HeadDim; k++) {
                     float diff = fabs(resultPtr[i * NumHead * HeadDim + j * HeadDim + k] - expected_result[i][j][k]);
                     float diff_percent = fabs(diff / expected_result[i][j][k]);
-                    if (diff > diff_threshold && diff_percent > diff_percent_threshold) {
+                    if (diff > diffThreshold && diff_percent > diffPercentThreshold) {
                         printf("Result Mismatch: expected %lf but got %lf in CPU Attention Test\n", expected_result[i][j][k], resultPtr[i * NumHead * HeadDim + j * HeadDim + k]);
                         printf("Error Position: Output[%d][%d][%d]\n", i, j, k);
                         return false;
@@ -693,6 +746,180 @@ public:
     }
 };
 
+class AttentionVulkanTurboQuantVTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_v_enable = true;
+    }
+    void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const override {
+        // TurboQuant-V is intentionally lossy; keep wider tolerances scoped to this test only.
+        diffThreshold = 3.0f;
+        diffPercentThreshold = 0.7f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        if (!AttentionTest::run(precision)) {
+            return false;
+        }
+        if (!runSingleCase(1, precision, false)) {
+            printf("Error: TurboQuant-V qLen=1 scalar-mask corner case failed!\n");
+            return false;
+        }
+        if (!runSingleCase(1, precision, true)) {
+            printf("Error: TurboQuant-V qLen=1 explicit-mask corner case failed!\n");
+            return false;
+        }
+        const int originalHeadDim = HeadDim;
+        HeadDim = 64;
+        const bool headDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!headDimPass) {
+            printf("Error: TurboQuant-V headDim=64 corner case failed!\n");
+            return false;
+        }
+        HeadDim = 80;
+        const bool fallbackHeadDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!fallbackHeadDimPass) {
+            printf("Error: TurboQuant-V headDim=80 non-block-aligned fallback case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, false)) {
+            printf("Error: TurboQuant-V prefill/decode transition corner case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, true)) {
+            printf("Error: TurboQuant-V prefill/decode explicit-mask transition corner case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(2, precision, false)) {
+            printf("Error: TurboQuant-V qLen=2 prefill/decode transition corner case failed!\n");
+            return false;
+        }
+        return true;
+    }
+};
+
+class AttentionVulkanTurboQuantKVTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_k_enable = true;
+        gMeta.turboquant_v_enable = true;
+    }
+    void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const override {
+        // TurboQuant K+V is intentionally lossy; keep wider tolerances scoped to this test only.
+        diffThreshold = 3.0f;
+        diffPercentThreshold = 0.7f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        if (!AttentionTest::run(precision)) {
+            return false;
+        }
+        if (!runSingleCase(1, precision, false)) {
+            printf("Error: TurboQuant-KV qLen=1 scalar-mask corner case failed!\n");
+            return false;
+        }
+        if (!runSingleCase(1, precision, true)) {
+            printf("Error: TurboQuant-KV qLen=1 explicit-mask corner case failed!\n");
+            return false;
+        }
+        const int originalHeadDim = HeadDim;
+        HeadDim = 64;
+        const bool headDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!headDimPass) {
+            printf("Error: TurboQuant-KV headDim=64 corner case failed!\n");
+            return false;
+        }
+        HeadDim = 80;
+        const bool fallbackHeadDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!fallbackHeadDimPass) {
+            printf("Error: TurboQuant-KV headDim=80 non-block-aligned fallback case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, false)) {
+            printf("Error: TurboQuant-KV prefill/decode transition corner case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, true)) {
+            printf("Error: TurboQuant-KV prefill/decode explicit-mask transition corner case failed!\n");
+            return false;
+        }
+        return true;
+    }
+};
+
+class AttentionVulkanTurboQuantKVTransitionTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_k_enable = true;
+        gMeta.turboquant_v_enable = true;
+    }
+    void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const override {
+        diffThreshold = 3.0f;
+        diffPercentThreshold = 0.7f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        if (!runPrefillDecodeTransitionCase(2, precision, false)) {
+            printf("Error: TurboQuant-KV qLen=2 prefill/decode transition dedicated case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(2, precision, true)) {
+            printf("Error: TurboQuant-KV qLen=2 explicit-mask prefill/decode transition dedicated case failed!\n");
+            return false;
+        }
+        return true;
+    }
+};
+
 class SpeedAttentionVulkanTest : public SpeedAttentionTest {
 protected:
     bool turboQuantKEnabled() const override {
@@ -741,6 +968,9 @@ MNNTestSuiteRegister(AttentionTest, "op/attention");
 MNNTestSuiteRegister(AttentionVulkanTest, "op/attention/vulkan");
 MNNTestSuiteRegister(AttentionVulkanSparseVTest, "op/attention/vulkan/sparsev");
 MNNTestSuiteRegister(AttentionVulkanTurboQuantTest, "op/attention/vulkan/turboquant");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantVTest, "op/attention/vulkan/turboquantv");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantKVTest, "op/attention/vulkan/turboquantkv");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantKVTransitionTest, "op/attention/extra/vulkan/turboquantkv_transition");
 MNNTestSuiteRegister(SpeedAttentionTest, "speed/attention");
 MNNTestSuiteRegister(SpeedAttentionVulkanTest, "speed/attention/vulkan");
 MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuantTest, "speed/attention/vulkan/turboquant");

@@ -18,7 +18,15 @@ layout(set=0, binding=4) writeonly buffer s4 {
     uvec4 data[];
 } uPackedCacheKey;
 
-layout(set=0, binding=5) readonly uniform constBuffer {
+layout(set=0, binding=5) writeonly buffer s5 {
+    uvec4 data[];
+} uPackedCacheValue;
+
+layout(set=0, binding=6) readonly uniform turboQuantVBuffer {
+    vec4 f0;  // vEnable, blockSize, 0, 0
+} uTurboQuantV;
+
+layout(set=0, binding=7) readonly uniform constBuffer {
     ivec4 s0; // qLen, kLen, headNum, kvHeadNum
     ivec4 s1; // headDim, group, pastLen, totalLen
     ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
@@ -106,6 +114,8 @@ void main() {
     uCacheKey.data[outBase] = uKey.data[inBase / PACKED_VEC_SIZE];
 
     const int turboBlockSize = int(uConst.f0.w);
+    const bool turboQuantVEnabled = uTurboQuantV.f0.x > 0.5;
+    const int turboQuantVBlockSize = int(uTurboQuantV.f0.y);
     if (turboBlockSize == TQ3_BLOCK_SIZE && (d4 % TQ3_BLOCK_D4) == 0) {
         const int turboBlockCount = headDim / TQ3_BLOCK_SIZE;
         const int turboHeadBlock = d4 / TQ3_BLOCK_D4;
@@ -163,4 +173,57 @@ void main() {
     // Index: ((kvh * maxLen + token) * d4Size + d4)
     const int outBaseV4 = (kvh * maxLen + cacheToken) * d4Size + d4;
     uCacheValue.data[outBaseV4] = uValue.data[inBase / PACKED_VEC_SIZE];
+
+    if (turboQuantVEnabled && turboQuantVBlockSize == TQ3_BLOCK_SIZE && (d4 % TQ3_BLOCK_D4) == 0) {
+        const int turboQuantVBlockCount = headDim / TQ3_BLOCK_SIZE;
+        const int turboHeadBlock = d4 / TQ3_BLOCK_D4;
+        if (turboHeadBlock < turboQuantVBlockCount) {
+            float block[TQ3_BLOCK_SIZE];
+            const int inputD4Base = ((token * kvHeadNum + kvh) * d4Size) + turboHeadBlock * TQ3_BLOCK_D4;
+            for (int i = 0; i < TQ3_BLOCK_D4; ++i) {
+                vec4 value4 = vec4(uValue.data[inputD4Base + i]);
+                block[i * PACKED_VEC_SIZE + 0] = value4.x;
+                block[i * PACKED_VEC_SIZE + 1] = value4.y;
+                block[i * PACKED_VEC_SIZE + 2] = value4.z;
+                block[i * PACKED_VEC_SIZE + 3] = value4.w;
+            }
+
+            float sumSq = 0.0;
+            for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+                sumSq += block[i] * block[i];
+            }
+            float rms = sqrt(sumSq / float(TQ3_BLOCK_SIZE));
+            if (rms < TQ3_MIN_RMS) {
+                rms = TQ3_MIN_RMS;
+            }
+            const float invRms = 1.0 / rms;
+            for (int i = 0; i < TQ3_BLOCK_SIZE; ++i) {
+                block[i] *= invRms;
+            }
+            tq3WhtForward32(block);
+
+            uint packedBytes[TQ3_PACKED_BYTE_COUNT];
+            for (int g = 0; g < TQ3_GROUP_COUNT; ++g) {
+                const int base = g * TQ3_GROUP_WIDTH;
+                const uint i0 = tq3FindNearest(block[base + 0]);
+                const uint i1 = tq3FindNearest(block[base + 1]);
+                const uint i2 = tq3FindNearest(block[base + 2]);
+                const uint i3 = tq3FindNearest(block[base + 3]);
+                const uint i4 = tq3FindNearest(block[base + 4]);
+                const uint i5 = tq3FindNearest(block[base + 5]);
+                const uint i6 = tq3FindNearest(block[base + 6]);
+                const uint i7 = tq3FindNearest(block[base + 7]);
+                packedBytes[g * TQ3_PACKED_BYTES_PER_GROUP + 0] = i0 | (i1 << 3) | (i2 << 6);
+                packedBytes[g * TQ3_PACKED_BYTES_PER_GROUP + 1] = (i2 >> 2) | (i3 << 1) | (i4 << 4) | (i5 << 7);
+                packedBytes[g * TQ3_PACKED_BYTES_PER_GROUP + 2] = (i5 >> 1) | (i6 << 2) | (i7 << 5);
+            }
+
+            const uint scaleWord = packHalf2x16(vec2(rms, 0.0));
+            const uint word1 = packedBytes[0] | (packedBytes[1] << 8) | (packedBytes[2] << 16) | (packedBytes[3] << 24);
+            const uint word2 = packedBytes[4] | (packedBytes[5] << 8) | (packedBytes[6] << 16) | (packedBytes[7] << 24);
+            const uint word3 = packedBytes[8] | (packedBytes[9] << 8) | (packedBytes[10] << 16) | (packedBytes[11] << 24);
+            const int packedIndex = (kvh * maxLen + cacheToken) * turboQuantVBlockCount + turboHeadBlock;
+            uPackedCacheValue.data[packedIndex] = uvec4(scaleWord, word1, word2, word3);
+        }
+    }
 }

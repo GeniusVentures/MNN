@@ -14,6 +14,7 @@ MNN is a lightweight deep learning **inference engine** (not a training framewor
 - Expand to neighboring files, subsystem-level code, or broader architecture only when the task clearly requires it.
 - Use whole-project analysis for cross-cutting changes, dependency/debugging issues, architectural questions, or when the relevant ownership is unclear.
 - Minimal changes do not justify magic numbers; when adding or touching non-obvious literals, use short named constants or helpers so the code remains human-readable.
+- If you edit Vulkan buffer GLSL shaders under `source/backend/vulkan/buffer/execution/glsl/`, regenerate embedded shaders with `python3 source/backend/vulkan/buffer/compiler/makeshader.py` and include regenerated `source/backend/vulkan/buffer/compiler/AllShader.cpp`, `source/backend/vulkan/buffer/shaders/AllShader.h`, and `source/backend/vulkan/buffer/compiler/VulkanShaderMap.cpp` in the change.
 
 ## Architecture Overview
 
