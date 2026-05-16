@@ -22,16 +22,32 @@ VulkanBuffer::VulkanBuffer(const VulkanMemoryPool& pool, bool separate, size_t s
     VkMemoryRequirements memReq;
     mPool.device().getBufferMemoryRequirements(mBuffer, memReq);
     mMemory = const_cast<VulkanMemoryPool&>(mPool).allocMemory(memReq, requirements_mask, separate);
+    if (nullptr == mMemory.first) {
+        MNN_ERROR("VulkanBuffer allocMemory failed: request=%zu, memReq.size=%zu, memReq.align=%zu, typeBits=0x%x, reqMask=0x%x\n",
+                  size, (size_t)memReq.size, (size_t)memReq.alignment, memReq.memoryTypeBits, (uint32_t)requirements_mask);
+        MNN_ASSERT(false);
+        return;
+    }
     //        FUNC_PRINT(mMemory->type());
     auto realMem = (VulkanMemory*)mMemory.first;
 
     if (nullptr != hostData) {
         void* data = nullptr;
-        CALL_VK(mPool.device().mapMemory(realMem->get(), mMemory.second, size, 0 /*flag, not used*/, &data));
+        auto mapRes = mPool.device().mapMemory(realMem->get(), mMemory.second, size, 0 /*flag, not used*/, &data);
+        if (mapRes != VK_SUCCESS) {
+            MNN_ERROR("VulkanBuffer mapMemory failed: vkResult=%d, request=%zu, offset=%zu, memReq.size=%zu\n", mapRes,
+                      size, (size_t)mMemory.second, (size_t)memReq.size);
+        }
+        CALL_VK(mapRes);
         ::memcpy(data, hostData, size);
         mPool.device().unmapMemory(realMem->get());
     }
-    CALL_VK(mPool.device().bindBufferMemory(mBuffer, realMem->get(), mMemory.second));
+    auto bindRes = mPool.device().bindBufferMemory(mBuffer, realMem->get(), mMemory.second);
+    if (bindRes != VK_SUCCESS) {
+        MNN_ERROR("VulkanBuffer bindBufferMemory failed: vkResult=%d, request=%zu, memReq.size=%zu, memReq.align=%zu, offset=%zu\n",
+                  bindRes, size, (size_t)memReq.size, (size_t)memReq.alignment, (size_t)mMemory.second);
+    }
+    CALL_VK(bindRes);
 }
 
 VulkanBuffer::~VulkanBuffer() {

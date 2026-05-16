@@ -1205,10 +1205,9 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
     const int group = mHeadNum / mKvHeadNum;
     const int totalLenForCompute = pastLenForCompute + mKeyLen;
 
-    if (lowerTriangularMask != 0) {
-        const int maskElements = mQueryLen * totalLenForCompute;
-        MNN_ASSERT(maskElements > 0);
-        if (!mSyntheticMask || mSyntheticMask->elementSize() != maskElements) {
+    if (lowerTriangularMask != 0 && mQueryLen > 0 && totalLenForCompute > 0) {
+        if (!mSyntheticMask || mSyntheticMask->dimensions() != 2 || mSyntheticMask->length(0) != mQueryLen ||
+            mSyntheticMask->length(1) != totalLenForCompute) {
             if (mSyntheticMask) {
                 vkBn->onReleaseBuffer(mSyntheticMask.get(), Backend::DYNAMIC);
                 mSyntheticMask.reset();
@@ -1219,8 +1218,10 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
             }
         }
 
+
         std::shared_ptr<Tensor> hostMask(Tensor::create<float>({mQueryLen, totalLenForCompute}));
         auto hostMaskPtr = hostMask->host<float>();
+        MNN_ASSERT(nullptr != hostMaskPtr);
         const float negativeInfinity = -std::numeric_limits<float>::max();
         for (int q = 0; q < mQueryLen; ++q) {
             const int causalLimit = pastLenForCompute + q;
@@ -1228,7 +1229,7 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
                 hostMaskPtr[q * totalLenForCompute + k] = (k <= causalLimit) ? 0.0f : negativeInfinity;
             }
         }
-        vkBn->onCopyBuffer(hostMask.get(), mSyntheticMask.get());
+        mSyntheticMask->copyFromHostTensor(hostMask.get());
         mask = mSyntheticMask.get();
         hasMask = 1;
         maskQlen = mQueryLen;

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <vector>
 #include <MNN/AutoTime.hpp>
+#include <stdio.h>
 
 using namespace MNN::Express;
 
@@ -644,9 +645,16 @@ SpeedAttentionTest() = default;
     virtual bool turboQuantKEnabled() const {
         return false;
     }
+    virtual std::vector<int> speedSeqs() const {
+        return {4096};
+    }
+    virtual std::vector<int> sparseModes() const {
+        return {0, 1};
+    }
 
     virtual bool run(int precision) {
-        std::vector<int> seqs = {4096};
+        const std::vector<int> seqs = speedSeqs();
+        const int64_t kProgressIntervalUs = 10LL * 1000LL * 1000LL;
         std::shared_ptr<NaiveAttention> naiveAttention(new NaiveAttention);
         std::shared_ptr<MNN::OpT> attention(new MNN::OpT);
         attention->type = MNN::OpType_Attention;
@@ -656,7 +664,7 @@ SpeedAttentionTest() = default;
         /* 3 attention module */
         std::vector<int> quantQKV = {8, 9, 10};
         std::vector<std::string> testNames = {"float qkv", "quant qk", "quant qkv"};
-        std::vector<int> sparseModes = {0, 1};
+        const std::vector<int> sparseModes = this->sparseModes();
         for (int n = 0; n < seqs.size(); ++n) {
             int seq_len = seqs[n];
             MNN_PRINT(">>> seq_len=%d, decode_len=%d\n", seq_len, GENERATE_TOKENS);
@@ -674,23 +682,40 @@ SpeedAttentionTest() = default;
                     gMeta.turboquant_v_enable = false;
                     gMeta.turboquant_block_size = 32;
                     gMeta.turboquant_format = 0;
+                    const char* turboTag = gMeta.turboquant_k_enable ? " + turboquant_k" : " + dense_k";
                     auto _module = _makeAttentionModule(quantQKV[m]);
                     MNN::Timer t1;
+                    MNN_PRINT("%s%s%s: prefill progress 0/5\r", testNames[m].c_str(), sparseTag, turboTag);
+                    fflush(stdout);
                     for (int x = 0; x < 5; ++x) {
                         Output = _module->onForward({Query, Key, Value, Mask})[0];
+                        MNN_PRINT("%s%s%s: prefill progress %d/5\r", testNames[m].c_str(), sparseTag, turboTag, x + 1);
+                        fflush(stdout);
                     }
                     auto time = (float)t1.durationInUs() / 1000.0f / 5.f;
-                    const char* turboTag = gMeta.turboquant_k_enable ? " + turboquant_k" : " + dense_k";
-                    MNN_PRINT("%s%s%s: prefill cost = %.2f\n", testNames[m].c_str(), sparseTag, turboTag, time);
+                    MNN_PRINT("\n%s%s%s: prefill cost = %.2f\n", testNames[m].c_str(), sparseTag, turboTag, time);
+                    fflush(stdout);
                     gMeta.sync();
                     MNN::Timer t2;
+                    int64_t lastProgressUs = 0;
+                    MNN_PRINT("%s%s%s: decode progress 0/%d (0.0%%)\r", testNames[m].c_str(), sparseTag, turboTag, GENERATE_TOKENS);
+                    fflush(stdout);
                     for (int x = 0; x < GENERATE_TOKENS; ++x) {
                         gMeta.add = 1;
                         auto output2 = _module->onForward({Query1, Key1, Value1, Mask1})[0];
                         gMeta.sync();
-                    }
-                    time = (float)t2.durationInUs() / 1000.0f;
-                    MNN_PRINT("%s%s%s: decode cost = %f\n", testNames[m].c_str(), sparseTag, turboTag, time);
+                        const int64_t elapsedUs = t2.durationInUs();
+                        if (x + 1 == GENERATE_TOKENS || elapsedUs - lastProgressUs >= kProgressIntervalUs) {
+                            const float percent = (float)(x + 1) * 100.0f / (float)GENERATE_TOKENS;
+                            const float elapsedSec = (float)elapsedUs / 1000000.0f;
+                            MNN_PRINT("%s%s%s: decode progress %d/%d (%.1f%%, %.1fs)\r", testNames[m].c_str(), sparseTag, turboTag, x + 1, GENERATE_TOKENS, percent, elapsedSec);
+                            fflush(stdout);
+                            lastProgressUs = elapsedUs;
+                        }
+                     }
+                     time = (float)t2.durationInUs() / 1000.0f;
+                     MNN_PRINT("\n%s%s%s: decode cost = %f\n", testNames[m].c_str(), sparseTag, turboTag, time);
+                    fflush(stdout);
                 }
                 gMeta.sparse_v_enable = false;
                 gMeta.turboquant_k_enable = false;
@@ -964,6 +989,41 @@ public:
     }
 };
 
+class SpeedAttentionVulkanTurboQuant8KTest : public SpeedAttentionVulkanTurboQuantTest {
+public:
+    std::vector<int> speedSeqs() const override {
+        return {8192};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant16KTest : public SpeedAttentionVulkanTurboQuantTest {
+public:
+    std::vector<int> speedSeqs() const override {
+        return {16384};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant32KTest : public SpeedAttentionVulkanTurboQuantTest {
+public:
+    std::vector<int> speedSeqs() const override {
+        return {32768};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant32KDenseVTest : public SpeedAttentionVulkanTurboQuant32KTest {
+public:
+    std::vector<int> sparseModes() const override {
+        return {0};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant32KSparseVTest : public SpeedAttentionVulkanTurboQuant32KTest {
+public:
+    std::vector<int> sparseModes() const override {
+        return {1};
+    }
+};
+
 MNNTestSuiteRegister(AttentionTest, "op/attention");
 MNNTestSuiteRegister(AttentionVulkanTest, "op/attention/vulkan");
 MNNTestSuiteRegister(AttentionVulkanSparseVTest, "op/attention/vulkan/sparsev");
@@ -974,4 +1034,8 @@ MNNTestSuiteRegister(AttentionVulkanTurboQuantKVTransitionTest, "op/attention/ex
 MNNTestSuiteRegister(SpeedAttentionTest, "speed/attention");
 MNNTestSuiteRegister(SpeedAttentionVulkanTest, "speed/attention/vulkan");
 MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuantTest, "speed/attention/vulkan/turboquant");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant8KTest, "speed/attention/vulkan/8k/turboquant");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant16KTest, "speed/attention/vulkan/16k/turboquant");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant32KDenseVTest, "speed/attention/vulkan/32k/turboquant/densev");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant32KSparseVTest, "speed/attention/vulkan/32k/turboquant/sparsev");
 #endif

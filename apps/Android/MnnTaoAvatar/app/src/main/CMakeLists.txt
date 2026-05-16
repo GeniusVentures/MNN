@@ -49,7 +49,7 @@ FILE(GLOB JNI_SRCS
 
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall \
-                     -DVK_USE_PLATFORM_ANDROID_KHR")
+                 set(VK_USE_PLATFORM_ANDROID_KHR")
 
 set(lib_path ${CMAKE_CURRENT_SOURCE_DIR}/libs)
 
