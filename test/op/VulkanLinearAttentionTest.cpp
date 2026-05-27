@@ -294,7 +294,7 @@ public:
         (void)precision;
 
         // Check Vulkan backend availability
-        auto vulkanCreator = MNNGetExtraRuntimeCreator(MNN_FORWARD_VULKAN);
+        auto vulkanCreator = MNN::MNNGetExtraRuntimeCreator(MNN_FORWARD_VULKAN);
         if (nullptr == vulkanCreator) {
             MNN_PRINT("Vulkan backend not available — skipping VulkanLinearAttentionCorrectnessTest\n");
             return true;

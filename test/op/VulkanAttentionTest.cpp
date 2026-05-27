@@ -20,10 +20,7 @@ using namespace MNN::Express;
 
 #define TEST_RANDOM_SEED 2024
 
-int NumHead   = 16;
-int KvNumHead = 2;
-int HeadDim   = 128;
-const int pastLength = 101;
+static const int pastLength = 101;
 
 struct KVMeta {
     enum {
@@ -195,7 +192,7 @@ public:
         srand(TEST_RANDOM_SEED);
 
         // Check Vulkan backend availability
-        auto vulkanCreator = MNNGetExtraRuntimeCreator(MNN_FORWARD_VULKAN);
+        auto vulkanCreator = MNN::MNNGetExtraRuntimeCreator(MNN_FORWARD_VULKAN);
         if (nullptr == vulkanCreator) {
             MNN_PRINT("Vulkan backend not available — skipping VulkanAttentionCorrectnessTest\n");
             return true;
