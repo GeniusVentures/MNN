@@ -20,8 +20,12 @@ Two-phase journey from zero Vulkan LLM capability to a complete inference pipeli
   2. Vulkan Attention and LinearAttention ops pass correctness tests for all supported configurations (GQA, MHA, MQA) matching CPU/Metal reference within float tolerance
   3. Vulkan test suite (Attention, LinearAttention, KVCache, mask generation) is integrated and passes via `./run_test.out`
   4. Vulkan Attention synchronization uses proper buffer barriers (`vkCmdPipelineBarrier` with `VkBufferMemoryBarrier`), eliminating the global memory barrier fragility
-  5. Causal mask generation executes GPU-side with no CPU O(N²) bottleneck for large context windows
-**Plans**: TBD
+   5. Causal mask generation executes GPU-side with no CPU O(N²) bottleneck for large context windows
+**Plans**: 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Attention Synchronization & GPU Mask (VULK-06, VULK-07)
+- [ ] 01-02-PLAN.md — Attention & LinearAttention Test Suite (VULK-01 through VULK-05)
+- [ ] 01-03-PLAN.md — LLM E2E Validation (VULK-08)
 
 ### Phase 2: Ultra FP4 Quantization
 **Goal**: FP4 quantized models run on Vulkan backend with acceptable precision
@@ -38,5 +42,5 @@ Two-phase journey from zero Vulkan LLM capability to a complete inference pipeli
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Vulkan Attention Correctness & LLM E2E | 0/TBD | Not started | - |
+| 1. Vulkan Attention Correctness & LLM E2E | 0/3 | Planned | - |
 | 2. Ultra FP4 Quantization | 0/TBD | Not started | - |
