@@ -7,11 +7,11 @@
 
 ### Vulkan Attention — Correctness & Testing
 
-- [ ] **VULK-01**: Vulkan Attention op produces output matching CPU reference within float tolerance for all supported attention configurations (GQA, MHA, MQA)
-- [ ] **VULK-02**: Vulkan LinearAttention op is functional and produces correct output
-- [ ] **VULK-03**: Vulkan Attention KVCache page table logic is correct across single-turn and multi-turn inference
-- [ ] **VULK-04**: Vulkan Attention handles variable sequence lengths and batch sizes correctly
-- [ ] **VULK-05**: Vulkan-specific test cases are added to the test suite covering Attention and LinearAttention ops
+- [x] **VULK-01**: Vulkan Attention op produces output matching CPU reference within float tolerance for all supported attention configurations (GQA, MHA, MQA)
+- [x] **VULK-02**: Vulkan LinearAttention op is functional and produces correct output
+- [x] **VULK-03**: Vulkan Attention KVCache page table logic is correct across single-turn and multi-turn inference
+- [x] **VULK-04**: Vulkan Attention handles variable sequence lengths and batch sizes correctly
+- [x] **VULK-05**: Vulkan-specific test cases are added to the test suite covering Attention and LinearAttention ops
 
 ### Vulkan Attention — Robustness & LLM Integration
 

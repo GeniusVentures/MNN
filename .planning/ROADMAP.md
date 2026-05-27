@@ -24,7 +24,7 @@ Two-phase journey from zero Vulkan LLM capability to a complete inference pipeli
 **Plans**: 3 plans
 Plans:
 - [x] 01-01-PLAN.md — Attention Synchronization & GPU Mask (VULK-06, VULK-07) ✅ Verified in source (2026-05-27)
-- [ ] 01-02-PLAN.md — Attention & LinearAttention Test Suite (VULK-01 through VULK-05)
+- [x] 01-02-PLAN.md — Attention & LinearAttention Test Suite (VULK-01 through VULK-05)
 - [ ] 01-03-PLAN.md — LLM E2E Validation (VULK-08)
 
 ### Phase 2: Ultra FP4 Quantization
