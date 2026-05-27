@@ -23,7 +23,7 @@ Two-phase journey from zero Vulkan LLM capability to a complete inference pipeli
    5. Causal mask generation executes GPU-side with no CPU O(N²) bottleneck for large context windows
 **Plans**: 3 plans
 Plans:
-- [ ] 01-01-PLAN.md — Attention Synchronization & GPU Mask (VULK-06, VULK-07)
+- [x] 01-01-PLAN.md — Attention Synchronization & GPU Mask (VULK-06, VULK-07) ✅ Verified in source (2026-05-27)
 - [ ] 01-02-PLAN.md — Attention & LinearAttention Test Suite (VULK-01 through VULK-05)
 - [ ] 01-03-PLAN.md — LLM E2E Validation (VULK-08)
 
@@ -42,5 +42,5 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Vulkan Attention Correctness & LLM E2E | 0/3 | Planned | - |
+| 1. Vulkan Attention Correctness & LLM E2E | 1/3 | In Progress | 2026-05-27 (Plan 01) |
 | 2. Ultra FP4 Quantization | 0/TBD | Not started | - |
