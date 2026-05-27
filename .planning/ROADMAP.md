@@ -36,11 +36,14 @@ Plans:
   2. FP4 quantized model can be loaded from model files and run through Vulkan backend without errors
   3. FP4 dequantization output matches FP16/FP32 reference within acceptable precision tolerance
   4. FP4-enabled model inference on Vulkan backend produces correct end-to-end results, matching INT4-quality or better
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md — FP4 Dequant GLSL Shader + Vulkan Pipeline Integration (FP4-01, FP4-02, FP4-03, FP4-04)
+- [ ] 02-02-PLAN.md — FP4 Correctness Test + Precision Verification (FP4-05, FP4-06)
 
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Vulkan Attention Correctness & LLM E2E | 3/3 | Complete    | 2026-05-27 |
-| 2. Ultra FP4 Quantization | 0/TBD | Not started | - |
+| 2. Ultra FP4 Quantization | 0/2 | Planned | - |
