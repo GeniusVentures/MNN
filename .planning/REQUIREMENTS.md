@@ -15,9 +15,9 @@
 
 ### Vulkan Attention — Robustness & LLM Integration
 
-- [ ] **VULK-06**: Vulkan Attention uses proper buffer barriers (vkCmdPipelineBarrier with buffer memory barrier) instead of global memory barrier for KVCache synchronization
-- [ ] **VULK-07**: Causal mask generation is moved to GPU-side compute (remove O(N²) CPU bottleneck in `setArg`/mask upload path)
-- [ ] **VULK-08**: Vulkan backend successfully runs an end-to-end LLM via `llm_demo` producing coherent text output
+- [x] **VULK-06**: Vulkan Attention uses proper buffer barriers (vkCmdPipelineBarrier with buffer memory barrier) instead of global memory barrier for KVCache synchronization
+- [x] **VULK-07**: Causal mask generation is moved to GPU-side compute (remove O(N²) CPU bottleneck in `setArg`/mask upload path)
+- [x] **VULK-08**: Vulkan backend successfully runs an end-to-end LLM via `llm_demo` producing coherent text output
 
 ### Ultra FP4 Quantization
 
