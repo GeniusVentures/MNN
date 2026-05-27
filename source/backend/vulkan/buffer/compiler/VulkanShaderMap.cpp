@@ -216,6 +216,8 @@ mMaps.insert(std::make_pair("glsl_reduce_SUM_FP16_comp", std::make_pair(glsl_red
 mMaps.insert(std::make_pair("glsl_resizeBilinear_comp", std::make_pair(glsl_resizeBilinear_comp,glsl_resizeBilinear_comp_len)));
 mMaps.insert(std::make_pair("glsl_resizeBilinear_FP16_comp", std::make_pair(glsl_resizeBilinear_FP16_comp,glsl_resizeBilinear_FP16_comp_len)));
 mMaps.insert(std::make_pair("glsl_cast_int_bool_comp", std::make_pair(glsl_cast_int_bool_comp,glsl_cast_int_bool_comp_len)));
+mMaps.insert(std::make_pair("glsl_attention_mask_gen_comp", std::make_pair(glsl_attention_mask_gen_comp,glsl_attention_mask_gen_comp_len)));
+mMaps.insert(std::make_pair("glsl_attention_mask_gen_FP16_comp", std::make_pair(glsl_attention_mask_gen_FP16_comp,glsl_attention_mask_gen_FP16_comp_len)));
 mMaps.insert(std::make_pair("glsl_nchwTonc4hw4_comp", std::make_pair(glsl_nchwTonc4hw4_comp,glsl_nchwTonc4hw4_comp_len)));
 mMaps.insert(std::make_pair("glsl_nchwTonc4hw4_FP16_comp", std::make_pair(glsl_nchwTonc4hw4_FP16_comp,glsl_nchwTonc4hw4_FP16_comp_len)));
 mMaps.insert(std::make_pair("glsl_nc4hw4Tonchw_comp", std::make_pair(glsl_nc4hw4Tonchw_comp,glsl_nc4hw4Tonchw_comp_len)));
@@ -240,6 +242,8 @@ mMaps.insert(std::make_pair("glsl_attention_decode_q1_subgroup_hd128_comp", std:
 mMaps.insert(std::make_pair("glsl_attention_decode_q1_subgroup_hd128_FP16_comp", std::make_pair(glsl_attention_decode_q1_subgroup_hd128_FP16_comp,glsl_attention_decode_q1_subgroup_hd128_FP16_comp_len)));
 mMaps.insert(std::make_pair("glsl_gemm_m8n4_comp", std::make_pair(glsl_gemm_m8n4_comp,glsl_gemm_m8n4_comp_len)));
 mMaps.insert(std::make_pair("glsl_gemm_m8n4_FP16_comp", std::make_pair(glsl_gemm_m8n4_FP16_comp,glsl_gemm_m8n4_FP16_comp_len)));
+mMaps.insert(std::make_pair("glsl_fp4_dequant_comp", std::make_pair(glsl_fp4_dequant_comp,glsl_fp4_dequant_comp_len)));
+mMaps.insert(std::make_pair("glsl_fp4_dequant_FP16_comp", std::make_pair(glsl_fp4_dequant_FP16_comp,glsl_fp4_dequant_FP16_comp_len)));
 mMaps.insert(std::make_pair("glsl_avgpool_comp", std::make_pair(glsl_avgpool_comp,glsl_avgpool_comp_len)));
 mMaps.insert(std::make_pair("glsl_avgpool_FP16_comp", std::make_pair(glsl_avgpool_FP16_comp,glsl_avgpool_FP16_comp_len)));
 mMaps.insert(std::make_pair("glsl_conv1x1_quant_meta_prepare_comp", std::make_pair(glsl_conv1x1_quant_meta_prepare_comp,glsl_conv1x1_quant_meta_prepare_comp_len)));

@@ -356,6 +356,9 @@
     "attention_kvcache_update.comp": {
         "useFP16": true
     },
+    "attention_mask_gen.comp": {
+        "useFP16": true
+    },
     "attention_prefill_rearrange_q.comp": {
         "useFP16": true
     },
@@ -423,6 +426,9 @@
         "useFP16": true
     },
     "gemm_m8n4.comp": {
+        "useFP16": true
+    },
+    "fp4_dequant.comp": {
         "useFP16": true
     }
 }
