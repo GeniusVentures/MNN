@@ -50,28 +50,30 @@
 
 ## Traceability
 
-| Requirement | Category | Status |
-|-------------|----------|--------|
-| VULK-01 | Attention correctness | Pending |
-| VULK-02 | LinearAttention | Pending |
-| VULK-03 | KVCache management | Pending |
-| VULK-04 | Variable lengths | Pending |
-| VULK-05 | Test coverage | Pending |
-| VULK-06 | Sync barriers | Pending |
-| VULK-07 | GPU mask | Pending |
-| VULK-08 | E2E LLM run | Pending |
-| FP4-01 | Shader impl | Pending |
-| FP4-02 | Weight layout | Pending |
-| FP4-03 | Op registration | Pending |
-| FP4-04 | Shader embedding | Pending |
-| FP4-05 | Precision | Pending |
-| FP4-06 | E2E FP4 inference | Pending |
+| Requirement | Category | Phase | Status |
+|-------------|----------|-------|--------|
+| VULK-01 | Attention correctness | Phase 1 | Pending |
+| VULK-02 | LinearAttention | Phase 1 | Pending |
+| VULK-03 | KVCache management | Phase 1 | Pending |
+| VULK-04 | Variable lengths | Phase 1 | Pending |
+| VULK-05 | Test coverage | Phase 1 | Pending |
+| VULK-06 | Sync barriers | Phase 1 | Pending |
+| VULK-07 | GPU mask | Phase 1 | Pending |
+| VULK-08 | E2E LLM run | Phase 1 | Pending |
+| FP4-01 | Shader impl | Phase 2 | Pending |
+| FP4-02 | Weight layout | Phase 2 | Pending |
+| FP4-03 | Op registration | Phase 2 | Pending |
+| FP4-04 | Shader embedding | Phase 2 | Pending |
+| FP4-05 | Precision | Phase 2 | Pending |
+| FP4-06 | E2E FP4 inference | Phase 2 | Pending |
 
 **Coverage:**
 - v1 requirements: 14 total
-- Mapped to phases: TBD
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14 (100%)
+- Phase 1: 8 requirements (VULK-01 through VULK-08)
+- Phase 2: 6 requirements (FP4-01 through FP4-06)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-05-27*
-*Last updated: 2026-05-27 after initial definition*
+*Last updated: 2026-05-27 after roadmap creation (traceability populated)*
