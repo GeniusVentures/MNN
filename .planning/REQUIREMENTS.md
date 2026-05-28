@@ -25,8 +25,8 @@
 - [x] **FP4-02**: FP4 quantized weight tensor layout is defined and compatible with model loading pipeline
 - [x] **FP4-03**: FP4 op is registered in the Vulkan backend (buffer) execution table with proper shape inference
 - [x] **FP4-04**: FP4 shaders are embedded via `makeshader.py` pipeline and AllShader files are regenerated
-- [ ] **FP4-05**: FP4 dequantization produces output matching FP16/FP32 reference within acceptable precision
-- [ ] **FP4-06**: FP4-enabled model can be loaded and run through the Vulkan backend producing correct inference results
+- [x] **FP4-05**: FP4 dequantization produces output matching FP16/FP32 reference within acceptable precision
+- [x] **FP4-06**: FP4-enabled model can be loaded and run through the Vulkan backend producing correct inference results
 
 ## v2 Requirements
 

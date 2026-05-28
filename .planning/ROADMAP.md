@@ -7,7 +7,7 @@ Two-phase journey from zero Vulkan LLM capability to a complete inference pipeli
 ## Phases
 
 - [x] **Phase 1: Vulkan Attention Correctness & LLM E2E** — Vulkan backend runs `llm_demo` producing coherent output; correctness over performance (completed 2026-05-27)
-- [ ] **Phase 2: Ultra FP4 Quantization** — FP4 quantized models run on Vulkan backend with acceptable precision
+- [x] **Phase 2: Ultra FP4 Quantization** — FP4 quantized models run on Vulkan backend with acceptable precision (completed 2026-05-28)
 
 ## Phase Details
 
@@ -39,11 +39,11 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 02-01-PLAN.md — FP4 Dequant GLSL Shader + Vulkan Pipeline Integration (FP4-01, FP4-02, FP4-03, FP4-04)
-- [ ] 02-02-PLAN.md — FP4 Correctness Test + Precision Verification (FP4-05, FP4-06)
+- [x] 02-02-PLAN.md — FP4 Correctness Test + Precision Verification (FP4-05, FP4-06)
 
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Vulkan Attention Correctness & LLM E2E | 3/3 | Complete    | 2026-05-27 |
-| 2. Ultra FP4 Quantization | 0/2 | Planned | - |
+| 2. Ultra FP4 Quantization | 2/2 | Complete    | 2026-05-28 |
