@@ -56,9 +56,7 @@ public:
     }
 };
 
-static bool gResistor = []() {
-    CPUBackend::addCreator(OpType_Dequantize, new CPUFP4DequantCreator);
-    return true;
-}();
+// CPUFP4DequantCreator registration is handled by CPUDequantizeCreator::onCreate
+// which detects FP4-packed data and routes to CPUFP4Dequant internally.
 
 } // namespace MNN

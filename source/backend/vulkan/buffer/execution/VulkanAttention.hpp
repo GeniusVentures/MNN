@@ -64,6 +64,7 @@ private:
 
     std::shared_ptr<VulkanBuffer> mParam;
     std::shared_ptr<VulkanBuffer> mTurboQuantVParam;
+    std::shared_ptr<VulkanBuffer> mMaskGenUniform;
     const VulkanPipeline* mAttentionPipeline = nullptr;
     const VulkanPipeline* mAttentionLegacyPipeline = nullptr;
     const VulkanPipeline* mDecodeQ1SubgroupPipeline = nullptr;
@@ -88,6 +89,9 @@ private:
     std::shared_ptr<Tensor> mTempL;
     std::shared_ptr<Tensor> mTempAlpha;
     std::shared_ptr<Tensor> mTempOAcc;
+
+    const VulkanPipeline* mMaskGenPipeline = nullptr;
+    std::shared_ptr<VulkanLayout::DescriptorSet> mMaskGenSet;
 
     const VulkanPipeline* mRearrangeQPipeline = nullptr;
     std::shared_ptr<VulkanLayout::DescriptorSet> mRearrangeQSet;

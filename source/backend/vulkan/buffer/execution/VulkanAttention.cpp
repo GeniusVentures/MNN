@@ -6,6 +6,7 @@
 #include "backend/vulkan/vulkan/vulkan_wrapper.h"
 #include <climits>
 #include <limits>
+#include <vector>
 
 namespace MNN {
 
@@ -306,6 +307,7 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
     mKVCache.reset(new KVCache);
     mParam = vkBn->allocUniform(nullptr, sizeof(GpuParam));
     mTurboQuantVParam = vkBn->allocUniform(nullptr, sizeof(TurboQuantVParam));
+    mMaskGenUniform = vkBn->allocUniform(nullptr, sizeof(int) * 4);
     if (!mNeedKvCache) {
         std::vector<VkDescriptorType> typesAttn{
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, // output
@@ -348,6 +350,21 @@ VulkanAttention::VulkanAttention(const Op* op, Backend* bn) : VulkanBasicExecuti
         mUpdatePipeline = vkBn->getPipeline(updateName, typesUpdate);
         MNN_ASSERT(nullptr != mUpdatePipeline);
         mUpdateSet.reset(mUpdatePipeline->createSet());
+    }
+
+    {
+        std::vector<VkDescriptorType> typesMaskGen{
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,  // params
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER   // mask
+        };
+        std::string maskGenName = "glsl_attention_mask_gen_";
+        if (mUseFP16) {
+            maskGenName += "FP16_";
+        }
+        maskGenName += "comp";
+        mMaskGenPipeline = vkBn->getPipeline(maskGenName, typesMaskGen);
+        MNN_ASSERT(nullptr != mMaskGenPipeline);
+        mMaskGenSet.reset(mMaskGenPipeline->createSet());
     }
 
     {
@@ -652,6 +669,7 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
     const bool usePrefill = _supportAttentionPrefill(inputs, mNeedKvCache, mQueryLen);
     const bool useTurboQuantK = mNeedKvCache && _useTurboQuantK(mMeta, mHeadDim) &&
                                 (mQueryLen == 1 || _supportTurboQuantKPrefill(inputs, mNeedKvCache, mQueryLen));
+    const bool useTurboQuantV = mNeedKvCache && _useTurboQuantV(mMeta, mHeadDim);
     mUsePrefill = usePrefill;
 
     if (mNeedKvCache) {
@@ -662,15 +680,58 @@ ErrorCode VulkanAttention::onEncode(const std::vector<Tensor*>& inputs, const st
         dispatchWithProfile(mUseFP16 ? "glsl_attention_kvcache_update_FP16_comp" : "glsl_attention_kvcache_update_comp",
                             mUpdatePipeline, mUpdateSet, UP_DIV(_getAttentionVecCount(mHeadDim), kAttentionDispatchTile), mKeyLen,
                             mKvHeadNum);
-        // NOTE: KV cache buffers may be reallocated in onBeforeExecute (descriptor set updated there), so we must not
-        // record a VkBufferMemoryBarrier with a stale VkBuffer handle here. Use a global memory barrier instead.
         {
-            VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier,
-                                 0, nullptr, 0, nullptr);
+            std::vector<VkBufferMemoryBarrier> barriers;
+            if (nullptr != mKVCache->key) {
+                VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+                b.buffer = mKVCache->key->buffer();
+                b.offset = 0;
+                b.size = VK_WHOLE_SIZE;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barriers.push_back(b);
+            }
+            if (nullptr != mKVCache->value) {
+                VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+                b.buffer = mKVCache->value->buffer();
+                b.offset = 0;
+                b.size = VK_WHOLE_SIZE;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barriers.push_back(b);
+            }
+            if (useTurboQuantK && nullptr != mKVCache->packedKey) {
+                VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+                b.buffer = mKVCache->packedKey->buffer();
+                b.offset = 0;
+                b.size = VK_WHOLE_SIZE;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barriers.push_back(b);
+            }
+            if (useTurboQuantV && nullptr != mKVCache->packedValue) {
+                VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+                b.buffer = mKVCache->packedValue->buffer();
+                b.offset = 0;
+                b.size = VK_WHOLE_SIZE;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barriers.push_back(b);
+            }
+            if (!barriers.empty()) {
+                vkCmdPipelineBarrier(cmd,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0, 0, nullptr, (uint32_t)barriers.size(), barriers.data(), 0, nullptr);
+            }
         }
     }
 
@@ -1218,18 +1279,19 @@ ErrorCode VulkanAttention::onBeforeExecute(const std::vector<Tensor*>& inputs, c
             }
         }
 
-
-        std::shared_ptr<Tensor> hostMask(Tensor::create<float>({mQueryLen, totalLenForCompute}));
-        auto hostMaskPtr = hostMask->host<float>();
-        MNN_ASSERT(nullptr != hostMaskPtr);
-        const float negativeInfinity = -std::numeric_limits<float>::max();
-        for (int q = 0; q < mQueryLen; ++q) {
-            const int causalLimit = pastLenForCompute + q;
-            for (int k = 0; k < totalLenForCompute; ++k) {
-                hostMaskPtr[q * totalLenForCompute + k] = (k <= causalLimit) ? 0.0f : negativeInfinity;
-            }
-        }
-        mSyntheticMask->copyFromHostTensor(hostMask.get());
+        int maskGenUniform[4] = {mQueryLen, totalLenForCompute, pastLenForCompute, 0};
+        ::memcpy(mMaskGenUniform->map(), maskGenUniform, sizeof(maskGenUniform));
+        mMaskGenUniform->unmap();
+        auto maskBuf = vkBn->getTensorBuffer(mSyntheticMask.get());
+        mMaskGenSet->writeBuffer(mMaskGenUniform->buffer(), 0, mMaskGenUniform->size());
+        mMaskGenSet->writeBuffer(maskBuf.first->buffer(), 1, maskBuf.second,
+                                 vkBn->getTensorSize(mSyntheticMask.get()));
+        auto cmd = vkBn->getPool().allocBuffer();
+        cmd->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+        mMaskGenPipeline->bind(cmd->get(), mMaskGenSet->get());
+        vkCmdDispatch(cmd->get(), UP_DIV((uint32_t)mQueryLen * (uint32_t)totalLenForCompute, 256u), 1, 1);
+        cmd->end();
+        vkBn->getPool().submitAndWait(cmd->get());
         mask = mSyntheticMask.get();
         hasMask = 1;
         maskQlen = mQueryLen;

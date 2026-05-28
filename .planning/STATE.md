@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
-status: milestone_complete
-last_updated: 2026-05-28T00:07:07.074Z
-last_activity: 2026-05-27
+milestone_name: Vulkan Backend LLM Enablement
+status: milestone_in_progress
+last_updated: 2026-05-28T01:25:00.000Z
+last_activity: 2026-05-28
 progress:
-  total_phases: 2
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 50
-stopped_at: Milestone complete (Phase 2 was final phase)
+  total_phases: 5
+  completed_phases: 3
+  total_plans: 8
+  completed_plans: 7
+  percent: 87
+stopped_at: Phase 4 plan 04-01 complete — TurboQuant-V + mask gen shader implemented, next: 04-02 (E2E model test)
 ---
 
 # Project State
@@ -21,43 +21,50 @@ stopped_at: Milestone complete (Phase 2 was final phase)
 See: .planning/PROJECT.md (updated 2026-05-27)
 
 **Core value:** A complete Vulkan LLM inference pipeline with Ultra FP4 quantization
-**Current focus:** Milestone complete
+**Current focus:** Phase 4 in progress — plan 04-01 complete, 04-02 (E2E model test) next
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
-Plans: 1/3 complete (01 done, 02-03 pending)
-Status: Milestone complete
+Phase: 4 (in progress — plan 04-01 done)
+Plans: 7/8 complete (Phase 1: 3/3, Phase 2: 2/2, Phase 3: 1/1, Phase 4: 1/2, Phase 5: 0/0)
+Status: Plan 04-01 delivered (FP4 quant tool + CPU dequant), 04-02 next
 Last activity: 2026-05-28
 
-Progress: [████████░░] 80%
+Progress: [████████░░] 87%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6
-- Average duration: N/A
-- Total execution time: 0.0 hours
+- Total plans completed: 7
+- Total execution time: ~0.5 hours
 
 **By Phase:**
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 1. Vulkan Attention | 1 | 3 | - |
-| 01 | 3 | - | - |
-| 2 | 2 | - | - |
+| Phase | Plans | Status |
+|-------|-------|--------|
+| 1. Vulkan Attention Correctness & LLM E2E | 3/3 | Complete |
+| 2. Ultra FP4 Quantization | 2/2 | Complete |
+| 3. TurboQuant Documentation | 1/1 | Complete |
+| 4. FP4 Model Conversion Pipeline | 1/2 | In Progress |
+| 5. Model-Level Regression Tests | 0/0 | Pending |
 
 **Recent Trend:**
 
-- Plan 01 (VULK-06, VULK-07): Verified complete in source — buffer barriers and GPU mask gen already implemented.
-
-*Updated after each plan completion*
-| Phase 01-vulkan-attention-correctness-llm-e2e P02 | 9 min | 3 tasks | 2 files |
-| Phase 02-ultra-fp4-quantization P01 | 3min | 3 tasks | 7 files |
+- Phase 1: Attention sync + GPU mask (01-01), test suite (01-02), LLM E2E validation (01-03) — all verified
+- Phase 3: TURBOQUANT.md delivered — 6 config keys documented, CPU fallback contract specified, issues #8, #9 closed
+- Phase 4 (04-01): FP4 quant tool + CPU FP4 dequant runtime completed; TurboQuant-V support + attention mask gen shader + buffer barrier fix in VulkanAttention; issue #5 closed
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 3 added (original): Complete TurboQuant documentation and model-level regression tests (issues #7-9) (2026-05-28)
+- Phase 4 added: Convert test models (.mnn or ONNX) into Ultra FP4 quantization formats using the MNN converter (2026-05-28)
+- Phase 3 split: Renamed to TurboQuant Documentation only (issues #8, #9); model-level tests moved to Phase 5 (2026-05-28)
+- Phase 5 added: Model-level regression tests for Vulkan TurboQuant and sparse-V (issue #7), depends on Phase 4 (2026-05-28)
+- Phase 3 completed: TURBOQUANT.md delivered — config contract + CPU fallback docs, issues #8, #9 closed (2026-05-28)
+- Phase 4 plan 04-01 completed: FP4 quant tool (tools/fp4/quantize_fp4.py) + CPU FP4 dequant runtime; TurboQuant-V support + attention mask gen shader + buffer barrier fix in VulkanAttention; issue #5 closed (2026-05-28)
 
 ### Decisions
 
@@ -72,18 +79,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Execute Plan 02: Create VulkanAttentionTest and VulkanLinearAttentionTest
-- Execute Plan 03: Build llm_demo and run E2E LLM validation
-- Create SUMMARY.md for Plan 01 (documenting already-implemented changes)
+- Execute Phase 4 plan 04-02: E2E FP4 model test (FP4ModelTest.cpp stubbed)
+- Plan and execute Phase 5: Model-level regression tests (issue #7)
 
 ### Blockers/Concerns
 
-- **Plan 02:** Vulkan runtime required for test execution — tests must gracefully skip on systems without Vulkan
-- **Plan 02:** No test files exist yet — both VulkanAttentionTest.cpp and VulkanLinearAttentionTest.cpp need creation
-- **Plan 03:** Requires an LLM model (.mnn format) compatible with Vulkan backend — model not yet identified
-- **Phase 1:** `MNN_SUPPORT_TRANSFORMER_FUSE` build flag gates the entire Vulkan attention pipeline — tests need this enabled
-- **Phase 1:** Shader autogeneration already complete for all current shaders — no makeshader.py re-run needed
-- **Phase 2:** Ultra FP4 design docs live in sibling workspace `GeniusCogntiveSystem/docs/architecture/` — not yet reviewed
+- Phase 5 depends on Phase 4 completion (needs FP4 quantized models to test against)
 
 ## Deferred Items
 
@@ -93,6 +94,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-27T23:25:51.564Z
-Stopped at: Phase 02 context gathered
+Last session: 2026-05-28
+Stopped at: Phase 4 plan 04-01 complete — TurboQuant-V + mask gen shader + FP4 tooling done, 04-02 (E2E model test) next
 Resume file: None

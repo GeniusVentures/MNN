@@ -7,6 +7,7 @@
 //
 
 #include "backend/cpu/CPUDequantize.hpp"
+#include "CPUFP4Dequant.hpp"
 #include <math.h>
 #include "backend/cpu/CPUBackend.hpp"
 #include "core/Macro.h"
@@ -118,6 +119,18 @@ class CPUDequantizeCreator : public CPUBackend::Creator {
 public:
     virtual Execution* onCreate(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                 const MNN::Op* op, Backend* backend) const {
+        // Detect FP4 packed data and route to CPUFP4Dequant
+        if (!inputs.empty() && !outputs.empty()) {
+            auto input  = inputs[0];
+            auto output = outputs[0];
+            if (input->getType().code == halide_type_uint && input->getType().bits == 8) {
+                size_t elementCount = output->elementSize();
+                size_t expectedPackedBytes = (elementCount + 1) / 2;
+                if (input->elementSize() == expectedPackedBytes) {
+                    return new CPUFP4Dequant(backend);
+                }
+            }
+        }
         auto dequantize = op->main_as_Dequantize();
         switch (dequantize->type()) {
             case DataType_DT_QUINT8:
