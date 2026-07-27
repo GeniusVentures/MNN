@@ -1,5 +1,5 @@
 //
-//  MathFunctions.cpp
+//  SSE_MathFunctions.cpp
 //  MNN
 //
 //  Created by MNN on b'2021/07/09'.
@@ -321,4 +321,3 @@ void _SSE_MNNNorm(float *dst, const float *src, const float *gamma, const float 
         }
     }
 }
-
