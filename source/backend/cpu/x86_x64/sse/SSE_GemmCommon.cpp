@@ -1,5 +1,5 @@
 //
-//  GemmCommon.cpp
+//  SSE_GemmCommon.cpp
 //  MNN
 //
 //  Created by MNN on 2020/09/22.
@@ -217,4 +217,3 @@ void _SSE_MNNCountMinMaxValue(const float* source, float* min, float* max, size_
     min[0] = min_;
     max[0] = max_;
 }
-
