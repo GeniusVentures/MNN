@@ -1,0 +1,663 @@
+       SGFP4: Adaptive Dual-Mode Macroblock Quantization
+  with GPU-Friendly Unpacking and Verifiable Decode Semantics
+
+                                                  Kenneth Hurley
+                                            GNUS.AI / Super Genius
+
+                                                                  Abstract
+
+             We present Super Genius FP4 (SGFP4), a GPU-oriented weight-compression container for neural-
+        network inference built from three ingredients: (i) an affine integer reconstruction rule shared by two
+        per-block code modes, a 4-bit signed mode (FP4 AFFINE) and a ternary mode in the 1.58-bit class
+        (T158 AFFINE); (ii) flag embedding in structurally free low-order bits, which removes separate metadata
+        fetches from the decode path; and (iii) two container profiles that share the same modes and packing
+        rules. The v1 fixed-payload profile stores every 64×64 macroblock as a compact header plus a constant
+        2048-byte payload, giving uniform addressing, trivial prefetching, and stable kernel structure. The v2
+        quadtree-adaptive profile subdivides difficult macroblocks into per-region blocks with their own affine
+        parameters and code modes, trading addressing uniformity for accuracy at a measured density cost. We
+        give a complete normative specification, including byte order and intra-word code ordering, so that
+        independent implementations decode bit-identically; we analyze subdivision under a fixed payload budget
+        and show that explicit per-tile headers make uniform 4-bit subdivision infeasible at every granularity
+        below the macroblock, motivating the variable-size v2 profile; and we describe how the integer-dominant
+        ternary path supplies reference decode semantics for execution attestation in decentralized inference. An
+        exemplary GPU unpack kernel and a full evaluation protocol are provided; empirical results are left to a
+        companion report.
+
+1 Introduction
+
+Modern inference workloads are frequently memory-bandwidth bound: weight tensors are large, reused
+imperfectly due to cache limits, and accessed with patterns that benefit from regularity and alignment. Low-bit
+quantization reduces bandwidth but typically introduces either (a) irregular, variable-length layouts that are
+difficult to decode efficiently on GPUs, or (b) simple fixed layouts that sacrifice accuracy when a single
+quantization mode is applied uniformly.
+
+     SGFP4 targets the intersection of compression, GPU efficiency, and -- unusually for a quantization format
+-- verifiability. The format was developed for the GNUS.ai distributed inference network [7], where untrusted
+nodes execute declared models and must be spot-checked cheaply. This deployment adds a requirement
+that mainstream formats do not address: two honest implementations on different hardware must be able
+to decode the same container to bit-identical weights, so that execution claims can be verified by replay.
+That requirement shapes several design choices, most importantly the use of affine integer codes rather than
+floating-point codebooks, and a normative specification of byte order and intra-word code ordering.
+
+     The contributions of this paper are:
+
+    1. A dual-mode affine container in which each macroblock (or sub-block) selects between a 4-bit signed
+        integer mode and a ternary mode under a single reconstruction rule w^ = S · c + , with parameters
+        stored as a packed FP16 pair (Section 3).
+
+                                                                1
+   2. The v1 fixed-payload profile: constant 2048-byte payloads per 64×64 macroblock with mode flags
+       embedded in the low bits of 16-byte-aligned offsets, giving uniform addressing and zero-cost metadata
+       (Section 4).
+
+   3. A feasibility analysis of subdivision within a fixed payload, showing that explicit per-tile headers
+       force mode mixing at every sub-macroblock granularity and identifying an interesting extreme point --
+       all-ternary 4×4 tiles at the same 4.0 bits/weight external density as plain FP4 (Section 5).
+
+   4. The v2 quadtree-adaptive profile: variable-size macroblock records whose leaves are chosen by an error-
+       driven quadtree with per-level thresholds, per-region mode selection, and optional Laplacian-pyramid
+       error weighting (Section 6).
+
+   5. A verifiable-execution codesign: reference integer decode semantics, with the ternary path enabling
+       bit-exact cross-device attestation at the cheapest verification class in the GNUS Execution Integrity
+       System (Section 8).
+
+2 Related Work
+
+Encoders are orthogonal to this work. SGFP4 is a container and decode specification. Code assignment
+inside a block may be produced by round-to-nearest (as in our exemplary encoder), or by error-compensating
+methods such as GPTQ [4] or activation-aware scaling such as AWQ [9]; any encoder that emits valid
+codes and parameters produces a conforming container. Outlier-aware schemes [1, 8] similarly motivate our
+per-region mode selection and the ternary outlier veto in the v2 encoder, but operate at the encoding layer.
+
+Block formats. QLoRA's NF4 [2] uses a 16-entry non-uniform codebook per small block; decoding is a
+table lookup. SGFP4 deliberately uses affine integer codes instead: reconstruction is a fused multiply­add on
+a sign-extended nibble, which vectorizes well and, unlike a floating-point codebook, admits integer-exact
+reference semantics for verification (Section 8). GGUF k-quants in llama.cpp [6] are the closest prior
+container design: 256-weight super-blocks contain sub-blocks with their own (quantized) scales and minima.
+SGFP4 differs in four ways: (1) the v1 profile keeps a constant external payload regardless of the encoder's
+internal choices, so addressing is uniform across an entire tensor; (2) the two code modes may be mixed
+per block within one tensor, selected by measured error rather than fixed per file; (3) the v2 profile adapts
+granularity by an error-driven quadtree rather than a fixed sub-block grid; and (4) metadata rides in structurally
+free low-order bits of aligned offsets or of the packed parameter word, rather than in separate scale streams.
+OCP Microscaling (MX) formats [12, 11] attach a shared 8-bit exponent to fine-grained groups of 32 elements;
+SGFP4 instead uses a full FP16 scale and bias at coarser granularity, with subdivision available where finer
+parameters pay for themselves. BitNet b1.58 [10] demonstrates ternary training; SGFP4's T158 AFFINE is
+a post-training storage and decode mode that any sufficiently flat block may adopt, with an affine correction
+per region.
+
+Kernels and extreme compression. Marlin [5] shows that carefully structured 4-bit layouts sustain near-
+ideal speedups on modern GPUs; SGFP4's fixed payloads and shift­mask decode are designed to be similarly
+kernel-friendly, including on mobile-class Vulkan devices. Vector and lattice quantizers such as AQLM [3]
+and QuIP# [13] reach lower bit-rates at the cost of heavier decode (codebook gathers, Hadamard transforms);
+SGFP4 occupies the opposite point -- decode is a handful of shifts, masks, and one FMA per weight.
+
+                                                                2
+Verifiable inference. Zero-knowledge proofs of inference remain orders of magnitude too expensive for
+interactive serving. The GNUS Execution Integrity System [7] instead verifies execution honesty by teacher-
+forced replay and checkpoint comparison; SGFP4 is, to our knowledge, the first quantization container
+specified tightly enough (Section 4.3) to serve as the weight substrate for such bit-exact replay across
+independent implementations.
+
+Novelty and positioning. It is worth being precise about which parts of SGFP4 are new. Per-block affine
+scale-and-bias quantization (Eq. (2)) is standard practice, shared with GPTQ, AWQ, NF4, and GGUF's
+k-quants [4, 9, 2, 6]; a reader familiar with those formats should not expect the numerics alone to be a
+contribution. Two elements are new in this literature but have direct precedent elsewhere: error-driven spatial
+quadtree subdivision (Section 6) is, to our knowledge, unused in weight quantization, but is exactly the
+block-partitioning strategy long used in image and video codecs (JPEG2000, HEVC/AV1) to spend bits where
+a local region is hard to approximate and stay coarse where it is not; we import that mechanism rather than
+invent it, and Section 9 calls out the open empirical question it raises. The v1 invariant that every macroblock
+occupies an identical 2048-byte payload regardless of which mode the encoder chose internally -- letting
+FP4 and ternary blocks mix freely within one tensor while addressing stays uniform -- is, to our knowledge,
+a modest but genuine container-level contribution: existing formats fix one quantization type per tensor or per
+file, or vary sub-block size without a constant external stride. The element with no precedent we are aware of
+in any quantization format, mainstream or otherwise, is the one argued in Section 8: a decode specification
+closed enough -- byte order, intra-word bit order, rounding, and reserved-bit behavior all normative -- that
+independent, mutually untrusting implementations on different hardware must reach a bit-identical tensor,
+making the container usable as a trust primitive rather than only a compression scheme. That requirement did
+not originate in the quantization literature; it was imposed by the verification problem of Section 8 and is, in
+our view, the paper's central claim.
+
+3 Format Overview
+
+3.1 Notation and tiling
+
+We describe a container representing a weight matrix W of shape [O, I] (output channels by input channels).
+The tensor is padded, conceptually or physically, with zeros to multiples of 64 in both dimensions. The 64×64
+external addressing unit is called a macroblock (parts of the reference implementation use the synonym
+superblock). Define
+
+Ty = O/64, Tx = I/64, B = Ty · Tx.                (1)
+
+Macroblock index b  [0, B) maps to grid coordinates (by, bx) by by = b/Tx and bx = b mod Tx, in
+row-major order.
+
+3.2 Affine reconstruction and the two code modes
+
+Both code modes share one reconstruction rule. For a block with scale S and bias , weight i is reconstructed
+from its integer code ci as
+
+                   w^i = S · ci + ,               (2)
+
+with ci  [-8, 7] for FP4 AFFINE (mode 0) and ci  {-1, 0, +1} for T158 AFFINE (mode 1). S and
+ are IEEE 754 binary16 (FP16) values, clipped to ±65504 at encode time, and stored packed in a single
+uint32: S in the upper 16 bits,  in the lower 16 bits (packHalf2x16 order). Ternary codes plus an
+
+                   3
+                           b0                                     b1
+
+    W (O × I)                                                             b3: LAYOUT MIXED
+padded to mult. of 64                                                     quadtree leaves of
+
+                                                                          sizes 32, 16, and 8
+
+                           b2  16
+
+                                                                      32
+
+Figure 1: Tiling a weight matrix into 64×64 macroblocks. In the v1 profile every macroblock is one block.
+In the v2 profile a macroblock may be subdivided by an error-driven quadtree (b3 shown); each leaf carries
+its own scale, bias, and code mode.
+
+External unit           v1 fixed-payload                              v2 quadtree-adaptive
+Per-macroblock storage
+Addressing              64×64 macroblock                              64×64 macroblock record
+Granularity of S,       constant; 4+4+2048 B across three arrays      variable-size record (layout-dependent)
+Mode selection          uniform stride via offsets[]                  per-record offset table
+Flag location           per macroblock                                per quadtree leaf (64 . . . 4)
+Best for                per macroblock                                per quadtree leaf
+Status                  low 4 bits of aligned offsets                 low 4 bits of packed parameter word
+                        throughput, prefetch, verification            accuracy on hard tensors
+                        specified; not yet instantiated               reference-implementation target
+
+                        Table 1: The two SGFP4 container profiles.
+
+affine correction place mode 1 in the 1.58-bit class [10] while keeping decode a shift, a mask, and one
+FMA.
+
+3.3 Two container profiles
+
+SGFP4 defines two profiles that share modes, parameters, and packing rules (Table 1). Profile v1 (Section 4)
+optimizes for uniform addressing: every macroblock contributes exactly 4 + 4 + 2048 bytes -- one header
+word, one offset word, and one payload -- amortized across the three parallel arrays of Section 4, not
+as a contiguous per-macroblock record. Profile v2 (Section 6) optimizes accuracy per bit on difficult
+tensors: macroblock records are variable-size and internally subdivided. Section 5 explains, quantitatively,
+why subdivision and a fixed payload do not combine under explicit per-tile headers, which is why v2 is
+variable-size.
+
+4 Profile v1: Fixed-Payload Container
+
+Status. At the time of writing, no artifacts of either profile have been issued; the reference pipeline targets
+v2. v1 is retained in this specification as the uniform-stride baseline -- the one configuration whose record
+size is constant across mode choices, since T158 AFFINE payloads pad to the FP4 AFFINE size -- and as
+the simplest conformance target for a new decoder implementation.
+
+4.1 Layout
+
+The v1 representation of one tensor is three consecutive arrays:
+
+                        4
+                               codes blob
+
+headers[B] : uint32            payload b0     payload b1    payload b2
+
+     packHalf2x16(S, )            2048 B         2048 B        2048 B
+
+offsets[B] : uint32
+
+(baseByteOffset | flags0..3)
+
+                                                                 payloads 16-byte aligned  low 4 offset bits are structurally zero and carry the flags
+
+Figure 2: v1 container: two parallel metadata arrays index a blob of constant 2048-byte payloads. Headers
+supply affine parameters; aligned offsets carry the mode flag at zero metadata cost.
+
+     · headers[B]: one uint32 per macroblock, packing (S, ) as described in Section 3.2.
+
+     · offsets[B]: one uint32 per macroblock, giving the byte offset of the macroblock payload within the
+       codes blob, with the low 4 bits repurposed as flags (Section 4.2).
+
+     · codes blob: concatenated payloads, each exactly 2048 bytes.
+
+Tensor shape (O, I) and array lengths are carried by the enclosing model manifest rather than repeated per
+tensor; a standalone v1 stream may be framed with the same magic and version mechanism as v2 (with
+version byte 0x01) when self-description is required. All multi-byte values in SGFP4 are little-endian.
+
+4.2 Flags in aligned offsets
+
+Each payload is 2048 bytes and the blob base is 16-byte aligned, so every stored byte offset is a multiple of
+16 and its low 4 bits are structurally zero. v1 repurposes them:
+
+Bit Mask Name                  Meaning
+
+ 0 0x1                   MODE  0 = FP4 AFFINE, 1 = T158 AFFINE
+ 1 0x2
+2­3 0xC                  ERROR HINT 0 = L2-selected, 1 = pyramid-selected (informative)
+
+                         --    reserved, must be written 0
+
+Decoders recover flags = offsets[b] & 0xF and base = offsets[b] & ~0xF. Only bit 0
+is required for decode.
+
+4.3 Payload packing (normative)
+
+Each v1 payload is exactly 2048 bytes, interpreted as 512 little-endian uint32 words w0 . . . w511. Weights
+within a macroblock are indexed i  [0, 4096) in row-major order of the (padded) 64×64 tile.
+
+Mode 0: FP4 AFFINE. Code ci is stored as a 4-bit two's-complement nibble (values 0..7  0..7;
+8..15  -8.. - 1), eight codes per word:
+
+                              nibble(i) = wi/8  4(i mod 8) & 0xF.                        (3)
+
+All 512 words are used.
+
+                                           5
+FP4 AFFINE (mode 0): 4096 × 4 bits
+
+                   512 × uint32 (8 nibbles per word) = 2048 B
+
+T158 AFFINE (mode 1): 4096 × 2 bits + reserved
+
+codes: 256 × uint32 = 1024 B  reserved: 1024 B (written 0)
+
+v2 macroblock record (variable, not to scale):
+
+hdr split map N block hdrs payload0 payload1                   ···
+
+split map present only for LAYOUT MIXED; payloads individually padded to 16-byte multiples
+
+Figure 3: Payload formats. Top two rows: the fixed 2048-byte v1 payloads (to scale). Bottom: the variable-
+size v2 macroblock record.
+
+Mode 1: T158 AFFINE. Code ci is stored as a 2-bit symbol, sixteen codes per word:
+
+sym(i) = wi/16  2(i mod 16) & 0x3,                                                          (4)
+
+with mapping 00  0, 01  +1, 10  -1, and 11 reserved (decoded as 0). Words w0 . . . w255 carry the
+4096 symbols; words w256 . . . w511 are reserved and must be written as zero.
+
+     These orderings -- little-endian words, code i at bit position 4(i mod 8) or 2(i mod 16) within its word
+-- are normative. Together with Eq. (2) and the FP16 parameter encoding they fully determine the decoded
+tensor, which is what makes cross-implementation bit-exact replay possible (Section 8).
+
+4.4 Exemplary v1 encoder
+
+The container is encoder-agnostic; the reference encoder is simple by design. For FP4 AFFINE:  =
+mean(w) and S is chosen from a small logarithmic search (16 candidates over [0.5, 1.5] × maxi |wi|/7)
+minimizing round-trip MSE, with codes ci = clip(round((wi - )/S), -8, 7). For T158 AFFINE:  =
+mean(w), S = meani|wi - |, and codes are assigned by thresholding at  = S/2. The mode is selected
+per block by
+
+choose T158 iff eT158  (1 + ) eFP4,   [0.05, 0.20] (default 0.10),                          (5)
+
+where e is L2 round-trip error or, optionally, a Laplacian-pyramid weighted error that preserves low-frequency
+structure (recorded in ERROR HINT). Error-compensating code assignment in the style of GPTQ/AWQ [4, 9]
+may replace round-to-nearest without any container change.
+
+5 Subdivision Under a Fixed Payload: Feasibility Analysis
+
+A natural extension of v1 is to keep the constant 2048-byte payload but let the encoder subdivide a macroblock
+internally into uniform tiles, each with its own explicit FP16 (S, ) header (4 bytes) stored inside the payload.
+Table 2 works out the budget.
+
+    Two conclusions follow. First, with explicit per-tile headers, uniform all-FP4 subdivision is infeasible at
+every level below L0: any fixed-payload subdivision scheme must mix modes or share parameters across tiles.
+Second, L4 is an interesting design point in its own right: 2-bit ternary codes plus 2 bits/weight of amortized
+affine parameters equal 4.0 bits/weight external density -- the same as plain FP4 -- but with 4×4-granular
+scale and bias, a very different error profile that should win on outlier-dominated blocks. We retain this
+analysis as motivation: the production adaptive profile (v2, next) instead relaxes the fixed payload and lets
+record size follow the layout.
+
+                              6
+Layout        Tile hdrs (B)      Code bytes left   All-FP4 needs (B)     All-FP4 feasible?
+
+L0: 1 × 642    0 (external)                  2048                  2048  yes (exactly)
+L1: 4 × 322               16                 2032                  2048  no --  1 ternary tile
+L2: 16 × 162              64                 1984                  2048  no --  1 ternary tile
+L3: 64 × 82              256                 1792                  2048  no --  16 ternary tiles
+L4: 256 × 42                                 1024                  2048  no -- all-ternary forced
+                       1024
+
+Table 2: Subdivision inside a fixed 2048-byte payload with explicit 4-byte per-tile headers. A ternary n2 tile
+saves n2/4 bytes over FP4, which is what funds the header table at each level.
+
+6 Profile v2: Quadtree-Adaptive Container
+
+6.1 File framing
+
+A v2 stream frames its own record structure:
+
+Field                  Type      Size         Value / meaning
+
+magic                  bytes     4            'SGF4'
+version                uint8     1            0x02
+B                      uint32    4            number of macroblock records
+pad0                   bytes     7            zero padding to a 16-byte boundary
+record offsets[B]      uint32[]  4B           byte offset of each record, relative to record region
+pad1                   bytes     0­12         zero padding so the record region begins 16-byte aligned
+records                --        var.         B macroblock records, in row-major macroblock order
+
+The padded file header and the padded offset table place the record region at align16(16 + 4B); each record
+then begins at a 16-byte-aligned offset within the region and is zero-padded to a 16-byte multiple, so intra-
+record alignment guarantees hold in absolute file addresses for every B, not only B  0 (mod 4). (Without
+pad1, records would be misaligned whenever B  0 (mod 4).)
+
+     The stream is self-describing with respect to record structure only. The original tensor dimensions (O, I)
+-- and therefore the macroblock grid (Ty, Tx) of Section 3.1 and the edge-padding crop -- are carried by the
+enclosing model manifest, exactly as for v1 (Section 4): B alone cannot distinguish, for example, a 1×2
+from a 2×1 macroblock grid. A fully standalone v2 stream would require (O, I) fields in its header; the
+shipped profile deliberately keeps tensor geometry in the manifest so that both profiles share a single source
+of truth for it.
+
+6.2 Macroblock record
+
+A record is:
+
+Field                  Size      Meaning
+
+sb header              4B        bits 0­2: layout enum (Table 3); bits 3­31 reserved (0)
+split map              12 B      LAYOUT MIXED only: quadtree structure (below)
+block headers[N]       4N B      per-leaf packed (S, ) with flags in low 4 bits (below)
+pad                    0­15 B    zero padding to a 16-byte boundary
+payloads[N]            var.      per-leaf code payloads, each padded to a 16-byte multiple
+
+                                              7
+Enum  Name               Leaves N  Leaf size
+
+  0   LAYOUT UNIFORM 64  1         64×64
+  1   LAYOUT UNIFORM 32  4         32×32
+  2   LAYOUT UNIFORM 16  16        16×16
+  3   LAYOUT UNIFORM 8   64        8×8
+  4   LAYOUT MIXED       var.      mixed (quadtree leaves 64 . . . 4)
+  5   LAYOUT FULL 4x4    256       4×4
+
+Table 3: v2 layout enumeration. Uniform layouts imply N and leaf geometry; LAYOUT MIXED carries an
+explicit split map.
+
+Block order and the split map. For uniform layouts, leaves are stored in row-major raster order of the
+tile grid, and no split map is present. For LAYOUT MIXED, the quadtree structure is serialized as a split
+bitmap: visiting nodes in pre-order depth-first traversal with quadrant order top-left, top-right, bottom-left,
+bottom-right, one bit per node of size  8 records whether that node is split (1) or is a leaf (0). Nodes of size
+4 cannot split and contribute no bit. At most 1 + 4 + 16 + 64 = 85 bits are required; the map is stored in three
+little-endian uint32 words (bit k of the map is bit k mod 32 of word k/32), upper bits zero. Leaves --
+and therefore block headers and payloads -- are stored in the order the traversal encounters them.
+
+Per-leaf headers with embedded flags. Each leaf header packs (S, ) exactly as in v1, then replaces the
+low 4 bits of the word -- which are the 4 least-significant mantissa bits of  -- with flags: bit 0 = mode, bit 1
+reserved (logarithmic-mode extension), bits 2­3 reserved (0). Note that ERROR HINT is a v1 offset flag only
+(Section 4.2); it has no v2 counterpart, and v2 bit 1 must be written zero until the logarithmic-mode extension
+is specified. The decoder recovers
+
+S = half(h  16),  = half(h & 0xFFF0), flags = h & 0xF.                 (6)
+
+Truncating 4 of the 10 FP16 mantissa bits bounds the relative bias error by 2-7  0.8% of || for normal
+values; since  is a per-leaf mean-level correction, this is negligible against 4-bit and ternary code error, and
+it buys inline flags without any separate metadata stream.
+
+Per-leaf payloads. A leaf of edge size n stores n2 codes with the same normative packing as Section 4.3
+(n2/8 words for mode 0, n2/16 words for mode 1, weight order row-major within the leaf), padded to a
+
+16-byte multiple.
+
+6.3 Exemplary v2 encoder policy
+
+The reference encoder chooses the layout by recursive error testing: a region is accepted if its best single-block
+encoding meets a per-level threshold on MSE and relative error (defaults tighten with depth, e.g. MSE  0.01
+at 64 down to  0.0005 at 4), and is otherwise split into quadrants, with hysteresis against oscillation,
+a recursion floor at 4×4, an optional Laplacian-pyramid error weighting, and an outlier veto that blocks
+ternary selection for regions whose extremes ternary cannot represent. The resulting leaf set is classified into
+Table 3; if all leaves share one size and tile the macroblock exactly, the corresponding uniform layout is used,
+otherwise LAYOUT MIXED. As with v1, this policy is exemplary; any encoder emitting a well-formed record
+conforms.
+
+                         8
+                Input buffers
+
+headers[B], offsets[B], codes blob
+
+      Load header b                               v2 record walk: fetch record via
+                                                  record offsets[b]; read layout
+    S,  = unpackHalf2x16                          (+ split map if MIXED); per leaf use 
+                                                  = half(hdr & 0xFFF0), flags = hdr &
+       Load offset word                           0xF, then decode as at left.
+
+base = off & ~0xF; flags = off & 0xF
+
+=0                        mode?               =1
+
+   FP4 unpack                        T158 unpack
+
+4-bit signed, 8 / uint32         2-bit symbols, 16 / uint32
+
+                          Affine reconstruct
+
+                              w^ = S · c + 
+
+                                              Write weights
+
+                                                 padded output or fused compute
+
+Figure 4: GPU unpack and affine reconstruction flow (v1 path shown; dashed note gives the v2 record walk).
+
+7 GPU Decoding
+
+The format is designed for high-throughput decoding with predictable memory access: fixed (v1) or per-
+record-aligned (v2) payloads enable vectorized loads; flags ride in words the decoder fetches anyway; and
+per-weight work is a shift, a mask, a sign-extend or symbol map, and one FMA. A natural mapping assigns
+one workgroup per macroblock, decoding into shared memory for a fused dequantize­matmul, or to a padded
+output tensor for a standalone unpack pass.
+
+7.1 Exemplary compute kernel (pseudocode)
+
+Listing 1: Exemplary v1 unpack for FP4 AFFINE and T158 AFFINE. Orderings follow the normative
+packing of Section 4.3.
+
+// Helpers                                                   // two's complement
+int int4_to_int(uint nib) {
+
+   nib &= 15u;
+   return (nib < 8u) ? int(nib) : int(nib) - 16;
+}
+
+int sym2_to_ternary(uint sym) {  // 00 -> 0; 11 reserved -> 0
+   sym &= 3u;
+   if (sym == 1u) return 1;
+   if (sym == 2u) return -1;
+   return 0;
+
+}
+
+                                              9
+// One workgroup decodes one 64x64 macroblock b (v1 profile)
+void decode_block(uint b) {
+
+   uint h = headers[b];
+   float S = half_to_float(h >> 16);
+   float Bias = half_to_float(h & 0xFFFFu);
+
+   uint off  = offsets[b];
+
+   uint mode = off & 0x1u;             // flag bit 0
+                                       // aligned bytes -> u32 index
+   uint baseU32 = (off & ~0xFu) >> 2;
+
+   for (uint i = 0u; i < 4096u; ++i) { // in practice: strided by threads
+
+   int c;
+
+   if (mode == 0u) {                   // FP4_AFFINE: 8 codes / word
+
+   uint w = codes_blob[baseU32 + (i >> 3)];
+
+   c = int4_to_int((w >> (4u * (i & 7u))) & 0xFu);
+
+   } else {                            // T158_AFFINE: 16 codes / word
+
+   uint w = codes_blob[baseU32 + (i >> 4)];
+
+      c = sym2_to_ternary((w >> (2u * (i & 15u))) & 0x3u);
+   }
+
+      store_weight(b, i, S * float(c) + Bias);
+   }
+
+}
+
+8 Verifiable Execution and Determinism
+
+SGFP4 is the weight substrate of a decentralized inference network in which nodes accept execution contracts
+pinning model, container, kernel manifest, and sampling, and are verified by sampled teacher-forced replay
+against checkpoint tolerance bands [7]. Two properties of the format matter there.
+
+    First, the specification is closed: byte order, code ordering, the two's-complement and symbol mappings,
+FP16 parameter encoding, the  flag-truncation rule, and reserved-bit behavior are all normative. A container
+therefore determines its decoded tensor exactly, and independent implementations can be validated against
+shared conformance vectors -- golden containers with known bit-exact decodes -- before being admitted as
+verifiers.
+
+    Second, the ternary mode is integer-dominant: codes are in {-1, 0, +1}, so the matmul inner product
+over codes can be computed exactly in integer arithmetic and scaled once per (sub-)block by S with a 
+correction term. Kernels built this way can register in the cheapest determinism class of the Execution Integrity
+System (bit-exact reference semantics), where verification is an output-hash comparison and spot-check
+redundancy is minimal; FP4-affine paths with floating-point accumulation register in a bounded-drift class
+with checkpoint-band comparison. The economic consequence is a gradient toward deterministic kernels: the
+more reproducible the decode-and-compute path, the cheaper the node is to verify and the better its effective
+margin. To our knowledge no mainstream quantization format is specified tightly enough to support this
+replay-based attestation across heterogeneous, mutually untrusting implementations; SGFP4 was designed to
+be.
+
+9 Evaluation Protocol
+
+This paper specifies the format; empirical results will follow in a companion report using the open reference
+pipeline. The protocol is fixed here so results are comparable:
+
+                                                               10
+     · Accuracy at matched density. Perplexity and downstream task accuracy versus FP16, at matched
+       effective bits/weight, for: v1 FP4-only, v1 hybrid (adaptive mode), v2 adaptive, and baselines NF4 [2],
+       GGUF Q4 K [6], and GPTQ-4bit [4]. Report the v2 layout distribution and effective bits/weight per
+       tensor.
+
+     · Decode throughput. Standalone unpack GB/s and weights/s, and end-to-end tokens/s with fused
+       dequantize­matmul, on at least one desktop GPU, one mobile-class Vulkan device, and one Apple-
+       silicon device (MoltenVK).
+
+     · Ablations.  sweep for mode preference; per-level threshold sweep for the quadtree; Laplacian
+       weighting on/off; L4 all-ternary-4×4 versus plain FP4 at equal 4.0 bits/weight (Section 5).
+
+     · Verification margins. For the attestation use case: distribution of checkpoint-tensor distances between
+       honest decodes across devices versus the distance to nearest cheaper substitutes (smaller models,
+       coarser quantizations, stale adapters), establishing that tolerance bands forgive hardware but not
+       weights [7].
+
+     · Spatial-locality assumption. The v2 quadtree assumes that quantization error clusters by raw row/-
+       column position within a macroblock, the same assumption that motivates quadtree coding in image
+       and video codecs, where it holds because neighboring pixels are correlated. Weight matrices offer
+       no such guarantee a priori: error may instead cluster by output channel, input feature, or activation
+       magnitude, none of which need align with spatial locality in W . We treat this as open and report, per
+       tensor, the correlation between quadtree leaf size and plausible non-spatial groupings (output-channel
+       norm, calibration activation magnitude); a channel- or magnitude-guided permutation prior to tiling is
+       a natural fallback if spatial locality proves weak.
+
+10 Design Variants and Extensions
+
+The design admits variants while preserving its GPU-friendly properties. Macroblock geometry: 64×64
+(4096 weights) is a convenient default; 128×32, 32×64, or 128×64 tiles may better match particular tensor
+shapes and coalescing constraints. Payload size and alignment: other fixed sizes (1024 or 4096 bytes) and
+stronger alignments (32 bytes, freeing 5 flag bits) are possible; all alignment-derived flag capacity follows the
+same rule -- 2k-byte alignment frees k low bits. Flag placement: low bits of aligned offsets (v1), low bits of
+the packed parameter word (v2), a parallel flags array, or a small header region are interchangeable carriers;
+the two shipped profiles demonstrate the first two. Additional code modes: the mode space extends to 3-,
+5-, or mixed-bit codes, per-channel variants, or small vector codebooks [3, 13], provided decode remains
+shift­mask­FMA class and, where verification matters, integer-exact reference semantics are specified.
+Shared parameters: subdivided layouts may derive per-tile parameters from shared values (e.g. shared 
+with per-tile scale deltas) to revisit fixed-payload subdivision under the budget of Table 2.
+
+11 Conclusion
+
+SGFP4 combines an affine dual-mode code system with two container profiles: fixed 2048-byte macroblock
+payloads for uniform addressing and maximal decode regularity, and a quadtree-adaptive profile that spends
+bits where an error-driven encoder finds them necessary. The specification is deliberately closed -- endianness,
+code order, parameter encoding, and reserved behavior are normative -- because the format is asked to
+do something unusual for a quantization container: serve as the reproducible substrate for verifying that
+untrusted machines ran the model they claimed. Fixed layouts make GPUs fast; closed semantics make
+strangers checkable.
+
+                                                               11
+References
+
+ [1] Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer. LLM.int8(): 8-bit matrix multipli-
+      cation for transformers at scale. arXiv preprint arXiv:2208.07339, 2022.
+
+ [2] Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. QLoRA: Efficient finetuning of
+      quantized LLMs. arXiv preprint arXiv:2305.14314, 2023.
+
+ [3] Vage Egiazarian, Andrei Panferov, Denis Kuznedelev, Elias Frantar, Artem Babenko, and Dan Al-
+      istarh. Extreme compression of large language models via additive quantization. arXiv preprint
+      arXiv:2401.06118, 2024.
+
+ [4] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. GPTQ: Accurate post-training
+      quantization for generative pre-trained transformers. arXiv preprint arXiv:2210.17323, 2022.
+
+ [5] Elias Frantar, Roberto L. Castro, Jiale Chen, Torsten Hoefler, and Dan Alistarh. MARLIN: Mixed-
+      precision auto-regressive parallel inference on large language models. arXiv preprint arXiv:2408.11743,
+      2024.
+
+ [6] Georgi Gerganov and contributors. llama.cpp: LLM inference in C/C++ (GGUF k-quant block formats).
+      https://github.com/ggml-org/llama.cpp, 2023.
+
+ [7] GNUS.AI. Genius cognitive system: Product and technical design specification. https://gcs.
+      gnus.ai, 2026. Architecture documentation; see the Execution Integrity System and SGFP4 chapters.
+
+ [8] Sehoon Kim, Coleman Hooper, Amir Gholami, Zhen Dong, Xiuyu Li, Sheng Shen, Michael W.
+      Mahoney, and Kurt Keutzer. SqueezeLLM: Dense-and-sparse quantization. arXiv preprint
+      arXiv:2306.07629, 2023.
+
+ [9] Ji Lin, Jiaming Tang, Haotian Tang, Shang Yang, Wei-Ming Chen, Wei-Chen Wang, Guangxuan Xiao,
+      Xingyu Dang, Chuang Gan, and Song Han. AWQ: Activation-aware weight quantization for LLM
+      compression and acceleration. arXiv preprint arXiv:2306.00978, 2023.
+
+[10] Shuming Ma, Hongyu Wang, Lingxiao Ma, Lei Wang, Wenhui Wang, Shaohan Huang, Li Dong,
+      Ruiping Wang, Jilong Xue, and Furu Wei. The era of 1-bit LLMs: All large language models are in
+      1.58 bits. arXiv preprint arXiv:2402.17764, 2024.
+
+[11] Open Compute Project. OCP microscaling formats (MX) specification, version 1.0. https:
+      //www.opencompute.org/documents/ocp- microscaling- formats- mx- v1- 0-
+      spec-final-pdf, 2023.
+
+[12] Bita Darvish Rouhani, Ritchie Zhao, Ankit More, Mathew Hall, Alireza Khodamoradi, Summer Deng,
+      Dhruv Choudhary, Marius Cornea, Eric Dellinger, Kristof Denolf, et al. Microscaling data formats for
+      deep learning. arXiv preprint arXiv:2310.10537, 2023.
+
+[13] Albert Tseng, Jerry Chee, Qingyao Sun, Volodymyr Kuleshov, and Christopher De Sa. QuIP#:
+      Even better LLM quantization with hadamard incoherence and lattice codebooks. arXiv preprint
+      arXiv:2402.04396, 2024.
+
+                                                               12
+A Container Field Summary
+
+v1 fixed-payload profile
+
+    · headers[b]: uint32; bits 31­16 = FP16 scale S; bits 15­0 = FP16 bias .
+    · offsets[b]: uint32; bits 31­4 = payload byte offset (16-byte aligned); bit 0 = mode; bit 1 =
+
+       ERROR HINT; bits 2­3 reserved (0).
+    · codes blob: B payloads of exactly 2048 bytes; packing per Section 4.3.
+
+v2 quadtree-adaptive profile
+
+    · File: 'SGF4'  0x02  uint32 B  pad-to-16  uint32 record offsets[B]  pad-to-16 
+       records (record region base = align16(16 + 4B)). Tensor shape (O, I) is supplied by the enclosing
+       model manifest.
+
+    · Record: uint32 sb header (bits 0­2 layout, Table 3)  [MIXED: 3× uint32 split map, 85 bits,
+       pre-order DFS, quadrants TL/TR/BL/BR]  N leaf headers  pad-to-16  N payloads (each padded to
+       16 bytes).
+
+    · Leaf header: uint32; bits 31­16 = FP16 S; bits 15­4 = high 12 bits of FP16  (low 4 mantissa bits
+       truncated to zero); bit 0 = mode; bits 1­3 reserved (0) (ERROR HINT exists only as a v1 offset flag).
+
+    · Leaf payload: n2/8 (mode 0) or n2/16 (mode 1) little-endian uint32 words, row-major weight order,
+       packing per Section 4.3.
+
+                                                               13
+
