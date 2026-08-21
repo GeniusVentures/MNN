@@ -82,7 +82,7 @@ The paper is explicitly spec-only: "empirical results are left to a companion re
 
 ## 4. Recommended Pivots and Decisions (prioritized)
 
-**P1 (do now, no pivot required):** Fix the `MAX_E2M1_VALUE` scale-calibration bug in `tools/fp4/quantize_fp4.py` (change the divisor from 6.0 to 3.0) before executing Phase 4 plan 04-02. Add an explicit acceptance check to 04-02 that each channel's max-magnitude weight round-trips to a finite value, not Inf.
+**P1 (do now, no pivot required — elevated priority, see Section 6):** Fix the `MAX_E2M1_VALUE` scale-calibration bug in `tools/fp4/quantize_fp4.py` (change the divisor from 6.0 to 3.0) before executing Phase 4 plan 04-02. Add an explicit acceptance check to 04-02 that each channel's max-magnitude weight round-trips to a finite value, not Inf. **This is no longer purely an internal test-criteria concern**: Section 6 confirms `FP4DequantUtils.hpp`'s `dequant_fp4_packed_cpu()` is already called live from SuperGenius's `SGProcessingManager` distributed processing pipeline, so this bug corrupts the max-magnitude element of every FP4_ULTRA tensor actually processed there today, not just MNN's own test fixtures.
 
 **P2 (user decision):** Whether to still execute Phase 4 plan 04-02 (validating/closing out the current E2M1 pipeline as a shipped baseline, with the P1 fix folded in) before starting SGFP4 work, or abandon it in favor of jumping straight to SGFP4. Recommendation: execute it — it validates already-built infrastructure (Phase 2 + Phase 4-01) cheaply and does not block a future SGFP4 phase, since SGFP4 work is additive (new op/format handling), not a modification of the existing `symmetricQuan` `nbits=4` path.
 
@@ -98,6 +98,7 @@ The paper is explicitly spec-only: "empirical results are left to a companion re
 - (b) **Math-only adoption** — keep MNN's flat per-channel arrays (widened to carry a real bias value) but switch the reconstruction formula to SGFP4's affine rule and add ternary as a second per-channel/per-block code path. Smaller lift, but no bit-exact conformance to the SGFP4 wire format, only the numerics.
 - (c) **Hybrid** — store SGFP4-format containers as an opaque per-op blob decoded via a dedicated new dequant creator branch, leaving all non-FP4 MNN ops untouched.
 - Lean recommendation (Claude's suggestion, not a locked decision): (b) first, (c) as a natural follow-up if verifiability becomes required, (a) only if wire-format conformance is explicitly required.
+- **Cross-repo constraint (see Section 6):** `FP4DequantUtils.hpp`'s `dequant_fp4_packed_cpu()` is a live API contract consumed directly by SuperGenius's `SGProcessingManager` submodule. Any of (a)/(b)/(c) that changes this function's signature, packing layout, or E2M1 semantics is a breaking change for that downstream repo and must either preserve a compatibility shim or be coordinated with a corresponding `SGProcessingManager` update (and a submodule-pointer bump in SuperGenius) landed together. This raises the practical cost of option (a) specifically, since full container adoption most directly obsoletes the current pass-through call.
 
 **P5 (defer, flag for user):** Whether the GNUS Execution Integrity System's attestation use case (teacher-forced replay across untrusted nodes) is actually in scope for this MNN fork. It is the SGFP4 paper's stated primary motivation but has zero footprint anywhere in the current Ultra FP4 roadmap (Phases 1-5 never mention attestation, execution verification, or conformance vectors). If in scope, a future phase would need a conformance-vector ("golden container") test format, explicit byte-order unit tests for CPU vs. Vulkan decode parity, and possibly integer-exact-only kernel variants for the ternary path.
 
@@ -111,12 +112,39 @@ These are sketches for the user's next roadmap-editing session, not additions to
 - **Phase 7 candidate (conditional on Phase 6 outcome and the user's P3 decision):** either SGFP4 v1 fixed-payload container conformance, or skip straight to v2 quadtree-adaptive if matching the paper's reference pipeline is prioritized over shipping sooner.
 - **Phase 8 candidate (conditional on the P5 decision):** verifiable-execution/bit-exact conformance testing, only if the GNUS attestation use case is confirmed in scope.
 
-## 6. Open Questions for the User
+## 6. Cross-Repo Integration: SuperGenius `SGProcessingManager` (verified live consumer)
+
+Added after initial publication, in response to a user pointer to `W:\gnus\GeniusNetwork\SuperGenius\SGProcessingManager\test\processors\` — this section corrects and sharpens Sections 4/5's framing of MNN's FP4 work as self-contained.
+
+**FP4_ULTRA decode is already wired live, not pending.** `SGProcessingManager/src/processors/processing_processor_mnn_tensor.cpp` (submodule of `SuperGenius`, currently pinned at commit `e1f28d73` on branch `dev_cognitive`, dated 2026-08-20) includes `<MNN/FP4DequantUtils.hpp>` directly and, for `InputFormat::FP4_ULTRA` tensors, calls:
+
+```cpp
+// Line 274-279:
+else if ( format == sgns::InputFormat::FP4_ULTRA )
+{
+    // Pass-through to MNN's own E2M1 decode (D-09) -- no dequant math duplicated here.
+    const auto *src = reinterpret_cast<const uint8_t *>( tensorData.data() );
+    MNN::dequant_fp4_packed_cpu( src, signalValues.data(), expectedElements );
+}
+```
+
+`FP4_ULTRA` is accepted in the tensor-format allow-list (lines 217-223) alongside FLOAT32/FLOAT16/INT32/INT16/INT8, and its expected-byte-count calculation (lines 226-234, referencing decision "D-13") mirrors the 2-nibbles-per-byte packing in `FP4DequantUtils.hpp`. The outer `SuperGenius` superproject has already bumped its submodule pointer to this exact commit (commit `afc17e52`, "chore: bump SGProcessingManager for DataType::LLM fix + FP4_ULTRA decode wiring") — this is live in both repos' current HEAD, not orphaned or speculative work.
+
+**Consequence for this analysis:** `dequant_fp4_packed_cpu()` in `include/MNN/FP4DequantUtils.hpp` is a **live cross-repo API contract**, not an MNN-internal implementation detail. This sharpens P1 and P4 above (see inline notes added to each) and adds a new, concrete constraint to any SGFP4 pivot: a change to this function's signature, packing layout, or E2M1 semantics is a breaking change for `SGProcessingManager`'s distributed tensor-processing pipeline and requires coordinated landing across both repos (MNN + a `SGProcessingManager` update + a `SuperGenius` submodule-pointer bump), not just an MNN-side decision.
+
+**Side-finding — a stale test in the sibling repo:** `SGProcessingManager/test/processors/mnn_tensor_fp4_test.cpp`'s `Fp4UltraRecognizedButDecodeUnavailable` test still asserts the *old* stub behavior (`ProcessingErrorStage::FORMAT_UNSUPPORTED`, message containing "MNN_Ultra") from commit `b5471e0` ("give FP4_ULTRA a structured failure path"). That behavior was replaced one commit later by `e1f28d7` (the real-decode wiring above) without updating the test. Running that test suite against `SGProcessingManager`'s current HEAD would fail this assertion. This is out of MNN's scope to fix directly (different repo, different git history) but is worth flagging to whoever owns `SGProcessingManager`'s CI.
+
+**Documentation gap:** decisions "D-09" and "D-13" (cited by code comments above) and the earlier "D-04" (cited in commit `b5471e0`'s message) have no surviving committed design doc in either repo — `SuperGenius/.planning` has no phase covering this integration, and the `SGProcessingManager` submodule has no `.planning/` directory at all on any branch checked (`main`, `dev_cognitive`, `dev_rendering`, `feat/add-llm-fp4ultra-processors`). The only record of these decisions is code comments and commit messages.
+
+**No attestation/ZK tie-in exists yet.** SuperGenius's actual proof system (`src/proof/GeniusProver.cpp`, `ProofSystem` submodule) is scoped to confidential token-transfer proofs via Pedersen commitments — unrelated to model-execution verification, checkpoint replay, or quantization. This means SGFP4's Section 8 attestation motivation (P5 above) currently has no concrete anchor anywhere in this codebase family; it would be new work in both MNN and SuperGenius if pursued.
+
+## 7. Open Questions for the User
 
 1. v1 vs. v2 target, or staged v1-then-v2?
-2. Container adoption depth — (a) full spec-conformant container, (b) math-only, or (c) hybrid opaque-blob?
-3. Is the GNUS Execution Integrity System attestation use case actually in scope for this MNN fork, or is SGFP4 being considered purely for its compression/accuracy properties?
+2. Container adoption depth — (a) full spec-conformant container, (b) math-only, or (c) hybrid opaque-blob? (Now also weighed against the cross-repo breaking-change cost in Section 6.)
+3. Is the GNUS Execution Integrity System attestation use case actually in scope for this MNN fork, or is SGFP4 being considered purely for its compression/accuracy properties? (Section 6 confirms no current anchor for this in SuperGenius's actual proof system.)
 4. Should Phase 4 plan 04-02 be executed as a "close out the E2M1 baseline" step (recommended per P2), or abandoned in favor of jumping straight to SGFP4 work?
+5. Should any future SGFP4 planning be run as a single cross-repo workstream spanning MNN and `SuperGenius`/`SGProcessingManager` (given the live API contract in Section 6), rather than as MNN-only roadmap phases with SuperGenius updated reactively afterward? If so, should the stale `Fp4UltraRecognizedButDecodeUnavailable` test (Section 6) be fixed as part of that workstream's setup, and should decisions D-04/D-09/D-13 be backfilled into a committed design doc before they're built on further?
 
 ## Appendix: Sources Consulted
 
