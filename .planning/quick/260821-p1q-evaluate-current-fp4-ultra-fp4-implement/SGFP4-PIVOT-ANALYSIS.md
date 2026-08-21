@@ -1,0 +1,130 @@
+# SGFP4 Pivot Analysis
+
+**Quick task:** 260821-p1q
+**Date:** 2026-08-21
+**Scope:** Documentation-only analysis. No files under `source/`, `test/`, or `tools/` were modified by this task.
+
+## Executive Summary
+
+The current Ultra FP4 implementation is a minimal E2M1 floating-point microformat reusing MNN's native `symmetricQuan` per-channel scale/bias container, while the new SGFP4 spec (`.planning/sgfp4-arxiv-v2.pdf` / `.planning/sgfp4-arxiv-v2.txt`) defines a fundamentally different affine-integer, dual-mode (FP4_AFFINE + T158_AFFINE ternary), macroblock-addressed container with verifiability as a first-class design goal. Top-line recommendation: do not retrofit the current work; treat SGFP4 as new, additive roadmap work (candidate Phase 6+), and fix a concrete pre-existing scale-calibration defect in the current pipeline independent of the pivot decision.
+
+## 1. Current Implementation Summary (Ultra FP4 — Phases 2 and 4)
+
+The current format is E2M1: 1 sign bit, 2 exponent bits (bias = 1), 1 mantissa bit. Encodable values are 0, ±0.5, ±1, ±1.5, ±2, ±3, plus ±Inf and NaN as special codes (`include/MNN/FP4DequantUtils.hpp`, `dequant_e2m1_cpu`). Two values are packed per byte: the low nibble holds the even-index element, the high nibble the odd-index element (`pack_fp4_byte` in both `include/MNN/FP4DequantUtils.hpp` and `tools/fp4/quantize_fp4.py`).
+
+Scale is a per-output-channel FP32 value stored in MNN's native `symmetricQuan.scale` array; `symmetricQuan.bias` is hardcoded to `[0.0] * oc` in `tools/fp4/quantize_fp4.py` (`quantize_model`, `main["symmetricQuan"] = {... "bias": [0.0] * oc ...}`). There is no custom binary container of any kind — no macroblocks, no header/offset arrays, no embedded flags. The entire "container" is three flat parallel arrays (`weight`, `scale`, `bias`) inside the existing `symmetricQuan` FlatBuffers structure that MNN already uses for INT4/INT8 quantization, with `nbits=4` selecting the FP4 codepath at dispatch time.
+
+Both runtime paths apply no scale or bias inside the dequant op itself — they are pure code-to-float lookups, with per-channel scale applied downstream by MNN's existing `symmetricQuan` consumer:
+
+- **`CPUFP4Dequant::onExecute`** (`source/backend/cpu/CPUFP4Dequant.cpp`) calls `dequant_fp4_packed_cpu`, a pure per-nibble table lookup with no scale/bias applied in-op. `CPUFP4DequantCreator::onCreate` detects FP4 by matching the input packed-byte count against `(outputElementCount + 1) / 2`, deferring to the existing `CPUDequantizeCreator` fallback otherwise.
+- **`VulkanFP4Dequant`** (`source/backend/vulkan/buffer/execution/VulkanFP4Dequant.cpp`) dispatches `glsl_fp4_dequant_FP16_comp` or `glsl_fp4_dequant_comp` depending on `useFP16()` / an explicit FP32 flag, using 256-thread workgroups (`vkCmdDispatch(cmdBuffer->get(), UP_DIV(elementCount, 256), 1, 1)`), also with no in-shader scale/bias.
+
+**Git authorship note:** all four FP4 source files (`include/MNN/FP4DequantUtils.hpp`, `tools/fp4/quantize_fp4.py`, `source/backend/cpu/CPUFP4Dequant.cpp`, `source/backend/vulkan/buffer/execution/VulkanFP4Dequant.cpp`) are authored by `Super Genius <ken+git@gnus.ai>` — the same author line as the SGFP4 paper (Kenneth Hurley, GNUS.AI / Super Genius). This means the current Ultra FP4 implementation is very likely the predecessor design by the same author later formalized as SGFP4.
+
+**Current status:**
+- Phase 2 (shader + pipeline integration): complete.
+- Phase 4 plan 04-01 (`quantize_fp4.py` + `CPUFP4Dequant`): complete.
+- Phase 4 plan 04-02 (E2E CPU+Vulkan model test): planned but NOT yet executed.
+- Phase 5 (model-level regression tests): not yet scoped, depends on Phase 4.
+
+### Verified defect: MAX_E2M1_VALUE scale-calibration bug
+
+`tools/fp4/quantize_fp4.py` defines `MAX_E2M1_VALUE = 6.0` and computes `scale = max_abs / MAX_E2M1_VALUE` per channel (`quantize_channel_weights`), then normalizes each weight as `channel_weights[i] / scale`.
+
+But the largest finite magnitude E2M1 can represent is **3.0** (nibble `0x5`/`0xD`, `biased_e=2, m=1` — see the E2M1 test-vector table in `FP4DequantUtils.hpp`). `encode_fp4_e2m1` saturates any value with `biased_e >= 3` (i.e., magnitude >= 4.0) to ±Inf:
+
+```python
+e = int(np.floor(np.log2(val)))
+biased_e = e + 1  # bias = 1
+if biased_e >= 3:
+    return 0x06 | (s << 3)  # saturate to max (6.0)
+```
+
+Since the per-channel max-magnitude weight normalizes to exactly `max_abs / (max_abs / 6.0) = 6.0`, and `6.0` has `biased_e = floor(log2(6)) + 1 = 3`, that weight saturates to ±Inf on every channel, every time — not to the intended max finite code ±3.0. The correct divisor is **3.0**, not 6.0.
+
+This wastes roughly one exponent level of dynamic range for the rest of the channel's weights and injects a guaranteed Inf into every quantized channel's largest-magnitude weight. This is independent of any SGFP4 pivot decision and should be fixed regardless, because Phase 4 plan 04-02's own acceptance criteria checks "packed FP4 weights ... match original float weights within E2M1 precision (max error <= 0.5)" — a criterion this defect can directly violate for any channel whose max-magnitude weight participates in the compared output.
+
+## 2. SGFP4 Spec Summary
+
+SGFP4 (Kenneth Hurley, GNUS.AI / Super Genius) defines an affine reconstruction rule `w_hat = S * c + bias` (Eq. 2, Section 3.2), with S and bias as FP16 (IEEE 754 binary16) values packed into a single uint32 in packHalf2x16 order (S in the upper 16 bits, bias in the lower 16 bits).
+
+Two code modes share this reconstruction rule:
+- **Mode 0, FP4_AFFINE:** a 4-bit two's-complement signed integer, codes `c` in `[-8, 7]`.
+- **Mode 1, T158_AFFINE:** ternary, codes `c` in `{-1, 0, +1}`, 2 bits/code, in the BitNet b1.58 class (Section 3.2, citing Ma et al. 2024).
+
+Mode is selected per-block by round-trip error comparison: "choose T158 iff e_T158 <= (1 + epsilon) * e_FP4", with default epsilon = 0.10, range [0.05, 0.20] (Eq. 5, Section 4.4).
+
+**v1 fixed-payload profile (Section 4):** 64x64-weight macroblocks, addressed via three parallel arrays:
+- `headers[B]` — packed S/bias (uint32 per macroblock) per macroblock.
+- `offsets[B]` — a 16-byte-aligned base offset into the codes blob, with the mode flag in bit 0 and an error-hint in bits 2-3 of the structurally-zero low 4 bits (since payloads are 2048 bytes and 16-byte aligned, offsets are always multiples of 16).
+- a codes blob of constant 2048-byte payloads per macroblock regardless of mode — mode 1 (ternary) payloads pad to the same 2048-byte size: 1024 bytes of 2-bit ternary codes (words 0-255) + 1024 bytes reserved-zero (words 256-511). Mode 0 (FP4) uses all 512 words as 4-bit nibbles.
+
+**v2 quadtree-adaptive profile (Section 6):** a self-framed stream (magic `'SGF4'`, version `0x02`, a record-offset table), with variable-size per-macroblock records. Each record has a layout enum (`LAYOUT_UNIFORM_64/32/16/8`, `LAYOUT_MIXED` via an explicit pre-order-DFS quadtree split bitmap with quadrant order TL/TR/BL/BR, `LAYOUT_FULL_4x4`), followed by per-leaf headers packing S plus a truncated (12-bit) bias with flags in the low 4 bits (bit 0 = mode; the truncated 4 low mantissa bits of bias are repurposed, bounding relative bias error to ~0.8% of |bias|).
+
+The paper's own status statement (Section 4, "Status" paragraph) is explicit: "At the time of writing, no artifacts of either profile have been issued; the reference pipeline targets v2. v1 is retained ... as the uniform-stride baseline ... and as the simplest conformance target."
+
+**Section 8's verifiability goal:** the spec is normatively closed (byte order, code bit order, rounding, reserved-bit rules) so independent CPU/GPU implementations decode bit-identically, supporting the "GNUS Execution Integrity System" attestation use case — teacher-forced replay + checkpoint-tolerance verification across untrusted nodes in a decentralized inference network — with the ternary mode's integer-exact matmul registering in the cheapest determinism class (bit-exact reference semantics, output-hash comparison), while FP4-affine paths with floating-point accumulation register in a bounded-drift class with checkpoint-band comparison.
+
+The paper is explicitly spec-only: "empirical results are left to a companion report" (Abstract, Section 9), and Section 9 references an "open reference pipeline" not yet public at time of writing.
+
+## 3. Gap Analysis
+
+| Dimension | Current MNN Impl | SGFP4 Spec | Gap/Impact |
+|---|---|---|---|
+| Numeric reconstruction | Floating-point microformat table lookup (E2M1); bias hardcoded to 0 | Affine integer `w = S*c + bias` with a real FP16 bias term | Current impl has no bias correction at all; SGFP4's affine rule requires a real per-block bias parameter and a different decode operation (FMA vs. table lookup). |
+| Code space | E2M1's non-uniform float codeset including Inf/NaN traps | FP4_AFFINE's uniform signed-integer codes `[-8, 7]`, no special values | E2M1 wastes code space on Inf/NaN and has non-uniform step sizes; SGFP4's integer codes are uniform and trap-free, simplifying both encode and verification. |
+| Granularity/container | MNN's per-op `symmetricQuan` flat scale/bias arrays (channel-granularity, no binary container) | SGFP4's macroblock-addressed container with packed headers/offsets and embedded flags (64x64 tiles) | **This is the single biggest architectural gap.** SGFP4's container model does not map onto MNN's per-op `symmetricQuan` schema at all — there is no macroblock concept, no offset table, no flag-in-low-bits mechanism anywhere in MNN's quantization path today. |
+| Dual-mode/ternary | Entirely absent today — FP4-only, no per-block mode selection | SGFP4's core contribution: per-block FP4/ternary mixing selected by round-trip error | Would require a new second code path (ternary decode, mode-selection encoder heuristic) with zero current analog in MNN's FP4 pipeline. |
+| v1 vs v2 profile | Current impl matches neither | v1 = fixed-payload uniform addressing; v2 = quadtree-adaptive, the paper's own reference-pipeline target | v1 is architecturally the smaller lift given today's flat-array integration points; v2 is what the paper's own reference pipeline targets but is substantially more complex (self-framed stream, quadtree). |
+| Verifiability/bit-exact decode | No current test coverage strategy exists for cross-device bit-exactness | SGFP4 treats this as a first-class, normatively-specified requirement (byte order, bit order, rounding, reserved bits all normative) | Adopting this would require conformance-vector ("golden container") tests and explicit CPU/Vulkan decode-parity tests — nothing like this exists in the current Ultra FP4 test plan. |
+| Scale/bias precision | Per-channel scale is FP32; bias is always 0.0 | Packed FP16 scale+bias pair (packHalf2x16), truncated further in v2 leaf headers | SGFP4 uses lower-precision (FP16) parameters but actually uses the bias term, unlike the current impl's unused FP32-precision-but-always-zero bias. |
+| Pending defect | `MAX_E2M1_VALUE=6.0` bug (Section 1) causes guaranteed Inf on every channel's max-magnitude weight | N/A (SGFP4 has no equivalent saturation trap in its integer code space) | Orthogonal to the pivot decision but must be fixed either way before Phase 4 plan 04-02 can pass its own acceptance criteria. |
+
+## 4. Recommended Pivots and Decisions (prioritized)
+
+**P1 (do now, no pivot required):** Fix the `MAX_E2M1_VALUE` scale-calibration bug in `tools/fp4/quantize_fp4.py` (change the divisor from 6.0 to 3.0) before executing Phase 4 plan 04-02. Add an explicit acceptance check to 04-02 that each channel's max-magnitude weight round-trips to a finite value, not Inf.
+
+**P2 (user decision):** Whether to still execute Phase 4 plan 04-02 (validating/closing out the current E2M1 pipeline as a shipped baseline, with the P1 fix folded in) before starting SGFP4 work, or abandon it in favor of jumping straight to SGFP4. Recommendation: execute it — it validates already-built infrastructure (Phase 2 + Phase 4-01) cheaply and does not block a future SGFP4 phase, since SGFP4 work is additive (new op/format handling), not a modification of the existing `symmetricQuan` `nbits=4` path.
+
+**P3 (user decision, explicitly flagged as open — do not decide unilaterally):** v1-first vs. v2-first vs. staged v1-then-v2 adoption of SGFP4 in MNN.
+- v1 pros: smaller lift given current flat-array integration surface; simpler conformance target; validates the affine-dual-mode decode math independent of the harder container work.
+- v1 cons: not what the paper's reference pipeline targets; neither profile has a published reference implementation yet per the paper's own status note.
+- v2 pros: matches the paper's reference-pipeline target and its accuracy/compression story.
+- v2 cons: substantially larger scope — self-framed stream format, quadtree split-map, per-leaf headers, variable-size records, recursive error-driven encoder.
+- Non-binding sketch: a staged approach — affine dual-mode math first (v1-shaped), full container/quadtree later.
+
+**P4 (user decision, explicitly flagged as open):** Container adoption depth, three named sub-options:
+- (a) **Full container adoption** — replace `symmetricQuan`-based encoding with a true SGFP4-conformant binary blob (`headers[B]`/`offsets[B]`/codes blob), sacrificing MNN's native per-channel array introspection but gaining spec conformance for the attestation use case.
+- (b) **Math-only adoption** — keep MNN's flat per-channel arrays (widened to carry a real bias value) but switch the reconstruction formula to SGFP4's affine rule and add ternary as a second per-channel/per-block code path. Smaller lift, but no bit-exact conformance to the SGFP4 wire format, only the numerics.
+- (c) **Hybrid** — store SGFP4-format containers as an opaque per-op blob decoded via a dedicated new dequant creator branch, leaving all non-FP4 MNN ops untouched.
+- Lean recommendation (Claude's suggestion, not a locked decision): (b) first, (c) as a natural follow-up if verifiability becomes required, (a) only if wire-format conformance is explicitly required.
+
+**P5 (defer, flag for user):** Whether the GNUS Execution Integrity System's attestation use case (teacher-forced replay across untrusted nodes) is actually in scope for this MNN fork. It is the SGFP4 paper's stated primary motivation but has zero footprint anywhere in the current Ultra FP4 roadmap (Phases 1-5 never mention attestation, execution verification, or conformance vectors). If in scope, a future phase would need a conformance-vector ("golden container") test format, explicit byte-order unit tests for CPU vs. Vulkan decode parity, and possibly integer-exact-only kernel variants for the ternary path.
+
+**P6 (sizing note, not scoped here):** Ternary (T158_AFFINE) CPU decode, ternary Vulkan/GLSL decode + `makeshader.py`-pipeline shader registration, and an encoder mode-selection heuristic (round-trip MSE compare, default epsilon=0.10) are entirely new work not present in any current roadmap phase. Rough-order-of-magnitude estimate: comparable combined scope to Phase 2 (shader + pipeline) plus Phase 4 (tool + CPU dequant), i.e., realistically 2 full phases (one for affine-dual-mode math on CPU+Vulkan, one for the container/addressing layer) — consistent with the staged approach suggested in P3.
+
+## 5. Suggested Phase 6+ Scope Sketch (non-binding)
+
+These are sketches for the user's next roadmap-editing session, not additions to ROADMAP.md:
+
+- **Phase 6 candidate — "SGFP4 Affine Dual-Mode Reconstruction (v1 math, math-only container per P4-b)":** CPU+Vulkan decode for FP4_AFFINE + T158_AFFINE with per-channel/per-block FP16 scale+bias, encoder mode-selection heuristic, correctness tests against the paper's Eq. 2/3/4.
+- **Phase 7 candidate (conditional on Phase 6 outcome and the user's P3 decision):** either SGFP4 v1 fixed-payload container conformance, or skip straight to v2 quadtree-adaptive if matching the paper's reference pipeline is prioritized over shipping sooner.
+- **Phase 8 candidate (conditional on the P5 decision):** verifiable-execution/bit-exact conformance testing, only if the GNUS attestation use case is confirmed in scope.
+
+## 6. Open Questions for the User
+
+1. v1 vs. v2 target, or staged v1-then-v2?
+2. Container adoption depth — (a) full spec-conformant container, (b) math-only, or (c) hybrid opaque-blob?
+3. Is the GNUS Execution Integrity System attestation use case actually in scope for this MNN fork, or is SGFP4 being considered purely for its compression/accuracy properties?
+4. Should Phase 4 plan 04-02 be executed as a "close out the E2M1 baseline" step (recommended per P2), or abandoned in favor of jumping straight to SGFP4 work?
+
+## Appendix: Sources Consulted
+
+- .planning/sgfp4-arxiv-v2.txt
+- include/MNN/FP4DequantUtils.hpp
+- tools/fp4/quantize_fp4.py
+- source/backend/cpu/CPUFP4Dequant.cpp
+- source/backend/vulkan/buffer/execution/VulkanFP4Dequant.cpp
+- .planning/phases/02-ultra-fp4-quantization/02-CONTEXT.md
+- .planning/phases/04-convert-test-models-mnn-or-onnx-into-ultra-fp4-quantization-/04-01-SUMMARY.md
+- .planning/phases/04-convert-test-models-mnn-or-onnx-into-ultra-fp4-quantization-/04-02-PLAN.md
