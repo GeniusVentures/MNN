@@ -84,6 +84,7 @@ MNN lives as a submodule under `GeniusNetwork/thirdparty/` — upstream is exter
 | Ultra FP4 as new Vulkan shader op rather than modifying existing quantization | FP4 is a new format (not INT4/INT8); requires new GLSL kernel and op registration | — Pending |
 | Codebase map committed before starting | Needed to understand existing architecture, conventions, and concerns | ✓ Good |
 | DeepSeek V4 for planning agents | Local runtime preference | ✓ Good |
+| Execute Phase 4 plan 04-02 (E2E FP4 model test) before starting any SGFP4 pivot work, folding in the MAX_E2M1_VALUE scale-calibration bugfix | 04-02 validates already-built E2M1 infrastructure (Phase 2 + Phase 4-01) cheaply; SGFP4 work is additive (new format/op handling), not a modification of the existing symmetricQuan nbits=4 path, so finishing 04-02 first does not block it | — Pending |
 
 ## Evolution
 

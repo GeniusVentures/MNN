@@ -65,6 +65,7 @@ Progress: [████████░░] 87%
 - Phase 5 added: Model-level regression tests for Vulkan TurboQuant and sparse-V (issue #7), depends on Phase 4 (2026-05-28)
 - Phase 3 completed: TURBOQUANT.md delivered — config contract + CPU fallback docs, issues #8, #9 closed (2026-05-28)
 - Phase 4 plan 04-01 completed: FP4 quant tool (tools/fp4/quantize_fp4.py) + CPU FP4 dequant runtime; TurboQuant-V support + attention mask gen shader + buffer barrier fix in VulkanAttention; issue #5 closed (2026-05-28)
+- SGFP4 pivot analysis completed (quick task 260821-p1q): evaluated current Ultra FP4 (E2M1 microformat, Phases 2+4) against the new SGFP4 spec (affine dual-mode, macroblock-addressed container) — full findings and a verified MAX_E2M1_VALUE scale-calibration defect documented in `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/SGFP4-PIVOT-ANALYSIS.md`; recommends treating SGFP4 as new additive roadmap work (candidate Phase 6+) rather than retrofitting current Ultra FP4; v1-vs-v2 target, container adoption depth, and verifiability scope left as open questions for the user (2026-08-21)
 
 ### Decisions
 
@@ -81,6 +82,7 @@ Recent decisions affecting current work:
 
 - Execute Phase 4 plan 04-02: E2E FP4 model test (FP4ModelTest.cpp stubbed)
 - Plan and execute Phase 5: Model-level regression tests (issue #7)
+- Review SGFP4-PIVOT-ANALYSIS.md and decide v1-vs-v2 target + container adoption depth + verifiability scope before scoping a Phase 6
 
 ### Blockers/Concerns
 
