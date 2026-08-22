@@ -78,9 +78,10 @@ and the spec `.planning/sgfp4-arxiv-v2.txt` (Sections 3, 4, 6).
   3. All five uniform layouts (LAYOUT_UNIFORM_64/32/16/8, LAYOUT_FULL_4x4) decode with correct leaf count, row-major raster leaf order, and normative payload word counts (n²/8 words mode 0, n²/16 words mode 1), verified via `./run_test.out`
   4. FP16 scale+bias unpack (packHalf2x16 order; v2 leaf's 12-bit truncated-bias recovery `S=half(h>>16)`, `bias=half(h & 0xFFF0)`, `flags=h & 0xF`) matches a reference half→float within FP16 precision, and the ternary reserved symbol `11` decodes to 0
   5. The existing E2M1 `CPUFP4Dequant` / `dequant_fp4_packed_cpu` path and its tests are unchanged (additive, not a replacement)
-**Plans**: ~2 (not yet broken down)
+**Plans**: 2 plans
 Plans:
-- [ ] TBD (run /gsd-plan-phase 1 to break down)
+- [ ] 01-01-PLAN.md — Schema (OpType_SGFP4Dequant + SGFP4DequantParam) + shape computer + SGFP4 v2 decode core (framing, uniform record walk, FP16 leaf-header unpack, dual-mode payload decode, affine reconstruct) + CPU Execution with external-sidecar loading (SGV2-01..06)
+- [ ] 01-02-PLAN.md — Reference uniform-layout v2 Python encoder + CPU round-trip / edge-case / op-level tests (SGV2-07)
 
 ### Phase 2: Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)
 **Goal**: CPU decode handles the variable-size LAYOUT_MIXED record via the pre-order-DFS quadtree split-map, and a new error-driven encoder produces adaptive quadtree layouts using per-level thresholds, per-region mode selection, and the ternary outlier veto. Completes the full SGFP4 v2 feature set on CPU.
@@ -123,7 +124,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 0/~2 | Not started | — |
+| 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 0/2 | Planned | — |
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 0/~2 | Not started | — |
 | 3. Vulkan Decode — Uniform Layouts | 0/~2 | Not started | — |
 | 4. Vulkan Decode — Adaptive Quadtree | 0/~1-2 | Not started | — |
