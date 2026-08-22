@@ -24,7 +24,16 @@ import numpy as np
 
 import math
 
-MAX_E2M1_VALUE = 6.0
+# Normalizing a channel's max-magnitude weight by dividing by MAX_E2M1_VALUE
+# makes that weight's normalized value equal exactly MAX_E2M1_VALUE. E2M1 can
+# only represent magnitudes < 4.0 (biased_e >= 3, i.e. magnitude >= 4.0,
+# saturates to +/-Inf in encode_fp4_e2m1 below) as finite values, and the
+# largest finite magnitude it can encode is 3.0 (nibble 0x5/0xD: biased_e=2,
+# m=1 -> 2^(2-1)*(1+0.5) = 3.0; see FP4DequantUtils.hpp's test-vector table).
+# A divisor of 6.0 made every channel's largest-magnitude weight normalize to
+# exactly 6.0, which always fell into the >= 4.0 saturation branch, so every
+# channel's max-magnitude weight was quantized to +/-Inf on every run.
+MAX_E2M1_VALUE = 3.0
 
 
 def encode_fp4_e2m1(val):
@@ -40,7 +49,11 @@ def encode_fp4_e2m1(val):
     e = int(np.floor(np.log2(val)))
     biased_e = e + 1  # bias = 1
     if biased_e >= 3:
-        return 0x06 | (s << 3)  # saturate to max (6.0)
+        # Magnitudes with biased_e >= 3 (i.e. >= 4.0) have no finite E2M1
+        # encoding and saturate to +/-Inf. This is unchanged by the
+        # MAX_E2M1_VALUE fix above -- the largest finite-magnitude code
+        # E2M1 can represent remains 3.0 (nibble 0x5/0xD).
+        return 0x06 | (s << 3)  # saturate to +/-Inf
     if biased_e <= 0:
         m_bit = int(round(val / 0.5)) & 0x1
         return (s << 3) | m_bit
