@@ -97,8 +97,8 @@ Recent decisions affecting current work:
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 260821-p1q | Evaluate current FP4/Ultra-FP4 implementation status against the new SGFP4 (sgfp4-arxiv-v2.pdf) spec and determine pivots for future roadmap planning | 2026-08-21 | d6e3b70 | [260821-p1q-evaluate-current-fp4-ultra-fp4-implement](./quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/) |
-| 260821-rql | Fix MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py (6.0 -> 3.0) and add stdlib-only regression test | 2026-08-21 | ee8d54b7 | [260821-rql-fix-max-e2m1-value-scale-calibration-bug](./quick/260821-rql-fix-max-e2m1-value-scale-calibration-bug/) |
+| 260821-p1q | Evaluate current FP4/Ultra-FP4 implementation status against the new SGFP4 (sgfp4-arxiv-v2.pdf) spec and determine pivots for future roadmap planning | 2026-08-21 | d6e3b70 | [260821-p1q-evaluate-current-fp4-ultra-fp4-implement](../../quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/) |
+| 260821-rql | Fix MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py (6.0 -> 3.0) and add stdlib-only regression test | 2026-08-21 | ee8d54b7 | [260821-rql-fix-max-e2m1-value-scale-calibration-bug](../../quick/260821-rql-fix-max-e2m1-value-scale-calibration-bug/) |
 
 ## Deferred Items
 

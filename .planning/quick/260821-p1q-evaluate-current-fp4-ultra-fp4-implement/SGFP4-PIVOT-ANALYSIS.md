@@ -148,11 +148,13 @@ else if ( format == sgns::InputFormat::FP4_ULTRA )
 
 ## Appendix: Sources Consulted
 
+Note: paths below reflect the post-2026-08-21 workstream migration (existing Phase 1-5 roadmap/state/phases relocated to `.planning/workstreams/milestone/` when the `sgfp4-pivot` workstream was created). At the time this analysis was written, these files lived directly under `.planning/`.
+
 - .planning/sgfp4-arxiv-v2.txt
 - include/MNN/FP4DequantUtils.hpp
 - tools/fp4/quantize_fp4.py
 - source/backend/cpu/CPUFP4Dequant.cpp
 - source/backend/vulkan/buffer/execution/VulkanFP4Dequant.cpp
-- .planning/phases/02-ultra-fp4-quantization/02-CONTEXT.md
-- .planning/phases/04-convert-test-models-mnn-or-onnx-into-ultra-fp4-quantization-/04-01-SUMMARY.md
-- .planning/phases/04-convert-test-models-mnn-or-onnx-into-ultra-fp4-quantization-/04-02-PLAN.md
+- .planning/workstreams/milestone/phases/02-ultra-fp4-quantization/02-CONTEXT.md
+- .planning/workstreams/milestone/phases/04-convert-test-models-mnn-or-onnx-into-ultra-fp4-quantization-/04-01-SUMMARY.md
+- .planning/workstreams/milestone/phases/04-convert-test-models-mnn-or-onnx-into-ultra-fp4-quantization-/04-02-PLAN.md
