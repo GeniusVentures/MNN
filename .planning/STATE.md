@@ -2,16 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Vulkan Backend LLM Enablement
+current_phase: 4
+current_phase_name: in progress — plan 04-01 done
 status: milestone_in_progress
-last_updated: 2026-05-28T01:25:00.000Z
-last_activity: 2026-05-28
+stopped_at: "Phase 4 plan 04-01 complete — TurboQuant-V + mask gen shader implemented, next: 04-02 (E2E model test)"
+last_updated: "2026-08-22T00:10:50.697Z"
+last_activity: 2026-08-21
+last_activity_desc: "Completed quick task 260821-rql: fixed MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py"
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 8
   completed_plans: 7
   percent: 87
-stopped_at: Phase 4 plan 04-01 complete — TurboQuant-V + mask gen shader implemented, next: 04-02 (E2E model test)
 ---
 
 # Project State
@@ -28,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-05-27)
 Phase: 4 (in progress — plan 04-01 done)
 Plans: 7/8 complete (Phase 1: 3/3, Phase 2: 2/2, Phase 3: 1/1, Phase 4: 1/2, Phase 5: 0/0)
 Status: Plan 04-01 delivered (FP4 quant tool + CPU dequant), 04-02 next
-Last activity: 2026-08-21 - Completed quick task 260821-p1q: SGFP4 pivot analysis
+Last activity: 2026-08-21 - Completed quick task 260821-rql: fixed MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py
 
 Progress: [████████░░] 87%
 
@@ -78,6 +81,7 @@ Recent decisions affecting current work:
 - Ultra FP4 as new Vulkan shader op rather than modifying existing quantization (Phase 2)
 - Codebase map committed before starting (completed)
 - Plan 01 kept as-is — VULK-06/VULK-07 confirmed implemented in source (2026-05-27 research)
+- Quick task 260821-rql: Fixed MAX_E2M1_VALUE from 6.0 to 3.0 in tools/fp4/quantize_fp4.py; added regression test tools/fp4/test_quantize_fp4.py
 
 ### Pending Todos
 
@@ -94,6 +98,7 @@ Recent decisions affecting current work:
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260821-p1q | Evaluate current FP4/Ultra-FP4 implementation status against the new SGFP4 (sgfp4-arxiv-v2.pdf) spec and determine pivots for future roadmap planning | 2026-08-21 | d6e3b70 | [260821-p1q-evaluate-current-fp4-ultra-fp4-implement](./quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/) |
+| 260821-rql | Fix MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py (6.0 -> 3.0) and add stdlib-only regression test | 2026-08-21 | ee8d54b7 | [260821-rql-fix-max-e2m1-value-scale-calibration-bug](./quick/260821-rql-fix-max-e2m1-value-scale-calibration-bug/) |
 
 ## Deferred Items
 
@@ -103,6 +108,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-28
-Stopped at: Phase 4 plan 04-01 complete — TurboQuant-V + mask gen shader + FP4 tooling done, 04-02 (E2E model test) next
+Last session: 2026-08-21
+Stopped at: Completed quick task 260821-rql: fixed MAX_E2M1_VALUE scale-calibration bug (6.0 -> 3.0) in tools/fp4/quantize_fp4.py + added regression test; Phase 4 plan 04-01 still complete, 04-02 (E2E model test) next
 Resume file: None
