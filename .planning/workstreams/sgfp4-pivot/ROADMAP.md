@@ -106,8 +106,12 @@ Plans:
 
 **Plans**: 2 plans
 Plans:
+**Wave 1**
 
 - [ ] 02-01-PLAN.md — LAYOUT_MIXED decode core: split-map constants + iterative fixed-size-stack walker + MIXED branch in `dequant_sgfp4_container_cpu()` (SGV2-08, SGV2-09)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 02-02-PLAN.md — Error-driven quadtree encoder (`subdivide_macroblock`/`build_split_map`/`classify_layout`) + committed mixed fixtures + golden-traversal/mixed round-trip/negative split-map tests (SGV2-10, SGV2-11)
 
 ### Phase 3: Vulkan Decode — Uniform Layouts
