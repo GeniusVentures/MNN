@@ -166,3 +166,7 @@ None - no external service configuration required.
 ---
 *Phase: 01-affine-dual-mode-decode-core-cpu-uniform-layouts*
 *Completed: 2026-08-24*
+
+## Self-Check: PASSED
+
+All created files verified present on disk; all four commit hashes (`b6c248f9`, `e7a1258a`, `fee11447`, `fac239db`) verified present in `git log --oneline --all`.
