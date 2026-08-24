@@ -45,6 +45,12 @@ public:
         if (!testFixtureRoundTrip()) {
             return false;
         }
+        if (!testMixedDegenerateSmoke()) {
+            return false;
+        }
+        if (!testMixedTraversalGolden()) {
+            return false;
+        }
         if (!testTernaryReservedSymbol()) {
             return false;
         }
@@ -86,6 +92,77 @@ private:
             }
         }
         MNN_PRINT("SGFP4DequantTest: fixture round-trip (%zu cases) PASSED\n", sgfp4_fixtures::kFixtureCount);
+        return true;
+    }
+
+    // ====================================================================
+    // Layer 1b: degenerate LAYOUT_MIXED smoke (SGV2-08). All-zero split map
+    // -> one 64x64 leaf -> must decode identically to the uniform degenerate
+    // case (every element = S*code + bias with all-zero codes = bias).
+    // Proves the MIXED branch runs end-to-end: walk yields one leaf, area
+    // sums to 4096, block headers live at recStart + 4 + 12.
+    // ====================================================================
+    bool testMixedDegenerateSmoke() {
+        const int leafEdge = 64;
+        const int elementCount = leafEdge * leafEdge;
+        const float S = 2.0f;
+        const float bias = 0.5f;
+
+        std::vector<uint8_t> container = buildSingleLeafContainer(
+            MNN::kSGFP4LayoutMixed, /*mode=*/0, S, bias,
+            [elementCount](std::vector<uint8_t>& payload) {
+                // Every 4-bit code 0 -> w = S*0 + bias == bias.
+                const int wordsPerLeaf = elementCount / MNN::kSGFP4NibblesPerWord;
+                payload.assign(static_cast<size_t>(wordsPerLeaf) * 4, 0x00);
+            });
+
+        std::vector<float> out(elementCount, 0.0f);
+        bool ok = MNN::dequant_sgfp4_container_cpu(container.data(), container.size(), out.data(), elementCount);
+        if (!ok) {
+            MNN_ERROR("SGFP4DequantTest: degenerate MIXED decode returned false\n");
+            return false;
+        }
+        std::vector<float> expected(elementCount, bias);
+        if (!checkVectorByRelativeError<float>(out.data(), expected.data(), elementCount, kFixtureRelativeTolerance)) {
+            MNN_ERROR("SGFP4DequantTest: degenerate MIXED did not decode to bias\n");
+            return false;
+        }
+        MNN_PRINT("SGFP4DequantTest: degenerate MIXED (all-zero split map) smoke PASSED\n");
+        return true;
+    }
+
+    // ====================================================================
+    // Layer 1c: hand-built split-map traversal golden (SGV2-08/09). Split
+    // map {0x00000001, 0, 0} (bit 0 = 1 splits the 64x64 root; bits 1-4 = 0
+    // leave the four 32x32 children as leaves) must decode leaves in
+    // pre-order DFS order TL, TR, BL, BR -- proven without the encoder via
+    // a distinct per-leaf bias marker.
+    // ====================================================================
+    bool testMixedTraversalGolden() {
+        const int n = 32;
+        const int leafElements = n * n;
+        const float S = 2.0f;
+        const float bias[4] = {100.0f, 101.0f, 102.0f, 103.0f}; // TL, TR, BL, BR markers
+
+        std::vector<uint8_t> container = buildSplitFourLeafContainer(n, S, bias);
+        const int elementCount = 4 * leafElements;
+
+        std::vector<float> out(elementCount, 0.0f);
+        bool ok = MNN::dequant_sgfp4_container_cpu(container.data(), container.size(), out.data(), elementCount);
+        if (!ok) {
+            MNN_ERROR("SGFP4DequantTest: hand-built traversal golden decode returned false\n");
+            return false;
+        }
+        for (int k = 0; k < 4; ++k) {
+            std::vector<float> expected(leafElements, bias[k]);
+            if (!checkVectorByRelativeError<float>(out.data() + k * leafElements, expected.data(), leafElements,
+                                                    kFixtureRelativeTolerance)) {
+                MNN_ERROR("SGFP4DequantTest: leaf %d did not decode to its bias marker %f (TL/TR/BL/BR order "
+                          "violation)\n", k, bias[k]);
+                return false;
+            }
+        }
+        MNN_PRINT("SGFP4DequantTest: hand-built traversal golden (TL/TR/BL/BR) PASSED\n");
         return true;
     }
 
@@ -237,7 +314,13 @@ private:
             }
         }
 
-        // (d) LAYOUT_MIXED (enum 4) -- Phase 2 layout, must be rejected here.
+        // (d) LAYOUT_MIXED (enum 4) -- degenerate adaption of a uniform
+        // record: enum nibble mutated to MIXED and the container truncated
+        // right after the 12-byte split-map region, so the (all-zero, i.e.
+        // single 64x64 leaf) map parses but zero block headers / payload
+        // follow. Deterministic rejection: blockHeadersStart == containerSize
+        // guarantees blockHeadersBytes > containerSize - blockHeadersStart
+        // for any leaf count >= 1 (T-02-02/T-02-03 posture).
         {
             std::vector<uint8_t> bad = good;
             uint32_t B = 0;
@@ -249,8 +332,9 @@ private:
             size_t recStart = regionStart + recOffRel;
             bad[recStart] = static_cast<uint8_t>((bad[recStart] & ~MNN::kSGFP4LayoutEnumMask) |
                                                   MNN::kSGFP4LayoutMixed);
+            bad.resize(recStart + 4 + MNN::kSGFP4SplitMapBytes);
             if (MNN::dequant_sgfp4_container_cpu(bad.data(), bad.size(), scratch.data(), scratch.size())) {
-                MNN_ERROR("SGFP4DequantTest: LAYOUT_MIXED (Phase 2) container was accepted\n");
+                MNN_ERROR("SGFP4DequantTest: malformed MIXED record (truncated after split map) was accepted\n");
                 return false;
             }
         }
@@ -365,6 +449,68 @@ private:
     }
 
     // ====================================================================
+    // Helper: pack a leaf header word (S in the high 16 bits, 0xFFF0-masked
+    // bias, mode in bit 0) exactly as the spec's Eq. 6 inverse.
+    // ====================================================================
+    static uint32_t packLeafHeaderWord(float S, float bias, int mode) {
+        half_float::half hS(S);
+        half_float::half hBias(bias);
+        uint16_t sBits = 0, biasBits = 0;
+        std::memcpy(&sBits, &hS, sizeof(sBits));
+        std::memcpy(&biasBits, &hBias, sizeof(biasBits));
+        biasBits &= static_cast<uint16_t>(MNN::kSGFP4LeafHeaderBiasMask);
+        return (static_cast<uint32_t>(sBits) << MNN::kSGFP4LeafHeaderScaleShift) |
+               static_cast<uint32_t>(biasBits) | (static_cast<uint32_t>(mode) & 0x1u);
+    }
+
+    // ====================================================================
+    // Helper: hand-build a single-macroblock LAYOUT_MIXED container whose
+    // split map is {0x00000001, 0, 0} (root split, four square leaves of
+    // edge n in TL/TR/BL/BR), with per-leaf S/bias and all-zero-coded mode-0
+    // payloads. Independent of buildSingleLeafContainer and of the encoder.
+    // ====================================================================
+    std::vector<uint8_t> buildSplitFourLeafContainer(int n, float S, const float bias[4]) {
+        const uint32_t B = 1;
+        std::vector<uint8_t> container;
+        auto appendU32 = [&container](uint32_t v) {
+            container.push_back(static_cast<uint8_t>(v & 0xFF));
+            container.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+            container.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
+            container.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
+        };
+
+        // Fixed header: magic(4) + version(1) + B(4) + pad0(7) = 16 bytes.
+        container.push_back('S');
+        container.push_back('G');
+        container.push_back('F');
+        container.push_back('4');
+        container.push_back(MNN::kSGFP4Version);
+        appendU32(B);
+        container.resize(MNN::kSGFP4FixedHeaderSize, 0x00);
+
+        appendU32(0); // record_offsets[0] = 0
+        container.resize(MNN::sgfp4_align16(container.size()), 0x00);
+
+        // Record: sb_header(MIXED) + split map (bit 0 = 1) + 4 block headers.
+        appendU32(MNN::kSGFP4LayoutMixed & MNN::kSGFP4LayoutEnumMask);
+        appendU32(0x00000001u); // split map word 0: bit 0 splits the root
+        appendU32(0x00000000u); // word 1: bits 1-4 = 0 -> 32x32 children stay leaves
+        appendU32(0x00000000u); // word 2: unused, zero
+        for (int k = 0; k < 4; ++k) {
+            appendU32(packLeafHeaderWord(S, bias[k], /*mode=*/0));
+        }
+        container.resize(MNN::sgfp4_align16(container.size()), 0x00);
+
+        // Payloads: all-zero codes (mode 0), n*n/8 words each, padded to 16B.
+        const size_t payloadBytes = static_cast<size_t>(n * n / MNN::kSGFP4NibblesPerWord) * 4;
+        for (int k = 0; k < 4; ++k) {
+            size_t start = container.size();
+            container.resize(start + MNN::sgfp4_align16(payloadBytes), 0x00);
+        }
+        return container;
+    }
+
+    // ====================================================================
     // Helper: build a minimal single-macroblock, single-leaf v2 container
     // (LAYOUT_UNIFORM_64 unless overridden) for hand-built edge cases.
     // `fillPayload` receives a zero-initialized payload buffer of the
@@ -373,14 +519,7 @@ private:
     template <typename FillPayloadFn>
     std::vector<uint8_t> buildSingleLeafContainer(uint32_t layoutEnum, int mode, float S, float bias,
                                                    FillPayloadFn fillPayload) {
-        half_float::half hS(S);
-        half_float::half hBias(bias);
-        uint16_t sBits = 0, biasBits = 0;
-        std::memcpy(&sBits, &hS, sizeof(sBits));
-        std::memcpy(&biasBits, &hBias, sizeof(biasBits));
-        biasBits &= static_cast<uint16_t>(MNN::kSGFP4LeafHeaderBiasMask);
-        uint32_t headerWord = (static_cast<uint32_t>(sBits) << MNN::kSGFP4LeafHeaderScaleShift) |
-                              static_cast<uint32_t>(biasBits) | (static_cast<uint32_t>(mode) & 0x1u);
+        uint32_t headerWord = packLeafHeaderWord(S, bias, mode);
 
         std::vector<uint8_t> payload;
         fillPayload(payload);
@@ -407,8 +546,13 @@ private:
         appendU32(0);
         container.resize(MNN::sgfp4_align16(container.size()), 0x00);
 
-        // Record: sb_header(4) + block_headers[1](4) + pad to 16B + payload.
+        // Record: sb_header(4) [+ split map (12B) if LAYOUT_MIXED] +
+        // block_headers[1](4) + pad to 16B + payload.
         appendU32(layoutEnum & MNN::kSGFP4LayoutEnumMask);
+        if (layoutEnum == MNN::kSGFP4LayoutMixed) {
+            // All-zero split map: the 64x64 root is a single leaf.
+            container.insert(container.end(), MNN::kSGFP4SplitMapBytes, 0x00);
+        }
         appendU32(headerWord);
         container.resize(MNN::sgfp4_align16(container.size()), 0x00);
         container.insert(container.end(), payload.begin(), payload.end());

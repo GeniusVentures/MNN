@@ -58,13 +58,23 @@ constexpr int kSGFP4TwosComplementSignBias = 0x8; // sign-extend a 4-bit two's c
 // sb_header (spec section 6.2): layout enum lives in bits 0-2.
 constexpr uint32_t kSGFP4LayoutEnumMask = 0x7u;
 
+// split-map (spec section 6.2): LAYOUT_MIXED serializes the quadtree as a
+// pre-order-DFS bitmap -- one bit per node of size >= 8 (1 = split, 0 = leaf),
+// quadrant order TL/TR/BL/BR; nodes of size 4 never split and emit no bit.
+// At most 1 + 4 + 16 + 64 = 85 bits are required, stored in three
+// little-endian uint32 words (bit k = bit k%32 of word k/32), upper bits zero.
+constexpr size_t kSGFP4SplitMapWords     = 3;
+constexpr size_t kSGFP4SplitMapBytes     = 12;
+constexpr int    kSGFP4MaxQuadTreeBits   = 85; // 1 + 4 + 16 + 64
+constexpr int    kSGFP4QuadTreeMinSplitSize = 8; // nodes of size 4 are always leaves
+
 // Table 3 uniform-layout map (Phase 1 subset -- LAYOUT_MIXED is Phase 2).
 enum SGFP4UniformLayout : uint32_t {
     kSGFP4LayoutUniform64 = 0, // N=1,   leaf edge 64
     kSGFP4LayoutUniform32 = 1, // N=4,   leaf edge 32
     kSGFP4LayoutUniform16 = 2, // N=16,  leaf edge 16
     kSGFP4LayoutUniform8  = 3, // N=64,  leaf edge 8
-    kSGFP4LayoutMixed     = 4, // Phase 2 -- rejected here
+    kSGFP4LayoutMixed     = 4, // Phase 2 -- quadtree leaves via split map
     kSGFP4LayoutFull4x4   = 5, // N=256, leaf edge 4
     kSGFP4LayoutEnumCount = 6, // anything >= this is invalid
 };
@@ -116,10 +126,99 @@ inline bool sgfp4_resolve_uniform_layout(uint32_t layoutEnum, int& leafCount, in
             return true;
         case kSGFP4LayoutMixed:
         default:
-            // LAYOUT_MIXED (quadtree) is Phase 2; any enum >= kSGFP4LayoutEnumCount
-            // is malformed. Both are rejected here.
+            // LAYOUT_MIXED is decoded by the quadtree walk in
+            // sgfp4_walk_quadtree (never through this Table 3 resolver);
+            // any enum >= kSGFP4LayoutEnumCount is malformed. Both are
+            // rejected here.
             return false;
     }
+}
+
+// ---------------------------------------------------------------------------
+// LAYOUT_MIXED quadtree split-map walk (spec section 6.2, Phase 2).
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Bounds-checked reader over the 3-word / <=85-bit split map.
+ *
+ * Bit k of the map is bit (k % 32) of little-endian word (k / 32). Reading
+ * past kSGFP4MaxQuadTreeBits (a malformed/oversized tree) fails closed via
+ * a false return, which the caller turns into a decode failure (T-02-01).
+ */
+struct SGFP4SplitMapReader {
+    const uint32_t* words;
+    int bit;
+
+    explicit SGFP4SplitMapReader(const uint32_t* w) : words(w), bit(0) {}
+
+    bool next(bool& out) {
+        if (bit >= kSGFP4MaxQuadTreeBits) {
+            return false;
+        }
+        out = ((words[bit >> 5] >> (bit & 31)) & 1u) != 0;
+        ++bit;
+        return true;
+    }
+};
+
+/** @brief One quadtree node: macroblock-relative origin (x, y) and edge n. */
+struct QuadNode {
+    int x;
+    int y;
+    int n;
+};
+
+/**
+ * @brief Iterative pre-order DFS walk of the split map (D-01).
+ *
+ * Quadrant pop order is TL, TR, BL, BR. Nodes of size >= 8 read one split
+ * bit; nodes of size 4 are always leaves and read nothing. Leaves are
+ * collected in traversal order -- the order the block headers and payloads
+ * are stored in (spec section 6.2). Recursion-free with an explicit
+ * fixed-size stack so the identical algorithm ports to the Phase 4 GLSL
+ * shader, where recursion is impossible.
+ *
+ * @param map       pointer to the 3-word split map (bounds-checked by caller)
+ * @param leafCount output: number of leaves collected
+ * @param leaves    output leaf array (decoder-owned)
+ * @param maxLeaves capacity of `leaves`
+ * @return true on a well-formed walk, false on a past-end bit read (T-02-01)
+ *         or stack/leaf overflow (T-02-04)
+ */
+inline bool sgfp4_walk_quadtree(const uint32_t* map, int& leafCount, QuadNode* leaves, int maxLeaves) {
+    QuadNode stack[kSGFP4MaxQuadTreeBits];
+    int top      = 0;
+    stack[top++] = QuadNode{0, 0, 64};
+
+    SGFP4SplitMapReader r(map);
+    leafCount = 0;
+
+    while (top > 0) {
+        QuadNode node = stack[--top];
+        if (node.n >= kSGFP4QuadTreeMinSplitSize) {
+            bool split = false;
+            if (!r.next(split)) {
+                return false; // bit read past 85 -- malformed map
+            }
+            if (split) {
+                int h = node.n / 2;
+                if (top + 4 > kSGFP4MaxQuadTreeBits) {
+                    return false;
+                }
+                // Push in reverse so TL pops first (pre-order DFS).
+                stack[top++] = QuadNode{node.x + h, node.y + h, h}; // BR
+                stack[top++] = QuadNode{node.x, node.y + h, h};     // BL
+                stack[top++] = QuadNode{node.x + h, node.y, h};     // TR
+                stack[top++] = QuadNode{node.x, node.y, h};         // TL
+                continue;
+            }
+        }
+        if (leafCount >= maxLeaves) {
+            return false;
+        }
+        leaves[leafCount++] = node;
+    }
+    return true;
 }
 
 /**
@@ -195,15 +294,20 @@ inline void sgfp4_decode_leaf_payload(const uint32_t* words, int leafEdge, float
  *     block_headers[N] (u32 each, N from Table 3); pad to a 16-byte
  *     boundary; payloads[N] (each padded to a 16-byte multiple).
  *
- * Decode order is fully sequential: record 0's leaves (in raster order,
- * row-major within each leaf) fill the first N0*n0*n0 output elements,
- * record 1's leaves fill the next N1*n1*n1, and so on. This linear order is
- * the canonical Phase 1 definition consumed by the matching encoder.
+ * Decode order is fully sequential: record 0's leaves fill the first
+ * N0*n0*n0 output elements, record 1's leaves fill the next N1*n1*n1, and
+ * so on. Uniform-layout leaves are appended in row-major raster order of
+ * the tile grid (row-major within each leaf); LAYOUT_MIXED leaves are
+ * appended in pre-order DFS traversal order of the split map (TL/TR/BL/BR),
+ * each leaf still row-major internally (spec section 6.2) -- a leaf-major
+ * linear stream, not a spatial scatter.
  *
  * Every read is bounds-checked against `containerSize` before it happens
  * (ASVS V5); malformed/out-of-bounds containers return false without ever
- * dereferencing past the buffer. LAYOUT_MIXED (quadtree, Phase 2) and any
- * layout enum >= 6 are rejected. The total decoded element count is bounded
+ * dereferencing past the buffer. LAYOUT_MIXED is decoded via the
+ * sgfp4_walk_quadtree split-map walk (with strict tiling validation); any
+ * layout enum >= 6 is still rejected by sgfp4_resolve_uniform_layout. The
+ * total decoded element count is bounded
  * against and must exactly equal `outElementCount` -- this also bounds
  * per-record work against the declared output size (no unbounded
  * allocation/looping from an attacker-controlled B).
@@ -279,11 +383,35 @@ inline bool dequant_sgfp4_container_cpu(const uint8_t* container, size_t contain
         uint32_t layoutEnum = sbHeader & kSGFP4LayoutEnumMask;
         int leafCount = 0;
         int leafEdge  = 0;
-        if (!sgfp4_resolve_uniform_layout(layoutEnum, leafCount, leafEdge)) {
-            return false;
+        QuadNode leaves[256];
+        bool isMixed = (layoutEnum == kSGFP4LayoutMixed);
+        size_t blockHeadersStart = 0;
+        if (isMixed) {
+            // A 12-byte split map sits between sb_header and block headers
+            // (spec section 6.2). Bounds-check the map span, walk the
+            // quadtree, then validate strict tiling: leaf areas must sum to
+            // exactly 4096 (64*64) (T-02-02). Any malformed map fails decode.
+            if (kSGFP4SplitMapBytes > containerSize - (recStart + 4)) {
+                return false;
+            }
+            const uint32_t* map = reinterpret_cast<const uint32_t*>(container + recStart + 4);
+            if (!sgfp4_walk_quadtree(map, leafCount, leaves, 256)) {
+                return false;
+            }
+            int area = 0;
+            for (int i = 0; i < leafCount; ++i) {
+                area += leaves[i].n * leaves[i].n;
+            }
+            if (area != 64 * 64) {
+                return false;
+            }
+            blockHeadersStart = recStart + 4 + kSGFP4SplitMapBytes;
+        } else {
+            if (!sgfp4_resolve_uniform_layout(layoutEnum, leafCount, leafEdge)) {
+                return false;
+            }
+            blockHeadersStart = recStart + 4;
         }
-
-        size_t blockHeadersStart = recStart + 4;
         size_t blockHeadersBytes = static_cast<size_t>(leafCount) * 4;
         if (blockHeadersBytes > containerSize - blockHeadersStart) {
             return false;
@@ -302,7 +430,10 @@ inline bool dequant_sgfp4_container_cpu(const uint8_t* container, size_t contain
             int mode = 0;
             unpack_leaf_header(header, S, bias, mode);
 
-            int elementCount = leafEdge * leafEdge;
+            // MIXED leaves carry a per-leaf edge size from the split-map
+            // walk; uniform leaves all share the Table 3 edge size.
+            int n = isMixed ? leaves[leaf].n : leafEdge;
+            int elementCount = n * n;
             int wordsPerLeaf = (mode == 0) ? (elementCount / kSGFP4NibblesPerWord)
                                             : (elementCount / kSGFP4SymbolsPerWord);
             size_t payloadBytes = static_cast<size_t>(wordsPerLeaf) * 4;
@@ -313,7 +444,7 @@ inline bool dequant_sgfp4_container_cpu(const uint8_t* container, size_t contain
                 return false;
             }
 
-            sgfp4_decode_leaf_payload(reinterpret_cast<const uint32_t*>(container + payloadCursor), leafEdge, S,
+            sgfp4_decode_leaf_payload(reinterpret_cast<const uint32_t*>(container + payloadCursor), n, S,
                                       bias, mode, out + outCursor);
 
             outCursor += static_cast<size_t>(elementCount);
