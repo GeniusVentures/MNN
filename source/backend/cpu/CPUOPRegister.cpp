@@ -69,6 +69,7 @@ extern void ___CPUSvdCreator__OpType_Svd__();
 extern void ___CPULayerNormCreator__OpType_LayerNorm__();
 extern void ___CPUExternalConstCreator__OpType_Const__();
 extern void ___CPUExternalConstCreator__OpType_TrainableParam__();
+extern void ___CPUSGFP4DequantCreator__OpType_SGFP4Dequant__();
 
 #ifdef MNN_SUPPORT_RENDER
 extern void ___CPURasterAndInterpolateCreator__OpType_RasterAndInterpolate__();
@@ -149,6 +150,7 @@ ___CPUSvdCreator__OpType_Svd__();
 ___CPULayerNormCreator__OpType_LayerNorm__();
 ___CPUExternalConstCreator__OpType_Const__();
 ___CPUExternalConstCreator__OpType_TrainableParam__();
+___CPUSGFP4DequantCreator__OpType_SGFP4Dequant__();
 #ifdef MNN_SUPPORT_RENDER
 ___CPURasterAndInterpolateCreator__OpType_RasterAndInterpolate__();
 ___CPURasterDiffCreator__OpType_RasterDiff__();
