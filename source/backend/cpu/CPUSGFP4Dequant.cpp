@@ -6,6 +6,8 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
+#include <fstream>
+
 #include "CPUSGFP4Dequant.hpp"
 #include "MNN/SGFP4DequantUtils.hpp"
 #include "backend/cpu/CPUBackend.hpp"
@@ -14,6 +16,29 @@
 #include "core/OpCommonUtils.hpp"
 
 namespace MNN {
+
+namespace {
+
+// FileLoader::size() only reflects bytes already pulled into its internal
+// cache blocks by the parameterless, whole-file FileLoader::read(); it is
+// NOT a filesystem stat and stays 0 for the offset+size-bounded read used
+// here (FileLoader::offset()/read(buffer,size)). A real on-disk size probe
+// is required to bound the DoS check below (T-01-04) against the sidecar's
+// actual size before attempting an allocation of the declared `size`.
+bool queryFileSize(const std::string& path, size_t& outSize) {
+    std::ifstream probe(path, std::ios::binary | std::ios::ate);
+    if (!probe.is_open()) {
+        return false;
+    }
+    auto pos = probe.tellg();
+    if (pos < 0) {
+        return false;
+    }
+    outSize = static_cast<size_t>(pos);
+    return true;
+}
+
+} // namespace
 
 ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) {
     auto param = mOp->main_as_SGFP4DequantParam();
@@ -33,20 +58,25 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
         return INVALID_VALUE;
     }
 
-    // Construct with init=true so valid()/size() are usable immediately,
-    // mirroring Interpreter.cpp's FileLoader(file, true) + valid() pattern.
-    FileLoader loader(mOp->externalPath()->c_str(), true);
-    if (!loader.valid()) {
+    // T-01-04: bound the declared size against the sidecar's real on-disk
+    // size BEFORE allocating mContainer, so an attacker-controlled
+    // external()[1] can't force an oversized allocation against a small
+    // (or missing) file.
+    size_t fileSize = 0;
+    if (!queryFileSize(mOp->externalPath()->str(), fileSize)) {
         return NOT_SUPPORT;
     }
-
-    // T-01-04: never trust a declared size that exceeds the sidecar's own
-    // size (DoS guard against an oversized external()[1]).
-    size_t fileSize   = loader.size();
     size_t offsetSize = static_cast<size_t>(offset);
     size_t readSize   = static_cast<size_t>(size);
     if (offsetSize > fileSize || readSize > fileSize - offsetSize) {
         return INVALID_VALUE;
+    }
+
+    // Construct with init=true so valid() is usable immediately, mirroring
+    // Interpreter.cpp's FileLoader(file, true) + valid() pattern.
+    FileLoader loader(mOp->externalPath()->c_str(), true);
+    if (!loader.valid()) {
+        return NOT_SUPPORT;
     }
 
     mContainer.resize(readSize);
