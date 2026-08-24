@@ -18,7 +18,7 @@
 - [x] **SGV2-04**: Uniform-layout record walk (LAYOUT_UNIFORM_64/32/16/8, LAYOUT_FULL_4x4) with deterministic leaf count/geometry, row-major raster leaf order, and normative per-leaf payload packing (n²/8 words mode 0, n²/16 words mode 1)
 - [x] **SGV2-05**: New FlatBuffers op descriptor carrying only `{magic, offset, size}`, with the SGFP4 v2 container stored in a `.mnn.weight`-style external sidecar file (mirroring `Convolution2D.external`) and loaded via `FileLoader` — no macroblock/quadtree typed fields in the schema
 - [x] **SGV2-06**: New dedicated CPU Execution class parses the container internally and produces a decoded float tensor, additive to (not replacing) the existing E2M1 `CPUFP4Dequant`
-- [ ] **SGV2-07**: Minimal Python encoder produces uniform-layout v2 containers (reference round-to-nearest affine encode + per-block mode selection), and CPU unit tests validate round-trip decode for both modes across all uniform layouts via `./run_test.out`
+- [x] **SGV2-07**: Minimal Python encoder produces uniform-layout v2 containers (reference round-to-nearest affine encode + per-block mode selection), and CPU unit tests validate round-trip decode for both modes across all uniform layouts via `./run_test.out`
 
 ### Adaptive Quadtree Layout — CPU, LAYOUT_MIXED
 
