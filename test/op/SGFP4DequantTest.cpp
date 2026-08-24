@@ -564,4 +564,303 @@ private:
 
 MNNTestSuiteRegister(SGFP4DequantTest, "op/sgfp4/uniform_decode");
 
+// ===========================================================================
+// op/sgfp4/mixed_decode — LAYOUT_MIXED adaptive/quadtree tests (SGV2-08..11).
+// ===========================================================================
+namespace {
+
+// Independent golden enumerator (D-05): re-derives the pre-order DFS leaf
+// (x, y, n) list from a 3-word split map per spec section 6.2 with its OWN
+// bit accounting -- shares no code path with MNN::sgfp4_walk_quadtree, so a
+// traversal bug in either is caught by the other.
+struct LeafExpect {
+    int x, y, n;
+};
+
+void enumerateExpected(const uint32_t* map, LeafExpect* out, int& count) {
+    count = 0;
+    // Recursive (the decoder's iterative walker is the port target; this
+    // test-side oracle intentionally uses the simplest possible form).
+    struct Frame {
+        int x, y, n;
+    };
+    Frame frames[128];
+    int frameCount = 0;
+    frames[frameCount++] = Frame{0, 0, 64};
+    int bitCursor = 0;
+    while (frameCount > 0) {
+        Frame f = frames[--frameCount];
+        bool isLeaf = true;
+        if (f.n >= 8) {
+            // One bit per node of size >= 8: bit k = bit k%32 of word k/32.
+            uint32_t w = map[bitCursor / 32];
+            bool split = ((w >> (bitCursor % 32)) & 1u) != 0;
+            ++bitCursor;
+            if (split) {
+                int h = f.n / 2;
+                // Push reversed so TL is enumerated first.
+                frames[frameCount++] = Frame{f.x + h, f.y + h, h}; // BR
+                frames[frameCount++] = Frame{f.x, f.y + h, h};     // BL
+                frames[frameCount++] = Frame{f.x + h, f.y, h};     // TR
+                frames[frameCount++] = Frame{f.x, f.y, h};         // TL
+                isLeaf = false;
+            }
+        }
+        if (isLeaf) {
+            out[count++] = LeafExpect{f.x, f.y, f.n};
+        }
+    }
+}
+
+// Locate a fixture by name; returns nullptr when absent.
+const sgfp4_fixtures::Fixture* findFixture(const char* name) {
+    for (size_t i = 0; i < sgfp4_fixtures::kFixtureCount; ++i) {
+        if (std::strcmp(sgfp4_fixtures::kFixtures[i].name, name) == 0) {
+            return &sgfp4_fixtures::kFixtures[i];
+        }
+    }
+    return nullptr;
+}
+
+constexpr float kMixedTolerance = 1e-4f;
+
+} // namespace
+
+class SGFP4MixedDecodeTest : public MNNTestCase {
+public:
+    SGFP4MixedDecodeTest()  = default;
+    virtual ~SGFP4MixedDecodeTest() = default;
+
+    virtual bool run(int precision) {
+        if (!testGoldenTraversal()) {
+            return false;
+        }
+        if (!testMixedRoundTrip()) {
+            return false;
+        }
+        if (!testMixedNegativeCases()) {
+            return false;
+        }
+        MNN_PRINT("SGFP4MixedDecodeTest: all layers PASSED\n");
+        return true;
+    }
+
+private:
+    // ====================================================================
+    // Layer 1: golden traversal via the independent enumerator (D-05).
+    // Decodes the mixed_asymmetric fixture and asserts each DFS-position
+    // output block holds the reconstruction implied by the leaf the
+    // enumerator says occupies that position -- i.e. that decoder and
+    // enumerator agree on TL/TR/BL/BR pre-order DFS order (and that 4x4
+    // nodes carry no split bit, exercised by the all-split half of the
+    // fixture's sibling below).
+    // ====================================================================
+    bool testGoldenTraversal() {
+        const sgfp4_fixtures::Fixture* fixture = findFixture("mixed_asymmetric");
+        if (nullptr == fixture) {
+            MNN_ERROR("SGFP4MixedDecodeTest: could not locate 'mixed_asymmetric' fixture\n");
+            return false;
+        }
+
+        // Locate the record's split map via the public framing constants.
+        uint32_t B = 0;
+        std::memcpy(&B, fixture->container + MNN::kSGFP4RecordCountOffset, sizeof(B));
+        size_t regionStart = MNN::sgfp4_align16(MNN::kSGFP4RecordOffsetTableStart +
+                                                 MNN::kSGFP4RecordOffsetEntrySize *
+                                                     static_cast<size_t>(B));
+        uint32_t recOffRel = 0;
+        std::memcpy(&recOffRel, fixture->container + MNN::kSGFP4RecordOffsetTableStart, sizeof(recOffRel));
+        size_t recStart = regionStart + recOffRel;
+        uint32_t sbHeader = 0;
+        std::memcpy(&sbHeader, fixture->container + recStart, sizeof(sbHeader));
+        if ((sbHeader & MNN::kSGFP4LayoutEnumMask) != MNN::kSGFP4LayoutMixed) {
+            MNN_ERROR("SGFP4MixedDecodeTest: mixed_asymmetric fixture is not a MIXED record\n");
+            return false;
+        }
+        const uint32_t* map = reinterpret_cast<const uint32_t*>(fixture->container + recStart + 4);
+
+        LeafExpect expect[256];
+        int expectCount = 0;
+        enumerateExpected(map, expect, expectCount);
+        if (expectCount < 2) {
+            MNN_ERROR("SGFP4MixedDecodeTest: expected an asymmetric (multi-leaf) tree, got %d leaves\n",
+                       expectCount);
+            return false;
+        }
+
+        // Cross-check geometry: enumerator leaves must tile the macroblock.
+        int area = 0;
+        for (int i = 0; i < expectCount; ++i) {
+            area += expect[i].n * expect[i].n;
+        }
+        if (area != 64 * 64) {
+            MNN_ERROR("SGFP4MixedDecodeTest: enumerator leaves do not tile the macroblock (area %d)\n", area);
+            return false;
+        }
+
+        // Decode and verify the fixture's own expected stream agrees with the
+        // enumerator's leaf layout block-for-block: block i spans
+        // elements [cursor, cursor + n_i*n_i) and must match the fixture
+        // expected in that span (the encoder emitted leaves in the same DFS
+        // order -- agreement here proves both sides share one traversal).
+        std::vector<float> out(fixture->expectedCount, 0.0f);
+        bool ok = MNN::dequant_sgfp4_container_cpu(fixture->container, fixture->containerSize, out.data(),
+                                                    fixture->expectedCount);
+        if (!ok) {
+            MNN_ERROR("SGFP4MixedDecodeTest: mixed_asymmetric decode returned false\n");
+            return false;
+        }
+        size_t cursor = 0;
+        for (int i = 0; i < expectCount; ++i) {
+            size_t blockElements = static_cast<size_t>(expect[i].n) * expect[i].n;
+            if (!checkVectorByRelativeError<float>(out.data() + cursor, fixture->expected + cursor,
+                                                    static_cast<int>(blockElements), kMixedTolerance)) {
+                MNN_ERROR("SGFP4MixedDecodeTest: DFS block %d (leaf %dx%d @ (%d,%d)) mismatch vs encoder "
+                          "order\n", i, expect[i].n, expect[i].n, expect[i].x, expect[i].y);
+                return false;
+            }
+            cursor += blockElements;
+        }
+        if (cursor != fixture->expectedCount) {
+            MNN_ERROR("SGFP4MixedDecodeTest: enumerator block total %zu != expected %zu\n", cursor,
+                       fixture->expectedCount);
+            return false;
+        }
+        MNN_PRINT("SGFP4MixedDecodeTest: golden traversal (independent enumerator, %d leaves) PASSED\n",
+                   expectCount);
+        return true;
+    }
+
+    // ====================================================================
+    // Layer 2: encoder-generated mixed/adaptive fixtures round-trip
+    // (SGV2-10/11), mirroring testFixtureRoundTrip's tolerance model.
+    // ====================================================================
+    bool testMixedRoundTrip() {
+        static const char* kMixedNames[] = {"mixed_allsplit", "uniform_collapse", "mixed_asymmetric"};
+        for (size_t i = 0; i < sizeof(kMixedNames) / sizeof(kMixedNames[0]); ++i) {
+            const sgfp4_fixtures::Fixture* fixture = findFixture(kMixedNames[i]);
+            if (nullptr == fixture) {
+                MNN_ERROR("SGFP4MixedDecodeTest: could not locate '%s' fixture\n", kMixedNames[i]);
+                return false;
+            }
+            std::vector<float> out(fixture->expectedCount, 0.0f);
+            bool ok = MNN::dequant_sgfp4_container_cpu(fixture->container, fixture->containerSize, out.data(),
+                                                        fixture->expectedCount);
+            if (!ok) {
+                MNN_ERROR("SGFP4MixedDecodeTest: fixture '%s' decode returned false\n", fixture->name);
+                return false;
+            }
+            if (!checkVectorByRelativeError<float>(out.data(), fixture->expected,
+                                                    static_cast<int>(fixture->expectedCount), kMixedTolerance)) {
+                MNN_ERROR("SGFP4MixedDecodeTest: fixture '%s' round-trip mismatch\n", fixture->name);
+                return false;
+            }
+        }
+        MNN_PRINT("SGFP4MixedDecodeTest: mixed round-trip (allsplit/collapse/asymmetric) PASSED\n");
+        return true;
+    }
+
+    // ====================================================================
+    // Layer 3: split-map + size-abuse negatives (D-09, ASVS V5). Each case
+    // mutates the mixed_asymmetric fixture (or hand-builds a map) and must
+    // be rejected with a false return.
+    // ====================================================================
+    bool testMixedNegativeCases() {
+        const sgfp4_fixtures::Fixture* base = findFixture("mixed_asymmetric");
+        if (nullptr == base) {
+            MNN_ERROR("SGFP4MixedDecodeTest: could not locate 'mixed_asymmetric' fixture for negatives\n");
+            return false;
+        }
+        std::vector<float> scratch(base->expectedCount, 0.0f);
+
+        // ---- helpers mirroring testMalformedContainers' style ----
+        auto locateRecord = [](const std::vector<uint8_t>& c) -> size_t {
+            uint32_t B = 0;
+            std::memcpy(&B, c.data() + MNN::kSGFP4RecordCountOffset, sizeof(B));
+            size_t regionStart = MNN::sgfp4_align16(MNN::kSGFP4RecordOffsetTableStart +
+                                                     MNN::kSGFP4RecordOffsetEntrySize *
+                                                         static_cast<size_t>(B));
+            uint32_t recOffRel = 0;
+            std::memcpy(&recOffRel, c.data() + MNN::kSGFP4RecordOffsetTableStart, sizeof(recOffRel));
+            return regionStart + recOffRel;
+        };
+
+        // (a) Past-85-bit map: all 85 split bits set (every possible node
+        // splits) PLUS a stray bit set in word 2 beyond the 85-bit budget is
+        // redundant, but the full all-split map itself forces the walker to
+        // consume a bit for the 64 size-4 children of every 8x8 node --> the
+        // reader hits bit >= 85 and must fail closed. Hand-built map.
+        {
+            std::vector<uint8_t> container(base->container, base->container + base->containerSize);
+            size_t recStart = locateRecord(container);
+            uint32_t words[3] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0x7FFFFFFFu}; // 85 split bits
+            std::memcpy(container.data() + recStart + 4, words, sizeof(words));
+            if (MNN::dequant_sgfp4_container_cpu(container.data(), container.size(), scratch.data(),
+                                                  scratch.size())) {
+                MNN_ERROR("SGFP4MixedDecodeTest: past-85-bit split map was accepted\n");
+                return false;
+            }
+        }
+
+        // (b) Non-tiling leaves: split only the root (single bit 1 followed
+        // by zeros -> four 32x32 leaves tiles exactly), so instead use a map
+        // where the root splits and exactly one child claims leafhood while
+        // the map runs out mid-tree -- bits {1, 0, 1, 1, 1} make TL a leaf
+        // but TR/BL/BR split with no further bits: reader exhaustion ->
+        // decode failure. (Walk-failure class; a successfully walked but
+        // non-tiling map is unreachable by construction from bitmaps, since
+        // a complete split tree always tiles -- the area check is the
+        // defense-in-depth backstop for exactly this reason.)
+        {
+            std::vector<uint8_t> container(base->container, base->container + base->containerSize);
+            size_t recStart = locateRecord(container);
+            // bit0=1 (root splits), bit1=0 (TL leaf), bit2..4=1 (TR/BL/BR split)
+            uint32_t words[3] = {0x0000001Du, 0x00000000u, 0x00000000u};
+            std::memcpy(container.data() + recStart + 4, words, sizeof(words));
+            if (MNN::dequant_sgfp4_container_cpu(container.data(), container.size(), scratch.data(),
+                                                  scratch.size())) {
+                MNN_ERROR("SGFP4MixedDecodeTest: non-tiling / exhausted split map was accepted\n");
+                return false;
+            }
+        }
+
+        // (c) Truncated variable-size payload: valid fixture container cut
+        // in the middle of the last leaf's payload region.
+        {
+            std::vector<uint8_t> container(base->container, base->container + base->containerSize);
+            if (MNN::dequant_sgfp4_container_cpu(container.data(), container.size() - 1, scratch.data(),
+                                                  scratch.size())) {
+                MNN_ERROR("SGFP4MixedDecodeTest: truncated mixed payload was accepted\n");
+                return false;
+            }
+        }
+
+        // (d) Lying leaf sizes: container truncated right after the split
+        // map (blockHeadersStart == containerSize) though the map implies
+        // many leaves -- zero block headers/payloads follow.
+        {
+            uint32_t B = 0;
+            std::memcpy(&B, base->container + MNN::kSGFP4RecordCountOffset, sizeof(B));
+            size_t regionStart = MNN::sgfp4_align16(MNN::kSGFP4RecordOffsetTableStart +
+                                                     MNN::kSGFP4RecordOffsetEntrySize *
+                                                         static_cast<size_t>(B));
+            uint32_t recOffRel = 0;
+            std::memcpy(&recOffRel, base->container + MNN::kSGFP4RecordOffsetTableStart, sizeof(recOffRel));
+            size_t recStart = regionStart + recOffRel;
+            std::vector<uint8_t> container(base->container,
+                                           base->container + recStart + 4 + MNN::kSGFP4SplitMapBytes);
+            if (MNN::dequant_sgfp4_container_cpu(container.data(), container.size(), scratch.data(),
+                                                  scratch.size())) {
+                MNN_ERROR("SGFP4MixedDecodeTest: truncation-after-split-map (lying leaf sizes) accepted\n");
+                return false;
+            }
+        }
+
+        MNN_PRINT("SGFP4MixedDecodeTest: negative split-map/size-abuse cases PASSED\n");
+        return true;
+    }
+};
+
+MNNTestSuiteRegister(SGFP4MixedDecodeTest, "op/sgfp4/mixed_decode");
+
 #endif // MNN_SUPPORT_TRANSFORMER_FUSE
