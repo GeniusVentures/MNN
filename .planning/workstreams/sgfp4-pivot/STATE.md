@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 2 — Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)
+current_phase: 3 — Vulkan LAYOUT_MIXED Port (GLSL walker)
 current_plan: Not started
 status: executing
-stopped_at: Plan 01-02 complete; Phase 01 fully complete (2/2 plans)
-last_updated: "2026-08-24T21:59:55.440Z"
+stopped_at: Phase 02 fully complete (2/2 plans: MIXED CPU decode + adaptive encoder/tests)
+last_updated: "2026-08-24T22:45:00.000Z"
 last_activity: 2026-08-24
-last_activity_desc: Phase 2 planning complete — 2 plans ready
+last_activity_desc: Phase 2 execution complete — 2/2 plans (SGV2-08..11)
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 2
   completed_plans: 2
-  percent: 25
+  percent: 50
 ---
 
 # Project State
@@ -28,14 +28,14 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-**Status:** Ready to execute
-**Current Phase:** 2 — Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)
-**Last Activity:** 2026-08-24 — Phase 2 planning complete
-**Last Activity Description:** Phase 2 planning complete — 2 plans ready
+**Status:** Phase 2 executed — awaiting verify
+**Current Phase:** 3 — Vulkan LAYOUT_MIXED Port (GLSL walker)
+**Last Activity:** 2026-08-24 — Phase 2 execution complete (2/2 plans)
+**Last Activity Description:** Phase 2 execution complete — 2/2 plans (SGV2-08..11)
 
 ## Progress
 
-**Phases Complete:** 0/4
+**Phases Complete:** 2/4
 **Current Plan:** Not started
 
 ## Accumulated Context
@@ -49,16 +49,16 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ### Pending Todos
 
-- Phase 01 complete (both plans); next: `/gsd-verify-work` for Phase 01, then plan Phase 2 (Vulkan port groundwork per ROADMAP.md)
+- Phase 02 executed (both plans); next: `/gsd-verify-work` for Phase 02, then plan Phase 3 (Vulkan LAYOUT_MIXED port per ROADMAP.md)
 - `test/op/FP4ModelTest.cpp` (pre-existing, unrelated dead code from `milestone` workstream commit `cffaf4bd`) blocks a from-scratch `run_test.out` build; see `01-affine-dual-mode-decode-core-cpu-uniform-layouts/deferred-items.md`. Recommend the `milestone` workstream's Phase 4 plan 04-02 fix or remove it.
 - Open, non-blocking: whether to execute the `milestone` workstream's Phase 4 plan 04-02 before/alongside this work
 
 ## Session Continuity
 
-**Last session:** 2026-08-24T19:20:35.692Z
+**Last session:** 2026-08-24T22:45:00.000Z
 
-**Stopped At:** Plan 01-02 complete; Phase 01 fully complete (2/2 plans)
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/01-affine-dual-mode-decode-core-cpu-uniform-layouts/01-02-SUMMARY.md
+**Stopped At:** Phase 02 fully complete (2/2 plans: MIXED CPU decode + adaptive encoder/tests)
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/02-adaptive-quadtree-layout-cpu-layout-mixed/02-02-SUMMARY.md
 
 ## Performance Metrics
 
@@ -66,8 +66,14 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 |-------|------|----------|-------|
 | Phase 01 P01 | 20min | 3 tasks | 11 files |
 | Phase 01 P02 | 40min | 2 tasks | 4 files |
+| Phase 02 P01 | 25min | 2 tasks | 2 files |
+| Phase 02 P02 | 35min | 3 tasks | 3 files |
 
 ## Decisions
+
+- [Phase 02]: Encoder subdivision hysteresis blocks noise-scaling splits — selftest/fixtures use constructive ramp tiles (full ramp amp 60 = all-split → FULL_4X4 collapse; TL-quadrant ramp amp 12 = asymmetric MIXED)
+- [Phase 02]: Spec §6.3 uniform collapse is normative — all-split and constant tiles MUST emit uniform enums (5 / 0), not MIXED; asserted in selftest
+- [Phase 02]: Split-map negatives: a complete bitmap always tiles exactly, so area!=4096 is defense-in-depth (unreachable from pure bitmaps); observable negatives are bit-exhaustion (85-bit cap) and truncation cases
 
 - [Phase 01]: SGFP4 decode order is fully sequential/linear (records then leaves); Plan 01-02 encoder must match this byte order
 - [Phase 01]: Manual minimal append to ShapeRegister.cpp/CPUOPRegister.cpp instead of full register.py regen, since Windows directory ordering reorders the whole file
