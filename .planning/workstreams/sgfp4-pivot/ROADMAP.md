@@ -104,10 +104,11 @@ Plans:
   3. Mixed/adaptive containers round-trip encode→decode within the encoder's per-level error thresholds, verified via `./run_test.out`
   4. Variable per-leaf payload sizes and 16-byte record/payload alignment are honored — a leaf of edge size n consumes exactly n²/8 (mode 0) or n²/16 (mode 1) little-endian uint32 words
 
-**Plans**: ~2 (not yet broken down)
+**Plans**: 2 plans
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 2 to break down)
+- [ ] 02-01-PLAN.md — LAYOUT_MIXED decode core: split-map constants + iterative fixed-size-stack walker + MIXED branch in `dequant_sgfp4_container_cpu()` (SGV2-08, SGV2-09)
+- [ ] 02-02-PLAN.md — Error-driven quadtree encoder (`subdivide_macroblock`/`build_split_map`/`classify_layout`) + committed mixed fixtures + golden-traversal/mixed round-trip/negative split-map tests (SGV2-10, SGV2-11)
 
 ### Phase 3: Vulkan Decode — Uniform Layouts
 
