@@ -109,6 +109,18 @@ table Convolution2D {
     external:[int64]; // [offset, weight_bytes_size, bias_bytes_size]
 }
 
+// SGFP4 v2 container descriptor: the container's internal byte layout (magic
+// framing, macroblock records, leaf headers/payloads) is parsed entirely by
+// the CPUSGFP4Dequant Execution from the external sidecar bytes; this table
+// carries ONLY the minimal locked {magic, offset, size} descriptor plus the
+// output tensor geometry (manifest-resident per spec section 6.1). No
+// macroblock/quadtree/leaf/split-map fields belong here.
+table SGFP4DequantParam {
+    magic:uint32;     // 'SGF4' little-endian sanity value
+    external:[int64]; // [offset, size] into the .mnn.weight sidecar
+    dims:[int];        // output tensor geometry, e.g. [O, I]
+}
+
 table Convolution3D {
     common:Convolution3DCommon;
     weight:[float];
