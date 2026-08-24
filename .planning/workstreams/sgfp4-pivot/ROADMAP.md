@@ -145,7 +145,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete   | 2026-08-24 |
+| 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete    | 2026-08-24 |
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 0/~2 | Not started | — |
 | 3. Vulkan Decode — Uniform Layouts | 0/~2 | Not started | — |
 | 4. Vulkan Decode — Adaptive Quadtree | 0/~1-2 | Not started | — |
