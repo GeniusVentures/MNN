@@ -1,6 +1,20 @@
 ---
-workstream: sgfp4-pivot
-created: 2026-08-22
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+current_phase: 01
+current_plan: 2
+status: executing
+stopped_at: Plan 01-01 complete; Plan 01-02 not yet started
+last_updated: "2026-08-24T18:42:00.000Z"
+last_activity: 2026-08-24
+last_activity_desc: Plan 01-01 (decode core + container plumbing) complete
+progress:
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
@@ -14,15 +28,15 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-**Status:** Roadmap defined, Phase 1 not yet planned
-**Current Phase:** 1 (Affine Dual-Mode Decode Core — CPU, Uniform Layouts)
-**Last Activity:** 2026-08-22
-**Last Activity Description:** ROADMAP.md + REQUIREMENTS.md created (4 phases, 16 v1 requirements, SGV2-01..16)
+**Status:** Executing Phase 01
+**Current Phase:** 01
+**Last Activity:** 2026-08-24 — Plan 01-01 (decode core + container plumbing) complete
+**Last Activity Description:** Plan 01-01 (Schema/shape + SGFP4DequantUtils.hpp decode core + CPUSGFP4Dequant Execution) executed; Plan 01-02 (encoder + round-trip tests) next
 
 ## Progress
 
 **Phases Complete:** 0/4
-**Current Plan:** N/A — Phase 1 plan(s) not yet broken down
+**Current Plan:** 2 of 2 in Phase 01
 
 ## Accumulated Context
 
@@ -35,10 +49,23 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ### Pending Todos
 
-- Plan Phase 1 (run /gsd-plan-phase 1 or equivalent)
+- Execute Plan 01-02 (encoder + round-trip tests, SGV2-07)
+- Recommend a full `cmake --build` on a properly initialized MSVC or Linux toolchain to close the per-TU-compile-only gap noted in 01-01-SUMMARY.md's Issues Encountered
 - Open, non-blocking: whether to execute the `milestone` workstream's Phase 4 plan 04-02 before/alongside this work
 
 ## Session Continuity
 
-**Stopped At:** Roadmap + requirements created, Phase 1 planning next
-**Resume File:** None
+**Stopped At:** Plan 01-01 complete (schema + SGFP4DequantUtils.hpp decode core + CPUSGFP4Dequant Execution); Plan 01-02 not yet started
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/01-affine-dual-mode-decode-core-cpu-uniform-layouts/01-01-SUMMARY.md
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 01 P01 | 20min | 3 tasks | 11 files |
+
+## Decisions
+
+- [Phase 01]: SGFP4 decode order is fully sequential/linear (records then leaves); Plan 01-02 encoder must match this byte order
+- [Phase 01]: Manual minimal append to ShapeRegister.cpp/CPUOPRegister.cpp instead of full register.py regen, since Windows directory ordering reorders the whole file
+- [Phase 01]: Pitfall 2 resolved: buffer-based Module::load does not auto-set externalPath; Plan 01-02 tests must call rtmgr->setExternalFile() before Module::load(buffer,...)

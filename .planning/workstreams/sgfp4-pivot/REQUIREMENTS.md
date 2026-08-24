@@ -12,12 +12,12 @@
 
 ### Affine Dual-Mode Decode Core — CPU, Uniform Layouts
 
-- [ ] **SGV2-01**: Affine reconstruction `w = S·c + bias` is implemented for both code modes — FP4_AFFINE (mode 0, 4-bit two's-complement, codes [-8,7]) and T158_AFFINE (mode 1, ternary, codes {-1,0,+1}, with reserved symbol `11` decoded as 0)
-- [ ] **SGV2-02**: FP16 (IEEE 754 binary16) scale+bias unpack from a packed uint32 in packHalf2x16 order (S upper 16 bits, bias lower 16 bits), including the v2 leaf-header 12-bit truncated-bias recovery `S=half(h>>16)`, `bias=half(h & 0xFFF0)`, `flags=h & 0xF`
-- [ ] **SGV2-03**: v2 self-framed stream parsing — magic `'SGF4'`, version `0x02`, `B` record count, 16-byte-aligned little-endian record-offset table, and per-record `sb_header` layout enum (bits 0–2)
-- [ ] **SGV2-04**: Uniform-layout record walk (LAYOUT_UNIFORM_64/32/16/8, LAYOUT_FULL_4x4) with deterministic leaf count/geometry, row-major raster leaf order, and normative per-leaf payload packing (n²/8 words mode 0, n²/16 words mode 1)
-- [ ] **SGV2-05**: New FlatBuffers op descriptor carrying only `{magic, offset, size}`, with the SGFP4 v2 container stored in a `.mnn.weight`-style external sidecar file (mirroring `Convolution2D.external`) and loaded via `FileLoader` — no macroblock/quadtree typed fields in the schema
-- [ ] **SGV2-06**: New dedicated CPU Execution class parses the container internally and produces a decoded float tensor, additive to (not replacing) the existing E2M1 `CPUFP4Dequant`
+- [x] **SGV2-01**: Affine reconstruction `w = S·c + bias` is implemented for both code modes — FP4_AFFINE (mode 0, 4-bit two's-complement, codes [-8,7]) and T158_AFFINE (mode 1, ternary, codes {-1,0,+1}, with reserved symbol `11` decoded as 0)
+- [x] **SGV2-02**: FP16 (IEEE 754 binary16) scale+bias unpack from a packed uint32 in packHalf2x16 order (S upper 16 bits, bias lower 16 bits), including the v2 leaf-header 12-bit truncated-bias recovery `S=half(h>>16)`, `bias=half(h & 0xFFF0)`, `flags=h & 0xF`
+- [x] **SGV2-03**: v2 self-framed stream parsing — magic `'SGF4'`, version `0x02`, `B` record count, 16-byte-aligned little-endian record-offset table, and per-record `sb_header` layout enum (bits 0–2)
+- [x] **SGV2-04**: Uniform-layout record walk (LAYOUT_UNIFORM_64/32/16/8, LAYOUT_FULL_4x4) with deterministic leaf count/geometry, row-major raster leaf order, and normative per-leaf payload packing (n²/8 words mode 0, n²/16 words mode 1)
+- [x] **SGV2-05**: New FlatBuffers op descriptor carrying only `{magic, offset, size}`, with the SGFP4 v2 container stored in a `.mnn.weight`-style external sidecar file (mirroring `Convolution2D.external`) and loaded via `FileLoader` — no macroblock/quadtree typed fields in the schema
+- [x] **SGV2-06**: New dedicated CPU Execution class parses the container internally and produces a decoded float tensor, additive to (not replacing) the existing E2M1 `CPUFP4Dequant`
 - [ ] **SGV2-07**: Minimal Python encoder produces uniform-layout v2 containers (reference round-to-nearest affine encode + per-block mode selection), and CPU unit tests validate round-trip decode for both modes across all uniform layouts via `./run_test.out`
 
 ### Adaptive Quadtree Layout — CPU, LAYOUT_MIXED
@@ -63,12 +63,12 @@
 
 | Requirement | Category | Phase | Status |
 |-------------|----------|-------|--------|
-| SGV2-01 | Affine dual-mode math | Phase 1 | Pending |
-| SGV2-02 | FP16 param packing | Phase 1 | Pending |
-| SGV2-03 | v2 stream framing | Phase 1 | Pending |
-| SGV2-04 | Uniform record walk | Phase 1 | Pending |
-| SGV2-05 | Schema descriptor + external sidecar | Phase 1 | Pending |
-| SGV2-06 | CPU Execution class | Phase 1 | Pending |
+| SGV2-01 | Affine dual-mode math | Phase 1 | Complete |
+| SGV2-02 | FP16 param packing | Phase 1 | Complete |
+| SGV2-03 | v2 stream framing | Phase 1 | Complete |
+| SGV2-04 | Uniform record walk | Phase 1 | Complete |
+| SGV2-05 | Schema descriptor + external sidecar | Phase 1 | Complete |
+| SGV2-06 | CPU Execution class | Phase 1 | Complete |
 | SGV2-07 | Minimal encoder + round-trip tests | Phase 1 | Pending |
 | SGV2-08 | Quadtree split-map parse | Phase 2 | Pending |
 | SGV2-09 | Variable per-leaf decode | Phase 2 | Pending |
@@ -81,6 +81,7 @@
 | SGV2-16 | CPU/Vulkan mixed parity | Phase 4 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 16 total
 - Mapped to phases: 16 (100%)
 - Phase 1: 7 requirements (SGV2-01 through SGV2-07)
