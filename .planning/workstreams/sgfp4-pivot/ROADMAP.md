@@ -67,7 +67,7 @@ and the spec `.planning/sgfp4-arxiv-v2.txt` (Sections 3, 4, 6).
 ## Phases
 
 - [x] **Phase 1: Affine Dual-Mode Decode Core (CPU, Uniform Layouts)** — Prove `w = S·c + bias` for FP4_AFFINE + T158_AFFINE, v2 stream framing, uniform-layout record walk, and external-sidecar container plumbing on CPU (completed 2026-08-24)
-- [ ] **Phase 2: Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)** — Extend CPU decode to the pre-order-DFS quadtree split-map and add the error-driven encoder (mode selection ε=0.10, outlier veto)
+- [x] **Phase 2: Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)** — Extend CPU decode to the pre-order-DFS quadtree split-map and add the error-driven encoder (mode selection ε=0.10, outlier veto) (completed 2026-08-24)
 - [x] **Phase 3: Vulkan Decode — Uniform Layouts** — Port uniform-layout SGFP4 v2 decode to a Vulkan GLSL Execution with CPU/Vulkan parity (completed 2026-08-25)
 - [ ] **Phase 4: Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)** — Extend the Vulkan shader to walk the quadtree split-map, completing GPU parity with the CPU reference
 
@@ -104,15 +104,15 @@ Plans:
   3. Mixed/adaptive containers round-trip encode→decode within the encoder's per-level error thresholds, verified via `./run_test.out`
   4. Variable per-leaf payload sizes and 16-byte record/payload alignment are honored — a leaf of edge size n consumes exactly n²/8 (mode 0) or n²/16 (mode 1) little-endian uint32 words
 
-**Plans**: 2 plans
+**Plans**: 2/2 plans complete
 Plans:
 **Wave 1**
 
-- [ ] 02-01-PLAN.md — LAYOUT_MIXED decode core: split-map constants + iterative fixed-size-stack walker + MIXED branch in `dequant_sgfp4_container_cpu()` (SGV2-08, SGV2-09)
+- [x] 02-01-PLAN.md — LAYOUT_MIXED decode core: split-map constants + iterative fixed-size-stack walker + MIXED branch in `dequant_sgfp4_container_cpu()` (SGV2-08, SGV2-09)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02-02-PLAN.md — Error-driven quadtree encoder (`subdivide_macroblock`/`build_split_map`/`classify_layout`) + committed mixed fixtures + golden-traversal/mixed round-trip/negative split-map tests (SGV2-10, SGV2-11)
+- [x] 02-02-PLAN.md — Error-driven quadtree encoder (`subdivide_macroblock`/`build_split_map`/`classify_layout`) + committed mixed fixtures + golden-traversal/mixed round-trip/negative split-map tests (SGV2-10, SGV2-11)
 
 ### Phase 3: Vulkan Decode — Uniform Layouts
 
@@ -164,6 +164,6 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete    | 2026-08-24 |
-| 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 0/~2 | Not started | — |
+| 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 2/2 | Complete    | 2026-08-24 |
 | 3. Vulkan Decode — Uniform Layouts | 4/4 | Complete    | 2026-08-25 |
 | 4. Vulkan Decode — Adaptive Quadtree | 0/~1-2 | Not started | — |

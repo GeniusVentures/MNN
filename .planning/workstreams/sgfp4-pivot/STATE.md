@@ -35,7 +35,7 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Progress
 
-**Phases Complete:** 2/4
+**Phases Complete:** 3/4
 **Current Plan:** Not started
 
 ## Accumulated Context
@@ -49,9 +49,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ### Pending Todos
 
-- Phase 02 executed (both plans); next: `/gsd-verify-work` for Phase 02, then plan Phase 3 (Vulkan LAYOUT_MIXED port per ROADMAP.md)
+- Phase 4 (Vulkan LAYOUT_MIXED) is next: run `/gsd-plan-phase` for Phase 4 per ROADMAP.md
 - `test/op/FP4ModelTest.cpp` (pre-existing, unrelated dead code from `milestone` workstream commit `cffaf4bd`) blocks a from-scratch `run_test.out` build; see `01-affine-dual-mode-decode-core-cpu-uniform-layouts/deferred-items.md`. Recommend the `milestone` workstream's Phase 4 plan 04-02 fix or remove it.
 - Open, non-blocking: whether to execute the `milestone` workstream's Phase 4 plan 04-02 before/alongside this work
+- Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — Phase 2 completion is evidenced by 02-01/02-02-SUMMARY.md and commits `1c9e5633`/`b2a83969`; run `/gsd-verify-work` retroactively if a formal verification artifact is wanted
 
 ## Session Continuity
 
@@ -68,6 +69,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 | Phase 01 P02 | 40min | 2 tasks | 4 files |
 | Phase 02 P01 | 25min | 2 tasks | 2 files |
 | Phase 02 P02 | 35min | 3 tasks | 3 files |
+| Phase 03 P01 | 95min | toolchain + build gate | 0 code files |
+| Phase 03 P02 | 45min | GLSL uniform decode shader | makeshader regen |
+| Phase 03 P03 | 30min | Vulkan Execution + registration | 2 files |
+| Phase 03 P04 | 35min | dual-backend parity test | 2 files |
 
 ## Decisions
 
