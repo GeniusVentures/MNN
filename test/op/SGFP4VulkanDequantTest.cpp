@@ -123,16 +123,6 @@ public:
         for (size_t i = 0; i < sgfp4_fixtures::kFixtureCount; ++i) {
             const sgfp4_fixtures::Fixture& fixture = sgfp4_fixtures::kFixtures[i];
 
-            // Uniform-only filter: skip LAYOUT_MIXED (enum 4) — the
-            // quadtree GLSL walk is a later phase's scope. NOTE: the filter
-            // is the layout enum, NOT fixture.mode: mixed_allsplit
-            // (layout 5 / FULL_4X4 collapse) and uniform_collapse
-            // (layout 0 / UNIFORM_64 collapse) carry mode == -1 but are
-            // uniform-enum containers per the Phase-2 collapse rule and ARE
-            // parity targets (per-leaf headers carry the real mode).
-            if (fixture.layout == MNN::kSGFP4LayoutMixed) {
-                continue;
-            }
             ++checked;
 
             // Per-fixture temp sidecar (unique name; removed after both passes).
@@ -188,8 +178,8 @@ public:
             }
         }
 
-        MNN_PRINT("SGFP4VulkanDequantTest: %d uniform fixtures matched CPU reference on Vulkan (FP32 tight + "
-                  "default-precision passes)\n",
+        MNN_PRINT("SGFP4VulkanDequantTest: %d fixtures (including LAYOUT_MIXED) matched CPU reference on Vulkan "
+                  "(FP32 tight + default-precision passes)\n",
                   checked);
         return true;
     }
