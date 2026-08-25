@@ -69,7 +69,7 @@ and the spec `.planning/sgfp4-arxiv-v2.txt` (Sections 3, 4, 6).
 - [x] **Phase 1: Affine Dual-Mode Decode Core (CPU, Uniform Layouts)** — Prove `w = S·c + bias` for FP4_AFFINE + T158_AFFINE, v2 stream framing, uniform-layout record walk, and external-sidecar container plumbing on CPU (completed 2026-08-24)
 - [x] **Phase 2: Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)** — Extend CPU decode to the pre-order-DFS quadtree split-map and add the error-driven encoder (mode selection ε=0.10, outlier veto) (completed 2026-08-24)
 - [x] **Phase 3: Vulkan Decode — Uniform Layouts** — Port uniform-layout SGFP4 v2 decode to a Vulkan GLSL Execution with CPU/Vulkan parity (completed 2026-08-25)
-- [ ] **Phase 4: Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)** — Extend the Vulkan shader to walk the quadtree split-map, completing GPU parity with the CPU reference
+- [x] **Phase 4: Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)** — Extend the Vulkan shader to walk the quadtree split-map, completing GPU parity with the CPU reference (completed 2026-08-25)
 
 ## Phase Details
 
@@ -154,7 +154,7 @@ Plans:
   2. Vulkan decode output matches the CPU reference decode for mixed/adaptive containers within float tolerance, verified via `./run_test.out`
   3. The complete SGFP4 v2 feature set (both code modes, all uniform layouts, and LAYOUT_MIXED) decodes consistently on CPU and Vulkan within float tolerance
 
-**Plans**: 1/2 plans executed
+**Plans**: 2/2 plans complete
 Plans:
 **Wave 1**
 
@@ -162,7 +162,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 shader)*
 
-- [ ] 04-02-PLAN.md — Full 14-fixture CPU/Vulkan parity sweep (skip removed) + phase verification gate (SGV2-16)
+- [x] 04-02-PLAN.md — Full 14-fixture CPU/Vulkan parity sweep (skip removed) + phase verification gate (SGV2-16)
 
 ## Progress
 
@@ -171,4 +171,4 @@ Plans:
 | 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete    | 2026-08-24 |
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 2/2 | Complete    | 2026-08-24 |
 | 3. Vulkan Decode — Uniform Layouts | 4/4 | Complete    | 2026-08-25 |
-| 4. Vulkan Decode — Adaptive Quadtree | 1/2 | In Progress|  |
+| 4. Vulkan Decode — Adaptive Quadtree | 2/2 | Complete   | 2026-08-25 |
