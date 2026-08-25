@@ -485,17 +485,20 @@ Not applicable — this is a feature-add phase, not a rename/refactor/migration 
 | A4 | Prior milestone Vulkan builds/tests were produced in an environment that has since changed (no glslang now, `.build` at VULKAN=OFF) — regeneration must be re-provisioned this phase | Environment Availability | Medium — if a working toolchain location exists that I failed to find, the Wave-0 install task is simply redundant, not harmful. |
 | A5 | Windows `Precision_High` Vulkan session drives NVIDIA RTX 4070 Ti SUPER through `vulkan-1.dll` via the dlopen wrapper successfully (driver present, verified;удш runtime exercise not yet executed this session) | Pitfalls 2/6 | Low-Medium — planned Wave-0/Wave-1 verification step covers it; graceful-skip guard means a failure degrades to "test skipped" not "suite fails" (but Phase success criterion requires an actual run — see Open Questions). |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where is (or: how do we provision) a working `glslangValidator`?**
    - What we know: not on Windows PATH, not in WSL, not vendored in-repo (all probed). WSL has python3+xxd; WSL sudo requires a password (interactive upload step).
    - Recommendation: Wave-0 task with two options — (a) user runs `sudo apt-get install glslang-tools` in WSL (one interactive command), or (b) Vulkan SDK install on Windows + run makeshader.py from Git Bash. Non-blocking for coding (shader authoring/execution-class/test all proceed; only the regeneration+commit task gates on it).
+   - **(RESOLVED)** Plan 03-01 Task 1 (`checkpoint:human-action`): toolchain install checkpoint resolved in Wave 0 via the WSL `glslang-tools` / Windows Vulkan SDK options; plan 03-02 regenerates and grep-verifies the embedded artifacts.
 2. **Was the previous `run_test.out` Vulkan execution performed on this machine or another (CI/Linux)?**
    - What we know: `.build/` currently has MNN_VULKAN=OFF; `run_test.out.exe` exists; no Vulkan test run logs found for the milestone phase on this box; WSL has libvulkan + mesa ICDs but no NVIDIA WSL ICD visible in `/usr/share/vulkan/icd.d` (lvp/d3d12 fallback uncertain, `vulkaninfo` absent).
    - Recommendation: Window: reconfigure `.build` per Pitfall 6 and smoke-test `VulkanFP4DequantTest` first (it already exists) to establish the Vulkan-runtime path on Windows before building the new test. If the Windows path fails at runtime, fall back to WSL Lavapipe (lvp ICD present) for shader-toolchain + parity execution — needs verification.
+   - **(RESOLVED)** Plan 03-01 smoke run: `.build` reconfiguration (`-DMNN_VULKAN=ON -DMNN_VULKAN_IMAGE=OFF`) + pre-existing `VulkanFP4DequantTest` run on the RTX 4070 Ti SUPER establishes the Windows Vulkan execution path before any new shader work (Wave-0 gate item); WSL Lavapipe remains the documented fallback.
 3. **Fixture set for the parity test — include the Phase 2 mixed/uniform-collapse fixtures?**
    - What we know: `kFixtures` contains mixed + uniform-collapse entries alongside the 5 uniform × 2 mode + b3 alignment fixtures; the new shader (uniform-only) will reject mixed layouts, which host pre-validation (D-05) turns into a clean error — not a parity target this phase.
    - Recommendation: parity-loop over uniform fixtures only (filter `fixture.layout != kSGFP4LayoutMixed` and skip `uniform_collapse` if it emits MIXED — its enum is uniform per Phase 2 uniform-collapse rule, so it likely qualifies; verify at implementation). Discretion-level; keep the filter explicit and named.
+   - **(RESOLVED)** Plan 03-04 Task 1: explicit named filter skips ONLY `layout == kSGFP4LayoutMixed` (enum 4, i.e. `mixed_asymmetric`); `mixed_allsplit` (layout 5) and `uniform_collapse` (layout 0) ARE parity targets per the Phase-2 collapse rule — 13 of the 14 committed fixtures run through both backends.
 
 ## Environment Availability
 
