@@ -35,7 +35,7 @@
 
 ### Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)
 
-- [ ] **SGV2-15**: Vulkan shader extended to walk the LAYOUT_MIXED split-map and decode variable per-leaf-size records on GPU (one workgroup per macroblock)
+- [x] **SGV2-15**: Vulkan shader extended to walk the LAYOUT_MIXED split-map and decode variable per-leaf-size records on GPU (one workgroup per macroblock)
 - [ ] **SGV2-16**: CPU/Vulkan decode-parity test for mixed/adaptive containers within float tolerance, passing via `./run_test.out`
 
 ## v2 Requirements
