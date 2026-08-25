@@ -125,10 +125,23 @@ Plans:
   2. The new Vulkan Execution class is registered in the buffer-backend execution table and loads the same `{magic, offset, size}` external-sidecar descriptor as the CPU path, producing decoded weights for both code modes
   3. Vulkan decode output matches the CPU reference decode for uniform-layout containers within float tolerance, verified via `./run_test.out`
 
-**Plans**: ~2 (not yet broken down)
+**Plans**: 4 plans
 Plans:
+**Wave 0** *(prerequisite — blocking for all later waves)*
 
-- [ ] TBD (run /gsd-plan-phase 3 to break down)
+- [ ] 03-01-PLAN.md — Toolchain + build provisioning: glslang install (checkpoint), `.build` reconfigured `-DMNN_VULKAN=ON -DMNN_VULKAN_IMAGE=OFF`, pre-existing `op/vulkan/fp4_dequant_correctness` GPU smoke run
+
+**Wave 1** *(blocked on Wave 0 toolchain)*
+
+- [ ] 03-02-PLAN.md — `sgfp4_dequant.comp` uniform-layout GLSL decode (read_u32_le + leaf-header unpack + dual-mode shift-mask-FMA) + `macro.json` FP16 variant + regenerated `AllShader.cpp`/`AllShader.h`/`VulkanShaderMap.cpp` (SGV2-12)
+
+**Wave 2** *(blocked on Wave 1 shader keys)*
+
+- [ ] 03-03-PLAN.md — `VulkanSGFP4Dequant.{hpp,cpp}` Execution: host sidecar load (ifstream probe) + D-05 scratch validation + SSBO upload + FP16/FP32 pipeline + `OpType_SGFP4Dequant` creator registration (SGV2-13)
+
+**Wave 3** *(blocked on Wave 2 Execution)*
+
+- [ ] 03-04-PLAN.md — Dual-backend parity test `op/sgfp4/vulkan_uniform_parity` (fixtures → CPU reference vs Vulkan module, rtol 1e-4) + E2M1 regression sweep (SGV2-14)
 
 ### Phase 4: Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)
 
