@@ -1,0 +1,194 @@
+// SGFP4 v2 uniform-layout dequant GLSL compute shader
+// Decodes SGFP4 v2 containers (uniform layouts only; MIXED is quadtree —
+// a later phase replaces locateElement) via shift-mask-FMA affine
+// reconstruction: w = S * c + bias.
+// All framing constants are ported 1:1 from include/MNN/SGFP4DequantUtils.hpp.
+// FLOAT macro is provided by makeshader.py (float for FP32, float16_t for FP16).
+// Do NOT redefine FLOAT/FLOAT2/FLOAT4 — makeshader.py prepends the header.
+
+layout(binding = 0) readonly buffer ContainerBuffer {
+    uint Container[]; // raw container bytes as little-endian u32 words
+};
+
+layout(binding = 1) writeonly buffer DstBuffer {
+    FLOAT Dst[]; // output FP32 or FP16 values
+};
+
+layout(binding = 2) uniform ConstBuffer {
+    uint outElementCount; // total decoded element count (host-validated)
+    uint containerBytes;  // container size in bytes (host-validated geometry)
+};
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// --- Framing constants (SGFP4DequantUtils.hpp, sgfp4-arxiv-v2 sections 3.2/6.1/6.2) ---
+
+// v2 magic 'SGF4' = 0x34464753u, the little-endian assembly of the ASCII
+// bytes 'S'(0x53),'G'(0x47),'F'(0x46),'4'(0x34). GLSL has no character
+// literals, so the assembled value is used; the hex bytes document the ASCII
+// (host side validates the magic; kept here as the spec's canonical form).
+const uint kMagic = 0x34464753u; // 'S' | 'G'<<8 | 'F'<<16 | '4'<<24
+const uint kVersion = 2u;
+const uint kVersionByteOffset = 4u;  // right after magic
+const uint kRecordCountOffset = 5u;  // B straddles u32 words — use read_u32_le
+const uint kOffsetTableStart = 16u;  // fixed header: magic4 + version1 + B4 + pad7
+const uint kAlign16 = 16u;           // 16-byte alignment throughout
+const uint kLayoutEnumMask = 0x7u;   // sb_header layout enum bits 0-2
+
+// Per-leaf FP16 header (spec section 6.2, Eq. 6):
+// S = half(h >> 16); bias = half(h & 0xFFF0); mode = h & 0x1.
+const uint kLeafBiasMask = 0xFFF0u;
+const uint kLeafModeBit = 0x1u;
+
+// Dual-mode payload packing (spec section 4.3).
+const uint kNibblesPerWord = 8u;  // mode 0: 8 x 4-bit codes per u32 word
+const uint kSymbolsPerWord = 16u; // mode 1: 16 x 2-bit ternary codes per u32 word
+const uint kNibbleMask = 0xFu;
+const uint kSymbolMask = 0x3u;
+const uint kTwosComplementSignBias = 0x8u; // sign-extend a 4-bit two's complement value
+
+// --- Container reads ---
+
+// Little-endian u32 at an arbitrary byte address, composed from at most two
+// aligned container words. MANDATORY for ALL framing reads: B sits at byte 5
+// and straddles words. Fast path when the address is word-aligned.
+uint read_u32_le(uint byteAddr) {
+    uint wordIndex = byteAddr >> 2u;
+    uint off = byteAddr & 3u;
+    uint lo = Container[wordIndex];
+    if (off == 0u) {
+        return lo;
+    }
+    uint hi = Container[wordIndex + 1u];
+    return (lo >> (8u * off)) | (hi << (32u - 8u * off));
+}
+
+// --- Leaf header unpack (spec section 6.2, Eq. 6) ---
+
+// S from the high 16 bits, bias from the top 12 bits of the low half,
+// mode from bit 0. Never hand-roll FP16 bit math — unpackHalf2x16 is exact.
+void unpackLeafHeader(uint h, out float S, out float bias, out uint mode) {
+    S = unpackHalf2x16(h).y;              // high 16 bits
+    bias = unpackHalf2x16(h & kLeafBiasMask).x; // low half, flag bits masked off
+    mode = h & kLeafModeBit;
+}
+
+// --- Dual-mode code decode (spec section 4.3) ---
+
+// Mode 0 (FP4_AFFINE): 4-bit two's-complement codes in [-8, 7]. NOT E2M1.
+float codeMode0(uint nib) {
+    return float((nib ^ kTwosComplementSignBias) - kTwosComplementSignBias);
+}
+
+// Mode 1 (T158_AFFINE): 2-bit ternary codes — 00->0, 01->+1, 10->-1,
+// 11 reserved (decoded as 0).
+float codeMode1(uint sym) {
+    return (1u == sym) ? +1.0 : (2u == sym) ? -1.0 : 0.0;
+}
+
+// --- Framing walk (per-thread re-walk, D-04) ---
+
+// Locate the source payload word + intra-word lane and leaf header for
+// flat output element `idx`. Returns false when the element does not decode
+// against this container's uniform geometry (host pre-validation guarantees
+// well-formed containers; this stays defensive for enum 4 / >= 6).
+bool locateElement(uint idx, out uint payloadWordByte, out uint inWordLane,
+                   out uint laneBitWidth, out float S, out float bias) {
+    uint B = read_u32_le(kRecordCountOffset);
+    uint offsetTableEnd = kOffsetTableStart + 4u * B;
+    uint regionStart = (offsetTableEnd + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+    uint base = 0u; // output elements already consumed by earlier records
+    for (uint b = 0u; b < B; ++b) {
+        uint recStart = regionStart + read_u32_le(kOffsetTableStart + 4u * b);
+        uint layoutEnum = read_u32_le(recStart) & kLayoutEnumMask;
+
+        // Table 3 uniform geometry: layout enum -> { leaf count N, leaf edge n }.
+        uint N;
+        uint n;
+        if (layoutEnum == 0u) {
+            N = 1u; n = 64u;
+        } else if (layoutEnum == 1u) {
+            N = 4u; n = 32u;
+        } else if (layoutEnum == 2u) {
+            N = 16u; n = 16u;
+        } else if (layoutEnum == 3u) {
+            N = 64u; n = 8u;
+        } else if (layoutEnum == 5u) {
+            N = 256u; n = 4u;
+        } else {
+            // enum 4 = LAYOUT_MIXED (quadtree — later phase) and >= 6 are
+            // invalid; host pre-validation rejects them before dispatch.
+            return false;
+        }
+
+        uint recordElems = N * n * n;
+        if (idx < base + recordElems) {
+            uint local = idx - base;
+            uint leaf = local / (n * n);
+
+            // Block headers follow sb_header; payloads follow, 16-byte aligned.
+            uint blockHeadersStart = recStart + 4u;
+            uint payloadsStart = (blockHeadersStart + 4u * N + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+            uint headerWord = read_u32_le(blockHeadersStart + 4u * leaf);
+            uint mode;
+            unpackLeafHeader(headerWord, S, bias, mode);
+
+            // Walk the payload cursor sequentially to this leaf (D-04 leaf
+            // stream): every leaf's payload is padded to a 16-byte multiple.
+            uint payloadCursor = payloadsStart;
+            for (uint l = 0u; l < leaf; ++l) {
+                uint prevHeader = read_u32_le(blockHeadersStart + 4u * l);
+                float prevS, prevBias;
+                uint prevMode;
+                unpackLeafHeader(prevHeader, prevS, prevBias, prevMode);
+                uint elems = n * n;
+                uint words = (prevMode == 0u) ? (elems / kNibblesPerWord) : (elems / kSymbolsPerWord);
+                payloadCursor += (4u * words + kAlign16 - 1u) & ~(kAlign16 - 1u);
+            }
+
+            uint inLeaf = local % (n * n);
+            uint elems2 = n * n;
+            if (mode == 0u) {
+                payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
+                inWordLane = inLeaf % kNibblesPerWord;
+                laneBitWidth = 4u;
+            } else {
+                payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
+                inWordLane = inLeaf % kSymbolsPerWord;
+                laneBitWidth = 2u;
+            }
+            return true;
+        }
+        base += recordElems;
+    }
+    return false;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    // Sole in-shader guard: host pre-validates the container (D-05); the
+    // shader body stays a pure locate+decode so a later quadtree extension
+    // is a drop-in replacement of locateElement.
+    if (idx >= outElementCount) {
+        return;
+    }
+
+    uint payloadWordByte;
+    uint lane;
+    uint laneBits;
+    float S;
+    float bias;
+    if (!locateElement(idx, payloadWordByte, lane, laneBits, S, bias)) {
+        return;
+    }
+
+    uint code = (read_u32_le(payloadWordByte) >> (laneBits * lane)) &
+                (4u == laneBits ? kNibbleMask : kSymbolMask);
+
+    // Affine reconstruction in FP32 math; FLOAT cast only at the store.
+    float c = (laneBits == 4u) ? codeMode0(code) : codeMode1(code);
+    Dst[idx] = FLOAT(S) * FLOAT(c) + FLOAT(bias);
+}

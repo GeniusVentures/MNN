@@ -8,6 +8,9 @@
     "blitregion.comp": {
         "useFP16": true
     },
+    "sgfp4_dequant.comp": {
+        "useFP16": true
+    },
     "nchwTonc4hw4.comp": {
         "useFP16": true
     },
