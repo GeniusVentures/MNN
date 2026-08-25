@@ -10,7 +10,7 @@
 
 #include "VulkanSGFP4Dequant.hpp"
 #include "MNN/SGFP4DequantUtils.hpp"
-#include "backend/vulkan/backend/VulkanBackend.hpp"
+#include "VulkanBackend.hpp"
 #include "core/FileLoader.hpp"
 #include "core/Macro.h"
 #include "core/OpCommonUtils.hpp"
