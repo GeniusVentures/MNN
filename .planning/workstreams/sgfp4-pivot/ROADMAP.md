@@ -171,4 +171,4 @@ Plans:
 | 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete    | 2026-08-24 |
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 2/2 | Complete    | 2026-08-24 |
 | 3. Vulkan Decode — Uniform Layouts | 4/4 | Complete    | 2026-08-25 |
-| 4. Vulkan Decode — Adaptive Quadtree | 2/2 | Complete   | 2026-08-25 |
+| 4. Vulkan Decode — Adaptive Quadtree | 2/2 | Complete    | 2026-08-25 |
