@@ -37,8 +37,11 @@ FLOAT dequant_e2m1(uint nibble) {
     }
 
     // Special case: e=3
-    // m=0 -> Infinity, m=1 -> NaN (returned as infinity with sign)
+    // m=0 -> Infinity (with sign), m=1 -> NaN (0/0)
     if (e == 3u) {
+        if (m == 1u) {
+            return FLOAT(0.0) / FLOAT(0.0); // NaN
+        }
         return sign * FLOAT(1.0) / FLOAT(0.0);
     }
 
@@ -72,7 +75,10 @@ void main() {
         return;
     }
 
-    uint byte = SrcRaw[byteIndex];
+    // Extract the source BYTE containing our nibble. SrcRaw[] is a u32 word
+    // array: select the word via byteIndex/4, then the byte via bits 0-7/8-15/
+    // 16-23/24-31 (little-endian byte order within the word).
+    uint byte = (SrcRaw[byteIndex >> 2u] >> ((byteIndex & 3u) * 8u)) & 0xFFu;
 
     // Swizzle: low nibble (bits 0-3) first, high nibble (bits 4-7) second
     // This is the little-endian nibble order — GPU-optimized for contiguous reads
