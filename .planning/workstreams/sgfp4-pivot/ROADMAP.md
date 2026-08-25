@@ -154,10 +154,15 @@ Plans:
   2. Vulkan decode output matches the CPU reference decode for mixed/adaptive containers within float tolerance, verified via `./run_test.out`
   3. The complete SGFP4 v2 feature set (both code modes, all uniform layouts, and LAYOUT_MIXED) decodes consistently on CPU and Vulkan within float tolerance
 
-**Plans**: ~1-2 (not yet broken down)
+**Plans**: 2/2 plans
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 4 to break down)
+- [ ] 04-01-PLAN.md — GLSL LAYOUT_MIXED split-map walk in `locateElement` (bounded, stateless per-thread descent) + regenerated `AllShader.cpp`/`AllShader.h`/`VulkanShaderMap.cpp` (SGV2-15)
+
+**Wave 2** *(blocked on Wave 1 shader)*
+
+- [ ] 04-02-PLAN.md — Full 14-fixture CPU/Vulkan parity sweep (skip removed) + phase verification gate (SGV2-16)
 
 ## Progress
 
@@ -166,4 +171,4 @@ Plans:
 | 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete    | 2026-08-24 |
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 2/2 | Complete    | 2026-08-24 |
 | 3. Vulkan Decode — Uniform Layouts | 4/4 | Complete    | 2026-08-25 |
-| 4. Vulkan Decode — Adaptive Quadtree | 0/~1-2 | Not started | — |
+| 4. Vulkan Decode — Adaptive Quadtree | 0/2 | Planned | — |
