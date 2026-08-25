@@ -74,6 +74,12 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 | Phase 03 P03 | 30min | Vulkan Execution + registration | 2 files |
 | Phase 03 P04 | 35min | dual-backend parity test | 2 files |
 
+## Quick Tasks Completed
+
+| Date | Slug | Result | Commit |
+|------|------|--------|--------|
+| 2026-08-25 | backfill-sgfp4-pivot-phase2-completion | ROADMAP/STATE Phase 2 completion backfill (docs only) | 2333a38b |
+
 ## Decisions
 
 - [Phase 02]: Encoder subdivision hysteresis blocks noise-scaling splits — selftest/fixtures use constructive ramp tiles (full ramp amp 60 = all-split → FULL_4X4 collapse; TL-quadrant ramp amp 12 = asymmetric MIXED)
