@@ -29,9 +29,9 @@
 
 ### Vulkan Decode — Uniform Layouts
 
-- [ ] **SGV2-12**: GLSL compute shader decodes uniform-layout SGFP4 v2 containers on the Vulkan buffer backend (FP4_AFFINE + T158_AFFINE affine reconstruction via shift-mask-FMA), embedded via `makeshader.py` with regenerated `AllShader.cpp` / `AllShader.h` / `VulkanShaderMap.cpp`
-- [ ] **SGV2-13**: New Vulkan Execution class registered in the buffer-backend execution table, reading the same `{magic, offset, size}` external-sidecar descriptor as the CPU path
-- [ ] **SGV2-14**: CPU/Vulkan decode-parity test for uniform-layout containers within float tolerance, passing via `./run_test.out`
+- [x] **SGV2-12**: GLSL compute shader decodes uniform-layout SGFP4 v2 containers on the Vulkan buffer backend (FP4_AFFINE + T158_AFFINE affine reconstruction via shift-mask-FMA), embedded via `makeshader.py` with regenerated `AllShader.cpp` / `AllShader.h` / `VulkanShaderMap.cpp`
+- [x] **SGV2-13**: New Vulkan Execution class registered in the buffer-backend execution table, reading the same `{magic, offset, size}` external-sidecar descriptor as the CPU path
+- [x] **SGV2-14**: CPU/Vulkan decode-parity test for uniform-layout containers within float tolerance, passing via `./run_test.out`
 
 ### Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)
 

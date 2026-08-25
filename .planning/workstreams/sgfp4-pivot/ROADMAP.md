@@ -68,7 +68,7 @@ and the spec `.planning/sgfp4-arxiv-v2.txt` (Sections 3, 4, 6).
 
 - [x] **Phase 1: Affine Dual-Mode Decode Core (CPU, Uniform Layouts)** — Prove `w = S·c + bias` for FP4_AFFINE + T158_AFFINE, v2 stream framing, uniform-layout record walk, and external-sidecar container plumbing on CPU (completed 2026-08-24)
 - [ ] **Phase 2: Adaptive Quadtree Layout (CPU, LAYOUT_MIXED)** — Extend CPU decode to the pre-order-DFS quadtree split-map and add the error-driven encoder (mode selection ε=0.10, outlier veto)
-- [ ] **Phase 3: Vulkan Decode — Uniform Layouts** — Port uniform-layout SGFP4 v2 decode to a Vulkan GLSL Execution with CPU/Vulkan parity
+- [x] **Phase 3: Vulkan Decode — Uniform Layouts** — Port uniform-layout SGFP4 v2 decode to a Vulkan GLSL Execution with CPU/Vulkan parity (completed 2026-08-25)
 - [ ] **Phase 4: Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)** — Extend the Vulkan shader to walk the quadtree split-map, completing GPU parity with the CPU reference
 
 ## Phase Details
@@ -125,23 +125,23 @@ Plans:
   2. The new Vulkan Execution class is registered in the buffer-backend execution table and loads the same `{magic, offset, size}` external-sidecar descriptor as the CPU path, producing decoded weights for both code modes
   3. Vulkan decode output matches the CPU reference decode for uniform-layout containers within float tolerance, verified via `./run_test.out`
 
-**Plans**: 4 plans
+**Plans**: 4/4 plans complete
 Plans:
 **Wave 0** *(prerequisite — blocking for all later waves)*
 
-- [ ] 03-01-PLAN.md — Toolchain + build provisioning: glslang install (checkpoint), `.build` reconfigured `-DMNN_VULKAN=ON -DMNN_VULKAN_IMAGE=OFF`, pre-existing `op/vulkan/fp4_dequant_correctness` GPU smoke run
+- [x] 03-01-PLAN.md — Toolchain + build provisioning: glslang install (checkpoint), `.build` reconfigured `-DMNN_VULKAN=ON -DMNN_VULKAN_IMAGE=OFF`, pre-existing `op/vulkan/fp4_dequant_correctness` GPU smoke run
 
 **Wave 1** *(blocked on Wave 0 toolchain)*
 
-- [ ] 03-02-PLAN.md — `sgfp4_dequant.comp` uniform-layout GLSL decode (read_u32_le + leaf-header unpack + dual-mode shift-mask-FMA) + `macro.json` FP16 variant + regenerated `AllShader.cpp`/`AllShader.h`/`VulkanShaderMap.cpp` (SGV2-12)
+- [x] 03-02-PLAN.md — `sgfp4_dequant.comp` uniform-layout GLSL decode (read_u32_le + leaf-header unpack + dual-mode shift-mask-FMA) + `macro.json` FP16 variant + regenerated `AllShader.cpp`/`AllShader.h`/`VulkanShaderMap.cpp` (SGV2-12)
 
 **Wave 2** *(blocked on Wave 1 shader keys)*
 
-- [ ] 03-03-PLAN.md — `VulkanSGFP4Dequant.{hpp,cpp}` Execution: host sidecar load (ifstream probe) + D-05 scratch validation + SSBO upload + FP16/FP32 pipeline + `OpType_SGFP4Dequant` creator registration (SGV2-13)
+- [x] 03-03-PLAN.md — `VulkanSGFP4Dequant.{hpp,cpp}` Execution: host sidecar load (ifstream probe) + D-05 scratch validation + SSBO upload + FP16/FP32 pipeline + `OpType_SGFP4Dequant` creator registration (SGV2-13)
 
 **Wave 3** *(blocked on Wave 2 Execution)*
 
-- [ ] 03-04-PLAN.md — Dual-backend parity test `op/sgfp4/vulkan_uniform_parity` (fixtures → CPU reference vs Vulkan module, rtol 1e-4) + E2M1 regression sweep (SGV2-14)
+- [x] 03-04-PLAN.md — Dual-backend parity test `op/sgfp4/vulkan_uniform_parity` (fixtures → CPU reference vs Vulkan module, rtol 1e-4) + E2M1 regression sweep (SGV2-14)
 
 ### Phase 4: Vulkan Decode — Adaptive Quadtree (LAYOUT_MIXED)
 
@@ -165,5 +165,5 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Affine Dual-Mode Decode Core (CPU, Uniform) | 2/2 | Complete    | 2026-08-24 |
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | 0/~2 | Not started | — |
-| 3. Vulkan Decode — Uniform Layouts | 0/~2 | Not started | — |
+| 3. Vulkan Decode — Uniform Layouts | 4/4 | Complete    | 2026-08-25 |
 | 4. Vulkan Decode — Adaptive Quadtree | 0/~1-2 | Not started | — |
