@@ -1,6 +1,6 @@
-// SGFP4 v2 uniform-layout dequant GLSL compute shader
-// Decodes SGFP4 v2 containers (uniform layouts only; MIXED is quadtree —
-// a later phase replaces locateElement) via shift-mask-FMA affine
+// SGFP4 v2 dequant GLSL compute shader
+// Decodes SGFP4 v2 containers (uniform layouts 0/1/2/3/5 and the
+// LAYOUT_MIXED adaptive quadtree, enum 4) via shift-mask-FMA affine
 // reconstruction: w = S * c + bias.
 // All framing constants are ported 1:1 from include/MNN/SGFP4DequantUtils.hpp.
 // FLOAT macro is provided by makeshader.py (float for FP32, float16_t for FP16).
@@ -34,6 +34,15 @@ const uint kRecordCountOffset = 5u;  // B straddles u32 words — use read_u32_l
 const uint kOffsetTableStart = 16u;  // fixed header: magic4 + version1 + B4 + pad7
 const uint kAlign16 = 16u;           // 16-byte alignment throughout
 const uint kLayoutEnumMask = 0x7u;   // sb_header layout enum bits 0-2
+
+// LAYOUT_MIXED (enum 4) quadtree split-map framing (spec section 6.2;
+// mirrors kSGFP4SplitMapBytes/kSGFP4QuadTreeMinSplitSize/kSGFP4MaxQuadTreeBits
+// in SGFP4DequantUtils.hpp).
+const uint kSplitMapBytes = 12u;          // 3 x u32 words between sb_header and block headers
+const uint kQuadTreeMinSplitSize = 8u;    // nodes of edge < 8u are always leaves, read no split bit
+const uint kMaxQuadTreeStackDepth = 16u;  // compile-time-fixed pending-sibling slots (true worst case 13)
+const uint kMaxQuadTreeNodeVisits = 341u; // compile-time loop cap: 85 max bit-reads + 256 max leaves
+const uint kMacroblockElems = 4096u;      // 64u * 64u -- a MIXED record always fully tiles the macroblock
 
 // Per-leaf FP16 header (spec section 6.2, Eq. 6):
 // S = half(h >> 16); bias = half(h & 0xFFF0); mode = h & 0x1.
@@ -86,12 +95,97 @@ float codeMode1(uint sym) {
     return (1u == sym) ? +1.0 : (2u == sym) ? -1.0 : 0.0;
 }
 
+// --- LAYOUT_MIXED (enum 4) quadtree split-map walk ---
+
+// Bounded, stateless, per-thread pre-order-DFS walk of a MIXED record's
+// 3-word/12-byte split map (bit-for-bit mirror of SGFP4SplitMapReader /
+// sgfp4_walk_quadtree, include/MNN/SGFP4DequantUtils.hpp:148-222). Locates
+// the leaf owning within-record flat index `local`, plus the payload-cursor
+// byte offset of every leaf strictly before it in traversal order -- the
+// walk determines the target leaf and accumulates its payload offset in a
+// single pass (Pattern 2, 04-RESEARCH.md).
+//
+// The stack only ever holds pending nodes' edge size `n`:
+// dequant_sgfp4_container_cpu never reads QuadNode.x/.y
+// (SGFP4DequantUtils.hpp:403,435), and all 4 children pushed by a split
+// share edge n/2u, so pushing 4 identical values and popping LIFO
+// reproduces the CPU's TL,TR,BL,BR pre-order-DFS bit-consumption sequence
+// exactly, without ever needing (x,y) coordinates.
+bool locateMixedLeaf(uint recStart, uint local, out uint leafOrdinal, out uint leafN,
+                      out uint inLeaf, out uint blockHeadersStart, out uint payloadCursor) {
+    blockHeadersStart = recStart + 4u + kSplitMapBytes;
+
+    uint stack[kMaxQuadTreeStackDepth];
+    stack[0] = 64u;
+    uint top = 1u;
+
+    uint bitCursor = 0u;
+    leafOrdinal = 0u; // doubles as the running node-ordinal counter during the walk
+    uint elemsConsumed = 0u;
+    uint payloadCursorRel = 0u;
+    bool found = false;
+    uint targetLeafOrdinal = 0u;
+    uint targetN = 0u;
+    uint targetInLeaf = 0u;
+    uint targetPayloadCursorRel = 0u;
+
+    for (uint visit = 0u; visit < kMaxQuadTreeNodeVisits; ++visit) {
+        if (top == 0u) {
+            break;
+        }
+        top -= 1u;
+        uint n = stack[top];
+
+        if (n >= kQuadTreeMinSplitSize) {
+            uint splitBit = (read_u32_le(recStart + 4u + 4u * (bitCursor >> 5u)) >> (bitCursor & 31u)) & 1u;
+            bitCursor += 1u;
+            if (splitBit == 1u) {
+                uint childN = n / 2u;
+                stack[top] = childN;
+                stack[top + 1u] = childN;
+                stack[top + 2u] = childN;
+                stack[top + 3u] = childN;
+                top += 4u;
+                continue;
+            }
+        }
+
+        // Leaf of edge n (either a forced 4x4 leaf or an unsplit node).
+        if (!found && local < elemsConsumed + n * n) {
+            found = true;
+            targetLeafOrdinal = leafOrdinal;
+            targetN = n;
+            targetInLeaf = local - elemsConsumed;
+            targetPayloadCursorRel = payloadCursorRel;
+        } else if (!found) {
+            uint header = read_u32_le(blockHeadersStart + 4u * leafOrdinal);
+            uint mode = header & kLeafModeBit;
+            uint elems = n * n;
+            uint words = (mode == 0u) ? (elems / kNibblesPerWord) : (elems / kSymbolsPerWord);
+            payloadCursorRel += (4u * words + kAlign16 - 1u) & ~(kAlign16 - 1u);
+        }
+        elemsConsumed += n * n;
+        leafOrdinal += 1u;
+    }
+
+    // leafOrdinal is now the TOTAL leaf count (the walk visited every node).
+    uint blockHeadersBytes = 4u * leafOrdinal;
+    uint payloadsStart = (blockHeadersStart + blockHeadersBytes + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+    leafOrdinal = targetLeafOrdinal;
+    leafN = targetN;
+    inLeaf = targetInLeaf;
+    payloadCursor = payloadsStart + targetPayloadCursorRel;
+    return found;
+}
+
 // --- Framing walk (per-thread re-walk, D-04) ---
 
 // Locate the source payload word + intra-word lane and leaf header for
-// flat output element `idx`. Returns false when the element does not decode
-// against this container's uniform geometry (host pre-validation guarantees
-// well-formed containers; this stays defensive for enum 4 / >= 6).
+// flat output element `idx`, across both uniform (0/1/2/3/5) and
+// LAYOUT_MIXED (4) records. Returns false when the element does not decode
+// against this container's geometry (host pre-validation guarantees
+// well-formed containers; this stays defensive for enum >= 6).
 bool locateElement(uint idx, out uint payloadWordByte, out uint inWordLane,
                    out uint laneBitWidth, out float S, out float bias) {
     uint B = read_u32_le(kRecordCountOffset);
@@ -116,9 +210,40 @@ bool locateElement(uint idx, out uint payloadWordByte, out uint inWordLane,
             N = 64u; n = 8u;
         } else if (layoutEnum == 5u) {
             N = 256u; n = 4u;
+        } else if (layoutEnum == 4u) {
+            // LAYOUT_MIXED: fully self-contained here (no fixed per-leaf n,
+            // so it cannot fall through to the shared uniform tail below).
+            // A MIXED record always fully tiles the 64x64 macroblock.
+            uint recordElems = kMacroblockElems;
+            if (idx < base + recordElems) {
+                uint local = idx - base;
+                uint leaf;
+                uint leafN;
+                uint inLeaf;
+                uint mixedBlockHeadersStart;
+                uint payloadCursor;
+                locateMixedLeaf(recStart, local, leaf, leafN, inLeaf, mixedBlockHeadersStart, payloadCursor);
+
+                uint headerWord = read_u32_le(mixedBlockHeadersStart + 4u * leaf);
+                uint mode;
+                unpackLeafHeader(headerWord, S, bias, mode);
+
+                if (mode == 0u) {
+                    payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
+                    inWordLane = inLeaf % kNibblesPerWord;
+                    laneBitWidth = 4u;
+                } else {
+                    payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
+                    inWordLane = inLeaf % kSymbolsPerWord;
+                    laneBitWidth = 2u;
+                }
+                return true;
+            }
+            base += recordElems;
+            continue;
         } else {
-            // enum 4 = LAYOUT_MIXED (quadtree — later phase) and >= 6 are
-            // invalid; host pre-validation rejects them before dispatch.
+            // enum >= 6 is invalid; host pre-validation rejects it before
+            // dispatch.
             return false;
         }
 
