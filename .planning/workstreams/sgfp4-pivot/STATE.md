@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-current_phase: 04
+milestone: v2.0
+milestone_name: SGFP4 v2 Converter Integration
+current_phase: 0
 current_plan: Not started
-status: completed
+status: Awaiting next milestone
 stopped_at: Completed 04-02-PLAN.md — full 14-fixture Vulkan parity sweep, phase 4 complete
-last_updated: "2026-08-25T21:17:47.538Z"
-last_activity: 2026-08-25
-last_activity_desc: Phase 04 complete
+last_updated: "2026-08-26T01:24:58.267Z"
+last_activity: 2026-08-26
+last_activity_desc: Milestone v1.0 completed and archived
 progress:
   total_phases: 4
   completed_phases: 4
@@ -28,10 +28,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-**Status:** Milestone complete
-**Current Phase:** 04
-**Last Activity:** 2026-08-25
-**Last Activity Description:** Phase 04 complete
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-26 — Milestone v1.0 completed and archived
 
 ## Progress
 
@@ -49,10 +49,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ### Pending Todos
 
-- All 4 phases of the sgfp4-pivot v1 milestone are now complete (Phase 4 Plan 02 closed SGV2-16). Next: consider `/gsd-complete-milestone` or a manual review to close out v1 and roll v2 requirements (SGV2-17..21) into a future milestone.
+- v1.0 archived 2026-08-26 (`.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`). SGV2-07..11 checkboxes and traceability rows corrected during archival (were stale — work was done, verify step just never flipped them).
+- v2.0 (SGFP4 v2 Converter Integration) is defined in PROJECT.md's Current Milestone section — real-weight encoder, `RemoveParams.cpp` sidecar wiring, native mnnconvert CLI flag, E2E validation. Next: requirements definition + roadmap creation (in progress via `/gsd-new-milestone --ws sgfp4-pivot`).
 - `test/op/FP4ModelTest.cpp` (pre-existing, unrelated dead code from `milestone` workstream commit `cffaf4bd`) still blocks a from-scratch `run_test.out` build; see `01-affine-dual-mode-decode-core-cpu-uniform-layouts/deferred-items.md`. Recommend the `milestone` workstream's own Phase 4 plan 04-02 fix or remove it — confirmed still broken/unfixed as of this session (04-02-SUMMARY.md's Deviations section).
-- Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — Phase 2 completion is evidenced by 02-01/02-02-SUMMARY.md and commits `1c9e5633`/`b2a83969`; run `/gsd-verify-work` retroactively if a formal verification artifact is wanted
-- REQUIREMENTS.md traceability table (line ~72) still lists SGV2-07 as "Pending" despite the checkbox above it being `[x]` — likely a stale traceability-table row from Phase 1; worth a quick manual correction pass, out of this plan's scope
+- Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — deferred, acknowledged in MILESTONES.md v1.0 entry; run `/gsd-verify-work 2` retroactively if a formal verification artifact is ever wanted
 
 ## Session Continuity
 
@@ -98,3 +98,7 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 - [Phase 01]: Fixed CPUSGFP4Dequant's broken T-01-04 DoS bound: FileLoader::size() is only populated by the whole-file read(), not the offset+size read this op uses; replaced with a direct std::ifstream file-size probe
 - [Phase 04 P02]: Kept SGFP4VulkanDequantTest class name and op/sgfp4/vulkan_uniform_parity registration string unchanged after removing the LAYOUT_MIXED skip, per CONTEXT.md Claude's-Discretion, avoiding churn to docs/scripts referencing that exact suite string
 - [Phase 04 P02]: Full-suite FP4ModelTest.cpp temp-stub workaround was attempted but blocked by the sandbox classifier while building with a locally-modified out-of-scope file; fell back to the plan's actual required filtered-suite verification (op/sgfp4/, op/fp4, op/vulkan/fp4_dequant_correctness), which had already passed
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

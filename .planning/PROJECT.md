@@ -10,6 +10,20 @@ MNN lives as a submodule under `GeniusNetwork/thirdparty/` — upstream is exter
 
 **A complete Vulkan LLM inference pipeline** — the existing Vulkan Attention implementation (1505 lines) must graduate from compile-gated experimental code to a tested, production-ready op that can run LLMs on Vulkan-capable devices, followed by Ultra FP4 quantization for 4-bit float inference.
 
+## Current Milestone: sgfp4-pivot v2.0 — SGFP4 v2 Converter Integration
+
+**Workstream:** sgfp4-pivot (`.planning/workstreams/sgfp4-pivot/`)
+
+**Goal:** A pytorch → onnx → mnnconvert pipeline can produce a `.mnn` file that runs SGFP4 v2 (quadtree-adaptive) FP4 inference, via a native mnnconvert CLI flag.
+
+**Target features:**
+- Real-weight SGFP4 v2 encoder — adapts the existing synthetic-fixture Python encoder (built for Phase 2 round-trip tests) to quantize actual `Convolution2D`/`ConvolutionDepthwise`/`Deconvolution` weight tensors from a converted model
+- `tools/converter/source/common/RemoveParams.cpp` wired to emit the `SGFP4DequantParam` external sidecar (`{magic, offset, size}`), following the `Convolution2D.external` precedent already in that file
+- New native mnnconvert CLI flag (peer to `--weightQuantBits`) that triggers SGFP4 v2 quantization + op-type rewrite during conversion
+- End-to-end validation: a real test model runs correct inference after pytorch → onnx → mnnconvert(SGFP4 flag) → `.mnn`, on CPU and/or Vulkan
+
+Context: sgfp4-pivot v1.0 (SGV2-01..16) shipped the decode-only path — CPU + Vulkan Executions for both uniform and LAYOUT_MIXED quadtree containers, validated only against synthetic test fixtures. This milestone closes the gap to a usable end-user pipeline.
+
 ## Requirements
 
 ### Validated
@@ -27,6 +41,7 @@ MNN lives as a submodule under `GeniusNetwork/thirdparty/` — upstream is exter
 - ✓ KVCache management and sampling strategies — existing
 - ✓ Vulkan buffer backend with 100+ op implementations — existing
 - ✓ Vulkan image backend (partial) — existing
+- ✓ SGFP4 v2 (quadtree-adaptive, affine dual-mode) decode — CPU + Vulkan Executions, both code modes (FP4_AFFINE, T158_AFFINE), all uniform layouts + LAYOUT_MIXED, CPU/Vulkan parity verified across 14 fixtures — sgfp4-pivot v1.0 (additive to existing E2M1 Ultra FP4 path)
 
 ### Active
 
@@ -85,6 +100,8 @@ MNN lives as a submodule under `GeniusNetwork/thirdparty/` — upstream is exter
 | Codebase map committed before starting | Needed to understand existing architecture, conventions, and concerns | ✓ Good |
 | DeepSeek V4 for planning agents | Local runtime preference | ✓ Good |
 | Execute Phase 4 plan 04-02 (E2E FP4 model test) before starting any SGFP4 pivot work, folding in the MAX_E2M1_VALUE scale-calibration bugfix | 04-02 validates already-built E2M1 infrastructure (Phase 2 + Phase 4-01) cheaply; SGFP4 work is additive (new format/op handling), not a modification of the existing symmetricQuan nbits=4 path, so finishing 04-02 first does not block it | — Pending |
+| sgfp4-pivot v1.0: SGFP4 v2 targets v2-only, external-sidecar container (`.mnn.weight`-style, `{magic, offset, size}` descriptor), attestation/byte-exactness out of scope | MNN's job is inference, not verifiable-execution; SuperGenius verifies results separately | ✓ Good |
+| sgfp4-pivot v1.0: proceeded to archive with Phase 2's formal `02-VERIFICATION.md` deferred (checkbox flip only happens as part of verify, which never ran for Phase 2) | Work is evidenced by 02-01/02-02-SUMMARY.md and built upon by Phases 3-4 without issue; re-running verify retroactively adds no new information | ⚠️ Revisit — run `/gsd-verify-work 2` retroactively if a formal report is ever needed |
 
 ## Evolution
 
@@ -104,4 +121,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-27 after initialization*
+*Last updated: 2026-08-25 after archiving sgfp4-pivot v1.0 and starting sgfp4-pivot milestone v2.0*
