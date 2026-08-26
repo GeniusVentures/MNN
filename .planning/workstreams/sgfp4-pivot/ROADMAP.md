@@ -43,7 +43,11 @@ Full detail archived to `.planning/milestones/v1.0-ROADMAP.md`; phase docs (PLAN
 2. Per target weight tensor: an `Op` with `type = OpType_SGFP4Dequant`, `main.type = OpParameter_SGFP4DequantParam`, `SGFP4DequantParamT{magic = kSGFP4Magic, external = {offset, size}, dims = {dimO, dimI}}` — with `op->externalPath` set literally on the op itself (this op is NOT covered by `OpCommonUtils::createExecutionWithExternal` auto-injection; documented gotcha from the existing test).
 3. Byte ranges written into a single merged sidecar are non-overlapping and match each op's `{offset, size}`; the spliced graph's downstream consumers read the new node's output instead of the original constant.
 4. Serialized via `Variable::save(vars, fileName)` — the direct-to-file overload (not the in-memory `std::vector<int8_t>` variant) — and the artifact reloads via Express `Module::load` (with `rtmgr->setExternalFile()` before load) decoding weights through the existing CPU Execution within oracle tolerance.
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Runtime-level injection recipe test (A1 spike) + byte-level version-gate helper (SGINJ-01..04)
+- [ ] 05-02-PLAN.md — `sgfp4_inject` tool: manifest-driven pairing, graph surgery, sidecar merge, save + in-tool verify
 
 ### Phase 6: Classic-API Load & Run Validation
 **Goal**: The injected artifact loads and runs through the classic Interpreter/Session API — `Interpreter::createFromFile`/`createFromBuffer` → `createSession` → `runSession` — the exact path `SGProcessingManager::MNN_Tensor::Process()` uses downstream; never previously verified end-to-end.
@@ -87,7 +91,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | v1.0 | 2/2 | Complete | 2026-08-24 |
 | 3. Vulkan Decode — Uniform Layouts | v1.0 | 4/4 | Complete | 2026-08-25 |
 | 4. Vulkan Decode — Adaptive Quadtree | v1.0 | 2/2 | Complete | 2026-08-25 |
-| 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 0/TBD | Not started | - |
+| 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 0/2 | Not started | - |
 | 6. Classic-API Load & Run Validation | v2.0 | 0/TBD | Not started | - |
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 0/TBD | Not started | - |
 | 8. Schema + Sidecar Wiring | v3.0 | 0/TBD | Not started | - |
