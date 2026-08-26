@@ -69,23 +69,23 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SGV2-22 | TBD | Pending |
-| SGV2-23 | TBD | Pending |
-| SGV2-24 | TBD | Pending |
-| SGV2-25 | TBD | Pending |
-| SGV2-26 | TBD | Pending |
-| SGV2-27 | TBD | Pending |
-| SGV2-28 | TBD | Pending |
-| SGV2-29 | TBD | Pending |
-| SGV2-30 | TBD | Pending |
-| SGV2-31 | TBD | Pending |
-| SGV2-32 | TBD | Pending |
+| SGV2-22 | Phase 5 | Pending |
+| SGV2-23 | Phase 5 | Pending |
+| SGV2-24 | Phase 6 | Pending |
+| SGV2-25 | Phase 6 | Pending |
+| SGV2-26 | Phase 7 | Pending |
+| SGV2-27 | Phase 7 | Pending |
+| SGV2-28 | Phase 8 | Pending |
+| SGV2-29 | Phase 8 | Pending |
+| SGV2-30 | Phase 8 | Pending |
+| SGV2-31 | Phase 9 | Pending |
+| SGV2-32 | Phase 9 | Pending |
 
 **Coverage:**
 - v1 requirements: 11 total
-- Mapped to phases: 0 (pending roadmap creation)
-- Unmapped: 11 ⚠️ (expected — filled in by `/gsd-roadmapper`)
+- Mapped to phases: 11/11 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-08-26*
-*Last updated: 2026-08-26 after initial definition*
+*Last updated: 2026-08-25 after roadmap creation (Phases 5-9 mapped)*

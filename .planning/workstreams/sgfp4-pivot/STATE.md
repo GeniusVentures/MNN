@@ -2,41 +2,42 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: 0
+current_phase: 5
 current_plan: Not started
-status: Awaiting next milestone
-stopped_at: Completed 04-02-PLAN.md — full 14-fixture Vulkan parity sweep, phase 4 complete
-last_updated: "2026-08-26T01:24:58.267Z"
-last_activity: 2026-08-26
-last_activity_desc: Milestone v1.0 completed and archived
+status: Ready to plan
+stopped_at: Roadmap created for v2.0 — 5 phases (5-9), 11/11 requirements mapped
+last_updated: "2026-08-25T00:00:00.000Z"
+last_activity: 2026-08-25
+last_activity_desc: Roadmap created for sgfp4-pivot v2.0 (SGFP4 v2 Converter Integration)
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: ROADMAP.md, REQUIREMENTS.md (both created 2026-08-22)
+See: ROADMAP.md, REQUIREMENTS.md (both created 2026-08-22; ROADMAP.md v2.0 section added 2026-08-25)
 See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/SGFP4-PIVOT-ANALYSIS.md` for full gap analysis and decision history.
 
-**Core value:** A working SGFP4 v2 (quadtree-adaptive, affine dual-mode) weight-decode path in MNN — CPU and Vulkan — additive to the existing E2M1 "Ultra FP4" implementation.
+**Core value:** A pytorch → onnx → mnnconvert pipeline can produce a `.mnn` file that runs SGFP4 v2 (quadtree-adaptive) FP4 inference, via a native mnnconvert CLI flag.
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-26 — Milestone v1.0 completed and archived
+Phase: 5 of 9 (Schema + Sidecar Wiring) — first phase of v2.0 (1 of 5 milestone phases)
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-25 — Roadmap created for v2.0 (Phases 5-9), 11/11 requirements mapped
 
 ## Progress
 
-**Phases Complete:** 4/4
-**Current Plan:** Not started
+**Phases Complete:** 0/5 (v2.0 milestone)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Accumulated Context
 
@@ -46,19 +47,23 @@ Last activity: 2026-08-26 — Milestone v1.0 completed and archived
 - GNUS Execution Integrity / attestation out of scope for MNN — MNN runs AI processing and returns a result, SuperGenius verifies (2026-08-22)
 - MNN-only scope — SuperGenius/SGProcessingManager integration is a separate GSD plan in that repo (2026-08-22)
 - Container: external `.mnn.weight`-style sidecar file + minimal `{magic, offset, size}` op descriptor, mirroring `Convolution2D.external`; no macroblock/quadtree typed FlatBuffers fields (2026-08-22)
+- v2.0: "op-type rewrite" is graph surgery — a new `SGFP4Dequant` node feeding the original, type-unchanged conv/deconv op's `inputs[1]`, not in-place op mutation (research, 2026-08-25)
+- v2.0: real-weight validation (Phase 7) scheduled before graph-rewrite integration (Phase 8), not folded into final E2E testing — synthetic-fixture-tuned assumptions are the top-flagged risk (research, 2026-08-25)
 
 ### Pending Todos
 
 - v1.0 archived 2026-08-26 (`.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`). SGV2-07..11 checkboxes and traceability rows corrected during archival (were stale — work was done, verify step just never flipped them).
-- v2.0 (SGFP4 v2 Converter Integration) is defined in PROJECT.md's Current Milestone section — real-weight encoder, `RemoveParams.cpp` sidecar wiring, native mnnconvert CLI flag, E2E validation. Next: requirements definition + roadmap creation (in progress via `/gsd-new-milestone --ws sgfp4-pivot`).
+- v2.0 roadmap created 2026-08-25: Phases 5 (Schema + Sidecar Wiring), 6 (Real-Weight C++ Encoder Port), 7 (Real-Weight Validation), 8 (Graph-Rewrite PostConverter Pass + CLI Flag), 9 (End-to-End Validation). Next: `/gsd-plan-phase 5`.
 - `test/op/FP4ModelTest.cpp` (pre-existing, unrelated dead code from `milestone` workstream commit `cffaf4bd`) still blocks a from-scratch `run_test.out` build; see `01-affine-dual-mode-decode-core-cpu-uniform-layouts/deferred-items.md`. Recommend the `milestone` workstream's own Phase 4 plan 04-02 fix or remove it — confirmed still broken/unfixed as of this session (04-02-SUMMARY.md's Deviations section).
 - Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — deferred, acknowledged in MILESTONES.md v1.0 entry; run `/gsd-verify-work 2` retroactively if a formal verification artifact is ever wanted
+- Phase 7 planning must select a concrete real validation model/corpus (open gap, not resolved by research) and decide the non-64-multiple tiling/padding reshape convention (row-major `[OC, IC*KH*KW]` vs. alternative) — see research SUMMARY.md "Gaps to Address"
+- Phase 8 planning: exact CLI flag name (peer to `--weightQuantBits`) still TBD — must be visually/textually distinct from sibling `milestone` workstream's Ultra FP4 flag naming
 
 ## Session Continuity
 
-**Last session:** 2026-08-25T21:12:21.752Z
+**Last session:** 2026-08-25T00:00:00.000Z
 
-**Stopped At:** Completed 04-02-PLAN.md — full 14-fixture Vulkan parity sweep, phase 4 complete
+**Stopped At:** Roadmap created for v2.0 (Phases 5-9), 11/11 requirements mapped
 **Resume File:** None
 
 ## Performance Metrics
@@ -101,4 +106,4 @@ Last activity: 2026-08-26 — Milestone v1.0 completed and archived
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Run `/gsd-plan-phase 5` to plan Phase 5 (Schema + Sidecar Wiring), the first phase of v2.0
