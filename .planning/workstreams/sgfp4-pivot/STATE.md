@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v2.0
-milestone_name: SGFP4 v2 Converter Integration
+milestone_name: SGFP4 v2 Model-Artifact Injection Tool
 current_phase: 5
 current_plan: Not started
 status: Ready to plan
-stopped_at: Roadmap created for v2.0 — 5 phases (5-9), 11/11 requirements mapped
-last_updated: "2026-08-25T00:00:00.000Z"
-last_activity: 2026-08-25
-last_activity_desc: Roadmap created for sgfp4-pivot v2.0 (SGFP4 v2 Converter Integration)
+stopped_at: v2.0 restructured to Injection Tool (3 phases, 5-7); Converter Integration moved to v3.0 (phases 8-12)
+last_updated: "2026-08-26T00:00:00.000Z"
+last_activity: 2026-08-26
+last_activity_desc: v2.0 restructured to Model-Artifact Injection Tool per handoff; Converter Integration moved to v3.0
 progress:
-  total_phases: 5
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,21 +21,21 @@ progress:
 
 ## Project Reference
 
-See: ROADMAP.md, REQUIREMENTS.md (both created 2026-08-22; ROADMAP.md v2.0 section added 2026-08-25)
+See: ROADMAP.md, REQUIREMENTS.md (both created 2026-08-22; ROADMAP.md v2.0 section added 2026-08-25; v2.0 restructured to Injection Tool 2026-08-26)
 See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/SGFP4-PIVOT-ANALYSIS.md` for full gap analysis and decision history.
 
-**Core value:** A pytorch → onnx → mnnconvert pipeline can produce a `.mnn` file that runs SGFP4 v2 (quadtree-adaptive) FP4 inference, via a native mnnconvert CLI flag.
+**Core value:** A standalone tool takes a normally-converted `.mnn` plus real SGFP4 v2 container files (gnus-poc `fp4_exporter.py --adaptive` output) and produces a final `.mnn` + external sidecar where target weight tensors are produced by `OpType_SGFP4Dequant` nodes — verified loadable/runnable via the classic Interpreter/Session API (the downstream `SGProcessingManager` path).
 
 ## Current Position
 
-Phase: 5 of 9 (Schema + Sidecar Wiring) — first phase of v2.0 (1 of 5 milestone phases)
+Phase: 5 of 12 (Injection Core — Artifact Construction & Graph Splicing) — first phase of v2.0 (1 of 3 milestone phases; v3.0 Converter Integration holds phases 8-12)
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-08-25 — Roadmap created for v2.0 (Phases 5-9), 11/11 requirements mapped
+Last activity: 2026-08-26 — v2.0 restructured to Model-Artifact Injection Tool (SGINJ-01..08 → Phases 5-7); Converter Integration (SGV2-22..32) moved to v3.0 (Phases 8-12) at 0% execution, zero plans written
 
 ## Progress
 
-**Phases Complete:** 0/5 (v2.0 milestone)
+**Phases Complete:** 0/3 (v2.0 milestone)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -47,23 +47,28 @@ Progress: [░░░░░░░░░░] 0%
 - GNUS Execution Integrity / attestation out of scope for MNN — MNN runs AI processing and returns a result, SuperGenius verifies (2026-08-22)
 - MNN-only scope — SuperGenius/SGProcessingManager integration is a separate GSD plan in that repo (2026-08-22)
 - Container: external `.mnn.weight`-style sidecar file + minimal `{magic, offset, size}` op descriptor, mirroring `Convolution2D.external`; no macroblock/quadtree typed FlatBuffers fields (2026-08-22)
-- v2.0: "op-type rewrite" is graph surgery — a new `SGFP4Dequant` node feeding the original, type-unchanged conv/deconv op's `inputs[1]`, not in-place op mutation (research, 2026-08-25)
-- v2.0: real-weight validation (Phase 7) scheduled before graph-rewrite integration (Phase 8), not folded into final E2E testing — synthetic-fixture-tuned assumptions are the top-flagged risk (research, 2026-08-25)
+- v2.0: "op-type rewrite" is graph surgery — a new `SGFP4Dequant` node feeding the original, type-unchanged conv/deconv op's `inputs[1]`, not in-place op mutation (research, 2026-08-25; carried into v2.0 injection design as consumer-rewiring)
+- v2.0: real-weight validation scheduled before graph-rewrite integration — synthetic-fixture-tuned assumptions are the top-flagged risk (research, 2026-08-25; now applies to v3.0 Phases 10→11 ordering)
+- v2.0 restructure (2026-08-26): injection tool (post-hoc graph surgery on converted `.mnn` + gnus-poc containers) inserted as v2.0 ahead of converter integration (now v3.0) — chosen at 0% execution to front-load a real loadable artifact and de-risk the converter milestone
+- Injection-tool contract: `op->externalPath` is set literally on the `SGFP4Dequant` op (not session-derived — `createExecutionWithExternal` doesn't cover this op type); serialization uses `Variable::save` direct-to-file overload; final artifact must verify via classic Interpreter/Session API, not just Express `Module::load`
+- Canonical real-weight encoder is gnus-poc `fp4_exporter.py --adaptive` (v2, byte-verified vs `SGFP4DequantUtils.hpp`); MNN's `tools/fp4/encode_sgfp4.py` is test-oracle-only (2026-08-26)
 
 ### Pending Todos
 
 - v1.0 archived 2026-08-26 (`.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`). SGV2-07..11 checkboxes and traceability rows corrected during archival (were stale — work was done, verify step just never flipped them).
-- v2.0 roadmap created 2026-08-25: Phases 5 (Schema + Sidecar Wiring), 6 (Real-Weight C++ Encoder Port), 7 (Real-Weight Validation), 8 (Graph-Rewrite PostConverter Pass + CLI Flag), 9 (End-to-End Validation). Next: `/gsd-plan-phase 5`.
+- **2026-08-26 restructure:** v2.0 is now the Model-Artifact Injection Tool (Phases 5-7, SGINJ-01..08), drafted from the SGFP4 handoff. The former v2.0 Converter Integration moved to v3.0 (Phases 8-12, SGV2-22..32) at 0% execution / zero plans — no renumbering cost. Next: `/gsd-plan-phase 5`.
+- v3.0 planning-time re-evaluations (noted in ROADMAP.md/REQUIREMENTS.md): whether the Phase 9 C++ encoder port is still justified vs. direct consumption of gnus-poc exporter output (injection tool consumes Python-produced containers directly); the real-validation model/corpus selection and non-64-multiple tiling/padding convention gaps move with Phase 10; the CLI flag naming question moves with Phase 11.
+- Starter artifact for Phase 5: `gnus-poc/models/specialists_mlx/demo/fp4/demo.sgfp4` (132,368 bytes, 512×512, byte-verified) — uniform random noise, all `UNIFORM_64`; a structured (non-uniform) second artifact is REQUIRED before Phase 7's quadtree coverage criterion can pass.
+- Do NOT consume gnus-poc `pipeline/runner.py` default quantize output (invokes exporter without `--adaptive` → legacy v1, unsupported by the decoder). gnus-poc-side fix needed; not this workstream's job.
+- Terminology: the format is "SGFP4 v2" — never "Ultra FP4" (that name collision with gnus-poc manifests refers to a different, unrelated E2M1 format from the sibling `milestone` workstream).
 - `test/op/FP4ModelTest.cpp` (pre-existing, unrelated dead code from `milestone` workstream commit `cffaf4bd`) still blocks a from-scratch `run_test.out` build; see `01-affine-dual-mode-decode-core-cpu-uniform-layouts/deferred-items.md`. Recommend the `milestone` workstream's own Phase 4 plan 04-02 fix or remove it — confirmed still broken/unfixed as of this session (04-02-SUMMARY.md's Deviations section).
 - Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — deferred, acknowledged in MILESTONES.md v1.0 entry; run `/gsd-verify-work 2` retroactively if a formal verification artifact is ever wanted
-- Phase 7 planning must select a concrete real validation model/corpus (open gap, not resolved by research) and decide the non-64-multiple tiling/padding reshape convention (row-major `[OC, IC*KH*KW]` vs. alternative) — see research SUMMARY.md "Gaps to Address"
-- Phase 8 planning: exact CLI flag name (peer to `--weightQuantBits`) still TBD — must be visually/textually distinct from sibling `milestone` workstream's Ultra FP4 flag naming
 
 ## Session Continuity
 
-**Last session:** 2026-08-25T00:00:00.000Z
+**Last session:** 2026-08-26T00:00:00.000Z
 
-**Stopped At:** Roadmap created for v2.0 (Phases 5-9), 11/11 requirements mapped
+**Stopped At:** v2.0 restructured to Model-Artifact Injection Tool (Phases 5-7); Converter Integration moved to v3.0 (Phases 8-12)
 **Resume File:** None
 
 ## Performance Metrics
@@ -86,6 +91,7 @@ Progress: [░░░░░░░░░░] 0%
 | Date | Slug | Result | Commit |
 |------|------|--------|--------|
 | 2026-08-25 | backfill-sgfp4-pivot-phase2-completion | ROADMAP/STATE Phase 2 completion backfill (docs only) | 2333a38b |
+| 2026-08-26 | (planning docs only, uncommitted) | v2.0 → Injection Tool restructure; Converter Integration → v3.0 | TBD |
 
 ## Decisions
 
@@ -106,4 +112,6 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Operator Next Steps
 
-- Run `/gsd-plan-phase 5` to plan Phase 5 (Schema + Sidecar Wiring), the first phase of v2.0
+- Run `/gsd-plan-phase 5` to plan Phase 5 (Injection Core — Artifact Construction & Graph Splicing), the first phase of v2.0
+- Before/during Phase 5: request or generate a structured (non-uniform) SGFP4 v2 container from gnus-poc — needed for Phase 7's quadtree coverage criterion; the existing demo artifact is all `UNIFORM_64`
+- Commit the restructured planning docs (ROADMAP.md, REQUIREMENTS.md, STATE.md) once reviewed
