@@ -91,7 +91,7 @@ Progress: [░░░░░░░░░░] 0%
 | Date | Slug | Result | Commit |
 |------|------|--------|--------|
 | 2026-08-25 | backfill-sgfp4-pivot-phase2-completion | ROADMAP/STATE Phase 2 completion backfill (docs only) | 2333a38b |
-| 2026-08-26 | (planning docs only, uncommitted) | v2.0 → Injection Tool restructure; Converter Integration → v3.0 | TBD |
+| 2026-08-26 | v2.0-restructure-injection-tool | v2.0 → Injection Tool restructure; Converter Integration → v3.0 | 8cc5e2f9 |
 
 ## Decisions
 
@@ -114,4 +114,3 @@ Progress: [░░░░░░░░░░] 0%
 
 - Run `/gsd-plan-phase 5` to plan Phase 5 (Injection Core — Artifact Construction & Graph Splicing), the first phase of v2.0
 - Before/during Phase 5: request or generate a structured (non-uniform) SGFP4 v2 container from gnus-poc — needed for Phase 7's quadtree coverage criterion; the existing demo artifact is all `UNIFORM_64`
-- Commit the restructured planning docs (ROADMAP.md, REQUIREMENTS.md, STATE.md) once reviewed
