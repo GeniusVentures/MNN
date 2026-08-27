@@ -24,8 +24,8 @@ Requirements for this milestone (v2.0). Each maps to roadmap phases.
 
 ### Classic-API Load & Run Validation
 
-- [ ] **SGINJ-05**: The injected artifact loads and runs through the **classic** API — `Interpreter::createFromFile`/`createFromBuffer` → `createSession` → `runSession` (matching `demo/exec/pictureRecognition.cpp` and downstream `SGProcessingManager::MNN_Tensor::Process()`) — NOT just `Module::load`/Express; never previously verified end-to-end, expect friction around session input/output tensor identification (the only existing proof-of-concept graph had zero inputs)
-- [ ] **SGINJ-06**: End-to-end inference with injected weight tensors matches an FP32/reference baseline within defined tolerance on CPU, with external-sidecar resolution working under the classic path (external path arrives via the op itself, not a session-level `setExternalFile`)
+- [x] **SGINJ-05**: The injected artifact loads and runs through the **classic** API — `Interpreter::createFromFile`/`createFromBuffer` → `createSession` → `runSession` (matching `demo/exec/pictureRecognition.cpp` and downstream `SGProcessingManager::MNN_Tensor::Process()`) — NOT just `Module::load`/Express; never previously verified end-to-end, expect friction around session input/output tensor identification (the only existing proof-of-concept graph had zero inputs)
+- [x] **SGINJ-06**: End-to-end inference with injected weight tensors matches an FP32/reference baseline within defined tolerance on CPU, with external-sidecar resolution working under the classic path (external path arrives via the op itself, not a session-level `setExternalFile`)
 
 ### Multi-Tensor Hardening & Structured-Data Coverage
 
@@ -84,12 +84,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SGINJ-02 | Phase 5 | Pending |
 | SGINJ-03 | Phase 5 | Pending |
 | SGINJ-04 | Phase 5 | Pending |
-| SGINJ-05 | Phase 6 | Pending |
-| SGINJ-06 | Phase 6 | Pending |
+| SGINJ-05 | Phase 6 | Complete |
+| SGINJ-06 | Phase 6 | Complete |
 | SGINJ-07 | Phase 7 | Pending |
 | SGINJ-08 | Phase 7 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 8 total (SGINJ-01..08)
 - Mapped to phases: 8/8 ✓
 - Unmapped: 0

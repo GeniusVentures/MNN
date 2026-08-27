@@ -109,7 +109,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 | 3. Vulkan Decode — Uniform Layouts | v1.0 | 4/4 | Complete | 2026-08-25 |
 | 4. Vulkan Decode — Adaptive Quadtree | v1.0 | 2/2 | Complete | 2026-08-25 |
 | 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 0/2 | Not started | - |
-| 6. Classic-API Load & Run Validation | v2.0 | 2/2 | Complete   | 2026-08-27 |
+| 6. Classic-API Load & Run Validation | v2.0 | 2/2 | Complete    | 2026-08-27 |
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 0/TBD | Not started | - |
 | 8. Schema + Sidecar Wiring | v3.0 | 0/TBD | Not started | - |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
