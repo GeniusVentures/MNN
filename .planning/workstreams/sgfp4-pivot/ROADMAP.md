@@ -35,38 +35,52 @@ Full detail archived to `.planning/milestones/v1.0-ROADMAP.md`; phase docs (PLAN
 ## Phase Details
 
 ### Phase 5: Injection Core — Artifact Construction & Graph Splicing
+
 **Goal**: Given a normally-converted `.mnn` and one or more SGFP4 v2 container files, the tool produces a new `.mnn` + external sidecar in which target weight tensors are replaced by `OpType_SGFP4Dequant` nodes — correct at the Express/`Module::load` level first.
 **Depends on**: Phase 4 (v1.0 — existing CPU decode Execution is the ground-truth consumer)
 **Requirements**: SGINJ-01, SGINJ-02, SGINJ-03, SGINJ-04
 **Success Criteria** (what must be TRUE):
+
 1. The tool accepts (a) a `.mnn` from the unmodified mnnconvert/llmexport path and (b) one or more SGFP4 v2 container files (gnus-poc `fp4_exporter.py --adaptive` output), rejecting legacy v1 containers via version check rather than silently misdecoding.
 2. Per target weight tensor: an `Op` with `type = OpType_SGFP4Dequant`, `main.type = OpParameter_SGFP4DequantParam`, `SGFP4DequantParamT{magic = kSGFP4Magic, external = {offset, size}, dims = {dimO, dimI}}` — with `op->externalPath` set literally on the op itself (this op is NOT covered by `OpCommonUtils::createExecutionWithExternal` auto-injection; documented gotcha from the existing test).
 3. Byte ranges written into a single merged sidecar are non-overlapping and match each op's `{offset, size}`; the spliced graph's downstream consumers read the new node's output instead of the original constant.
 4. Serialized via `Variable::save(vars, fileName)` — the direct-to-file overload (not the in-memory `std::vector<int8_t>` variant) — and the artifact reloads via Express `Module::load` (with `rtmgr->setExternalFile()` before load) decoding weights through the existing CPU Execution within oracle tolerance.
+
 **Plans**: 2 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 05-01-PLAN.md — Runtime-level injection recipe test (A1 spike) + byte-level version-gate helper (SGINJ-01..04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 05-02-PLAN.md — `sgfp4_inject` tool: manifest-driven pairing, graph surgery, sidecar merge, save + in-tool verify
 
 ### Phase 6: Classic-API Load & Run Validation
+
 **Goal**: The injected artifact loads and runs through the classic Interpreter/Session API — `Interpreter::createFromFile`/`createFromBuffer` → `createSession` → `runSession` — the exact path `SGProcessingManager::MNN_Tensor::Process()` uses downstream; never previously verified end-to-end.
 **Depends on**: Phase 5
 **Requirements**: SGINJ-05, SGINJ-06
 **Success Criteria** (what must be TRUE):
+
 1. `Interpreter::createFromFile` → `createSession` → `runSession` succeeds on an injected artifact, including correct session input/output tensor identification (expected friction: the only prior proof-of-concept graph had zero inputs).
 2. End-to-end inference with at least one injected weight tensor matches an FP32/reference baseline within defined tolerance on CPU, via the existing decode Execution.
 3. External-sidecar resolution works under the classic API path (external path arrives via the op itself, not a session-level `setExternalFile`).
+
 **Plans**: TBD
 
 ### Phase 7: Multi-Tensor Hardening & Structured-Data Coverage
+
 **Goal**: The tool handles realistic multi-weight models and the full SGFP4 v2 format surface — not just the single uniform-random demo artifact — and fails cleanly on malformed input.
 **Depends on**: Phase 6
 **Requirements**: SGINJ-07, SGINJ-08
 **Success Criteria** (what must be TRUE):
+
 1. Multiple target weight tensors (and/or multiple containers) inject into a single artifact with independent, collision-free sidecar byte ranges, loading and running correctly.
 2. At least one structured (non-uniform) container exercises the LAYOUT_MIXED/quadtree decode path end-to-end — the uniform-random demo container produces all `UNIFORM_64` and does NOT count as quadtree coverage (handoff caveat; a structured second artifact must be obtained or generated).
 3. Weight shapes/dims convention (`dims = {dimO, dimI}` on the matrix) is documented and applied; malformed/empty inputs fail cleanly in the tool rather than emitting a corrupt artifact (relevant because a corrupt artifact would crash the downstream unchecked-nullptr path in `SGProcessingManager`, not fail gracefully).
+
 **Plans**: TBD
 
 ### 📋 v3.0 SGFP4 v2 Converter Integration (Planned)
