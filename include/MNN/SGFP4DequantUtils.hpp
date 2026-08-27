@@ -99,6 +99,21 @@ inline uint32_t sgfp4_read_u32_le(const uint8_t* p) {
 }
 
 /**
+ * @brief Byte-level SGFP4 v2 version gate (SGINJ-01).
+ *
+ * Probes the container's own bytes -- magic == 'SGF4' AND version == 0x02 --
+ * without decoding anything. Legacy v1 fixed-payload containers
+ * (headers[B]|offsets[B]|codes_blob) carry no SGF4 magic, so this probe
+ * rejects them without ever trusting a manifest's format label (the
+ * gnus-poc manifest mislabels v2 as "fp4_ultra_v0.2"; never consult it).
+ */
+inline bool sgfp4_is_v2_container(const uint8_t* data, size_t size) {
+    return data != nullptr && size >= kSGFP4FixedHeaderSize &&
+           sgfp4_read_u32_le(data) == kSGFP4Magic &&
+           data[kSGFP4VersionByteOffset] == kSGFP4Version;
+}
+
+/**
  * @brief Resolve a Table 3 uniform layout enum to its leaf count N and leaf
  * edge size n. Returns false for LAYOUT_MIXED (Phase 2) or any enum >= 6.
  */
