@@ -5,10 +5,10 @@ milestone_name: SGFP4 v2 Model-Artifact Injection Tool
 current_phase: 5
 current_phase_name: Injection Core — Artifact Construction & Graph Splicing
 status: executing
-stopped_at: Phase 5 executed (both plans complete, pending verification)
-last_updated: "2026-08-27"
+stopped_at: Phase 6 context gathered
+last_updated: "2026-08-27T21:22:34.101Z"
 last_activity: 2026-08-27
-last_activity_desc: Phase 5 executed: 05-01 inject graph-surgery spike + version gate, 05-02 sgfp4_inject tool — all suites green, end-to-end real-container run verified
+last_activity_desc: "Phase 5 executed: 05-01 (SGFP4InjectTest + sgfp4_is_v2_container) and 05-02 (sgfp4_inject tool); real demo container injected end-to-end, decode==oracle verified in-tool"
 progress:
   total_phases: 3
   completed_phases: 1
@@ -67,10 +67,10 @@ Progress: [███░░░░░░░] 33%
 
 ## Session Continuity
 
-**Last session:** 2026-08-27 (Phase 5 execution)
+**Last session:** 2026-08-27T21:22:34.077Z
 
-**Stopped At:** Phase 5 executed (05-01 + 05-02 complete; run `/gsd-verify-work 5` next)
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/05-injection-core-artifact-construction-graph-splicing/05-02-SUMMARY.md
+**Stopped At:** Phase 6 context gathered
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/06-classic-api-load-run-validation/06-CONTEXT.md
 
 ## Performance Metrics
 
