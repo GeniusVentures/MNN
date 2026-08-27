@@ -42,6 +42,7 @@ Context: sgfp4-pivot v1.0 (SGV2-01..16) shipped the decode-only path — CPU + V
 - ✓ Vulkan buffer backend with 100+ op implementations — existing
 - ✓ Vulkan image backend (partial) — existing
 - ✓ SGFP4 v2 (quadtree-adaptive, affine dual-mode) decode — CPU + Vulkan Executions, both code modes (FP4_AFFINE, T158_AFFINE), all uniform layouts + LAYOUT_MIXED, CPU/Vulkan parity verified across 14 fixtures — sgfp4-pivot v1.0 (additive to existing E2M1 Ultra FP4 path)
+- ✓ SGFP4 v2 injected artifacts load and run via the classic Interpreter/Session API with named I/O, FP32-baseline parity (rtol 1e-4), and op-level external-sidecar resolution (no session setExternalFile) — sgfp4-pivot v2.0 Phase 6 (op/sgfp4/classic_api + op/sgfp4/classic_api_missing_sidecar)
 
 ### Active
 
@@ -121,4 +122,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-25 after archiving sgfp4-pivot v1.0 and starting sgfp4-pivot milestone v2.0*
+*Last updated: 2026-08-27 after sgfp4-pivot Phase 6 (classic-API load & run validation) passed verification 3/3*
