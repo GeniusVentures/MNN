@@ -344,22 +344,25 @@ bool isV2Container(const uint8_t* p, size_t n) {
 | A4 | Weight tensors to match are 2D (`dimO × dimI`) — conv weights in NC4HW4 (4D `[O,I,1,1]`) are out of scope for Phase 5. | Summary / SGINJ mapping | MEDIUM — if the Phase 5 test model uses 4D conv weights, exact-shape match fails; the demo (512×512 MatMul) avoids this, but planner should confirm the test model's weight tensor rank. |
 | A5 | `MNN_SUPPORT_TRANSFORMER_FUSE=ON` is required for the SGFP4 tests to actually execute (they are `#ifdef`-gated), even though the op itself compiles unconditionally. | State of the Art | LOW — confirmed by the `#ifdef` in both test files; build must pass the flag. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Exact in-place semantics of `Variable::replace` for two 0-input, 1-output Exprs**
    - What we know: `Expr::replace(old, from)` copies `from`'s `mOp`/`mName`/`mOutputNames`/`mInside`/`mInputs` into `old` (`Expr.cpp:503-575`); consumers keep their `mTo` back-refs on `old`.
    - What's unclear: whether the const's `mStorage`/`mOutputTensors` (the loaded weight blob) is fully released or lingers in the mutated Expr.
    - Recommendation: include a Wave 0 spike task that runs the inject→save→reload loop on a minimal 2-op graph (input→MatMul(weight)→output) and asserts the saved artifact has one `SGFP4Dequant` op, zero `Const` weight ops, and correct decode. This validates A1 before full implementation.
+   - RESOLVED: Plan 05-01 Task 1 is the A1 Wave-0 spike — it runs the inject→save→reload loop on a minimal input→MatMul→output graph before any tool code depends on the semantics.
 
 2. **Test model shape / weight rank for Phase 5**
    - What we know: the demo container is 512×512 (2D). The `.mnn` used for the test is not yet pinned.
    - What's unclear: whether the test `.mnn` has a 2D MatMul weight matching `{512,512}`, or needs a synthetic minimal model.
    - Recommendation: generate (or reuse) a minimal converted `.mnn` with a single MatMul whose weight is `[512,512]`; confirm rank=2 (A4) during planning.
+   - RESOLVED: Plan 05-01 uses a programmatically-constructed minimal 512×512 MatMul model (and 05-02 commits a named generator step for `minimal_512.mnn`) — weight is rank-2 `[512,512]`, avoiding the A4 4D-conv case.
 
 3. **SHA-256 header provenance**
    - What we know: D-03 needs SHA-256; OpenSSL is locked out; no registry install.
    - What's unclear: which exact public-domain header to vendor.
    - Recommendation: pin a specific, widely-used public-domain implementation (e.g., the RFC 6234 / WjCryptLib-style single header) and review it for the license header before committing.
+   - RESOLVED: Plan 05-02 Task 1 vendors `tools/fp4/sha256.hpp` (RFC 6234 / WjCryptLib-style public-domain single header) with license-header review called out in the task's acceptance criteria.
 
 ## Environment Availability
 

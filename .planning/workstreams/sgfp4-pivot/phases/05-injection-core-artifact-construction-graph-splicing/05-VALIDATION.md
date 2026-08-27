@@ -38,14 +38,13 @@ created: 2026-08-26
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD-by-planner | TBD | TBD | SGINJ-01 | TBD | v1 container rejected via magic/version byte check | unit | TBD | no | pending |
-| TBD-by-planner | TBD | TBD | SGINJ-02 | TBD | Constructed op matches pinned OpT recipe (type/param/externalPath) | unit+E2E | TBD | no | pending |
-| TBD-by-planner | TBD | TBD | SGINJ-03 | TBD | Merged sidecar byte ranges non-overlapping & match {offset,size} | unit | TBD | no | pending |
-| TBD-by-planner | TBD | TBD | SGINJ-04 | TBD | Artifact reloads via Module::load + setExternalFile, decodes within oracle tolerance | E2E | TBD | no | pending |
+| 05-01-T1 (A1 spike) | 05-01 | 1 | SGINJ-02, SGINJ-03, SGINJ-04 | T-05-03, T-05-02 | Saved artifact has exactly 1 SGFP4Dequant op and 0 dead weight Consts; decode within 1e-4f | integration | `cd build && ./run_test.out op/sgfp4/inject` | no | pending |
+| 05-01-T2 (version gate) | 05-01 | 1 | SGINJ-01 | T-05-01 | `sgfp4_is_v2_container` rejects bad-magic/bad-version/v1-layout/null/short; accepts known-good v2 | unit | `cd build && ./run_test.out op/sgfp4/inject_v1_reject && ./run_test.out op/sgfp4/inject` | no | pending |
+| 05-02-T1 (SHA-256 + CMake) | 05-02 | 2 | SGINJ-02 (build path) | T-05-SC | Vendored single-header sha256 (no OpenSSL/registry installs); wiring grep-clean | source assertion | `grep -n "MNN_BUILD_SGFP4_TOOLS\|tools/fp4/CMakeLists.txt\|sgfp4_inject.out\|sha256_hex" CMakeLists.txt tools/fp4/CMakeLists.txt tools/fp4/sha256.hpp` | no | pending |
+| 05-02-T2 (sgfp4_inject tool) | 05-02 | 2 | SGINJ-01, SGINJ-02, SGINJ-03, SGINJ-04 | T-05-01..T-05-06 | v1 rejected at byte level before decode; sha256 mismatch hard-errors; sidecar ranges monotonic/16-aligned; reload+oracle compare within 1e-4f | E2E | `cd build && cmake .. -DMNN_SUPPORT_TRANSFORMER_FUSE=ON -DMNN_BUILD_SGFP4_TOOLS=ON && make sgfp4_inject.out && ./tools/fp4/sgfp4_inject.out --model minimal_512.mnn --niche-dir "<demo fp4 dir>" --output out.mnn && test -f out.mnn && test -f out.mnn.weight` (shell: MSYS2/MinGW bash) | no | pending |
 
-> The planner fills Task ID / Plan / Wave / Automated Command / File Exists columns when
-> concrete task breakdowns exist. Threat Ref filled from PLAN.md threat models (security
-> capability inactive this run — leave TBD or n/a).
+> Incremental feedback (<30s) after first configure: `cd build && make sgfp4_inject.out` + the E2E line above.
+> Task IDs map to plan tasks: 05-01 Task 1/Task 2, 05-02 Task 1/Task 2.
 
 ---
 
