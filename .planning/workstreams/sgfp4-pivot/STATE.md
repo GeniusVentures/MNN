@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SGFP4 v2 Model-Artifact Injection Tool
-current_phase: 5
-current_phase_name: Injection Core — Artifact Construction & Graph Splicing
+current_phase: 6
+current_phase_name: Classic-API Load & Run Validation
 status: executing
-stopped_at: Phase 6 context gathered
+stopped_at: Phase 6 planned (06-01 + 06-02, checker passed)
 last_updated: "2026-08-27T21:22:34.101Z"
 last_activity: 2026-08-27
 last_activity_desc: "Phase 5 executed: 05-01 (SGFP4InjectTest + sgfp4_is_v2_container) and 05-02 (sgfp4_inject tool); real demo container injected end-to-end, decode==oracle verified in-tool"
@@ -29,10 +29,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 5 of 12 (Injection Core — Artifact Construction & Graph Splicing) — first phase of v2.0 (1 of 3 milestone phases; v3.0 Converter Integration holds phases 8-12)
-Plan: 05-02 complete (both plans executed, all suites green)
-Status: Executed — pending verification (`/gsd-verify-work 5`)
-Last activity: 2026-08-27 — Phase 5 executed: 05-01 (SGFP4InjectTest + sgfp4_is_v2_container) and 05-02 (sgfp4_inject tool); real demo container injected end-to-end, decode==oracle verified in-tool
+Phase: 6 of 12 (Classic-API Load & Run Validation) — planned with 2 plans (06-01 shared-core refactor, 06-02 classic-API test), plan-checker passed
+Plan: 06-01 (wave 1) then 06-02 (wave 2)
+Status: Ready to execute (`/gsd-execute-phase 6`)
+Last activity: 2026-08-27 — Phase 6 planned: research (06-RESEARCH.md), validation strategy (06-VALIDATION.md), plans 06-01/06-02; decision coverage 16/16
 
 ## Progress
 
@@ -69,8 +69,8 @@ Progress: [███░░░░░░░] 33%
 
 **Last session:** 2026-08-27T21:22:34.077Z
 
-**Stopped At:** Phase 6 context gathered
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/06-classic-api-load-run-validation/06-CONTEXT.md
+**Stopped At:** Phase 6 planned (06-01 + 06-02, checker passed)
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/06-classic-api-load-run-validation/06-02-PLAN.md
 
 ## Performance Metrics
 
@@ -115,7 +115,7 @@ Progress: [███░░░░░░░] 33%
 
 ## Operator Next Steps
 
-- Run `/gsd-verify-work 5` to formally verify Phase 5 (UAT: classic Interpreter/Session reload is sampled in-tool via Module::load; the dedicated Interface-Validation phase is Phase 6)
-- Then `/gsd-plan-phase 6` (Interface Validation — classic Interpreter/Session API end-to-end)
+- Run `/gsd-verify-work 5` to formally verify Phase 5 (optional — Phase 6's classic-API suites re-prove artifact validity load-level; or verify both phases together after Phase 6)
+- Then `/gsd-execute-phase 6` (06-01 shared-core refactor → 06-02 classic-API test)
 - Before/during Phase 6: request or generate a structured (non-uniform) SGFP4 v2 container from gnus-poc — needed for Phase 7's quadtree coverage criterion; the existing demo artifact is all `UNIFORM_64`
 - FP4ModelTest.cpp full-suite build blocker: local unblock is now cleaner than the temp-stub cycle — after every `cmake` configure, filter the file out of the untracked generated `.build/run_test.out.vcxproj` (see 05-01-SUMMARY Deviations); permanent fix still owned by the `milestone` workstream (04-02)
