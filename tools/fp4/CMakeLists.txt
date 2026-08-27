@@ -1,0 +1,17 @@
+set(MNN_SGFP4_TOOLS "")
+
+file(GLOB SGFP4FILES ${CMAKE_CURRENT_LIST_DIR}/*.cpp ${CMAKE_CURRENT_LIST_DIR}/*.hpp)
+add_executable(sgfp4_inject.out ${SGFP4FILES})
+list(APPEND MNN_SGFP4_TOOLS sgfp4_inject.out)
+
+foreach(TARGET ${MNN_SGFP4_TOOLS})
+    target_link_libraries(${TARGET} ${MNN_DEPS})
+    if (MSVC)
+        target_compile_definitions(${TARGET} PRIVATE "_CRT_SECURE_NO_WARNINGS")
+        if (NOT MNN_BUILD_SHARED_LIBS)
+            foreach (DEPEND ${MNN_DEPS})
+                target_link_options(${TARGET} PRIVATE /WHOLEARCHIVE:$<TARGET_FILE:${DEPEND}>)
+            endforeach ()
+        endif()
+    endif()
+endforeach()
