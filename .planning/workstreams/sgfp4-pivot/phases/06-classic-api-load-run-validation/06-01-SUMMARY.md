@@ -29,7 +29,7 @@ key-decisions:
   - "No CMake change: tools/fp4/CMakeLists.txt already globs *.hpp at configure time and the header is inert in the executable source list"
 
 patterns-established:
-  - "Tool-core-as-header: future in-process consumers (06-02 classic-API test) #include \"fp4/sgfp4_inject_core.hpp\" and call sgfp4_inject::run with an argv array instead of spawning the .out"
+  - "Tool-core-as-header: future in-process consumers (06-02 classic-API test) include the header as `\"fp4/sgfp4_inject_core.hpp\"` (resolved via the project's global `tools/` include dir, the same mechanism the mnncli tests use) and call sgfp4_inject::run with an argv array instead of spawning the .out"
 
 requirements-completed: [SGINJ-05, SGINJ-06]
 
