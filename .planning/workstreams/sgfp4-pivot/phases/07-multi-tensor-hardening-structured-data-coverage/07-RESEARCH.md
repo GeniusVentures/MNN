@@ -371,14 +371,17 @@ constexpr int kStructuredDimO = 512, kStructuredDimI = 512;
 | A4 | Option A (failure-cleanup) is acceptable for D-11 (vs strict temp+rename) | Q1 | D-11 wording allows it ("all validation... or temp files promoted by rename" — cleanup achieves the no-partial-files outcome); planner should confirm interpretation in PLAN.md |
 | A5 | MSVC `std::remove` early-deletes open files reliably enough for the cleanup path (close streams before remove; ofstreams are scope-closed by then in current code shape) | Q1 | If a stream is still open at cleanup, Windows remove fails → ensure cleanup runs after stream scopes close (planner detail) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Structured fixture dimensions (512×512 vs smaller)**
    - What we know: D-05 suggests `w1[512,512]` for the structured pair; discretion clause allows other 64-multiples; header size scales ~0.7-1.6 MB as text at 512².
    - What's unclear: user's tolerance for header size vs fidelity to the suggested topology.
    - Recommendation: default to 512×512 (mirrors D-05's e.g. exactly, strongest claim); planner may drop to 256×256 if the header feels heavy — assert MIXED presence either way.
+   - **Decision:** 512×512 adopted (Plan 07-02 — mirrors D-05 exactly).
 2. **Exact malformed-probe suite organization** (one looping class vs a few targeted classes) — pure discretion; recommendation is one looping class (`op/sgfp4/malformed_inputs`) with per-probe diagnostics, keeping the family count at +2 suites total.
+   - **Decision:** one looping probe class with per-probe index/name diagnostics (Plan 07-03 Task 2).
 3. **Fix windows for cleanup vs. pre-existing outputs** (Option A removing a PREVIOUS run's good artifact when a new run over the same output path fails) — decide and document in PLAN.md; either behavior satisfies D-11's literal text.
+   - **Decision:** failed runs remove stale artifacts from previous runs at the same paths; semantics documented in the `failCleanup` comment (Plan 07-01 Task 1).
 
 ## Environment Availability
 
