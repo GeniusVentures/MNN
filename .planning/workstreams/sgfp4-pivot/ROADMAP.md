@@ -53,7 +53,58 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 - [ ] **Phase 11: Graph-Rewrite PostConverter Pass + CLI Flag** - New `PostConverter` pass inserts `SGFP4Dequant` nodes; new CLI flag triggers it; `WeightQuantAndCoding.cpp` skip-guard prevents double-processing
 - [ ] **Phase 12: End-to-End Validation** - A real model converts and runs correct inference on CPU and Vulkan via the new flag
 
-**(Phase details for 8-12 preserved as previously roadmapped — goals, dependencies, and success criteria transfer with renumbering: Phase 8 was Phase 5, 9←6, 10←7, 11←8, 12←9. Dependencies: Phase 8 ← Phase 4 (v1.0) + v2.0 learnings; Phase 9 ← 8; Phase 10 ← 9; Phase 11 ← 8, 10; Phase 12 ← 11.)**
+### Phase 8: Schema + Sidecar Wiring
+
+**Goal**: Add `buffer:[byte]` to `SGFP4DequantParam` (schema evolution) and wire `RemoveParams.cpp` so SGFP4 container bytes carried in the op param can be externalized through the converter's existing shared `.mnn.weight` sidecar mechanism (`saveExternalData` / `_largeModel` auto-trigger). The CPU and Vulkan runtime decoders accept **both** data placements — inline buffer and external sidecar — with one unified convention. This is the serialization foundation Phases 9–11 build on.
+**Depends on**: Phase 4 (v1.0 — existing CPU/Vulkan decode Executions are the consumers) + v2.0 injection-tool learnings (16-byte sidecar alignment, offset conventions, classic-API load behavior)
+**Requirements**: SGV2-22, SGV2-23 (`.planning/milestones/v2.0-REQUIREMENTS.md` §"v3.0 Converter Integration")
+**Success Criteria** (what must be TRUE):
+
+1. `schema/default/CaffeOp.fbs` `SGFP4DequantParam` contains `buffer:[byte]`; generated headers regenerated and committed; existing artifacts (injection-tool output) and all existing `op/sgfp4/` suites remain green unchanged (sidecar mode stays the original supported path — buffer mode is additive).
+2. CPU (`CPUSGFP4Dequant::onResize`) and Vulkan Executions dispatch **buffer-first**: non-empty `param->buffer()` decodes directly from the inline bytes (no FileLoader, magic + dims-consistency entry checks retained); empty buffer falls back to the existing `external = {offset, size}` + `op->externalPath` path with all current validation (incl. T-01-04 file-size bounds) preserved.
+3. `RemoveAndStoreParam` handles `OpParameter_SGFP4DequantParam` via an aligned `storeWeight` variant: sidecar region padded to a 16-byte multiple (zero-filled) before advancing the shared offset, `external = {offset, true-size}` (pad inert), buffer cleared after store (no dual-source duplication); externalization remains gated by the existing `config.saveExternalData` / `_largeModel` flags — no new converter flag.
+4. Decode-parity tests prove buffer-mode decode == sidecar-mode decode == existing oracle (`SGFP4DequantFixtures` / `dequant_sgfp4_container_cpu`) on both CPU and Vulkan using identical container bytes across the two placements; a converter-path round-trip test drives `RemoveAndStoreParam`/`saveExternalData` on a synthetic `NetT` and asserts 16-byte-aligned, monotonic, non-overlapping sidecar layout, `external == {offset, true-size}`, buffer cleared in the serialized op, and reload+decode parity.
+5. `SGFP4TestUtil.hpp` extracted from the duplicated helpers in `SGFP4ClassicAPITest.cpp` / `SGFP4MultiTensorTest.cpp` / `SGFP4InjectTest.cpp` (retrofitted onto it; correct region-relative offset convention from `SGFP4MultiTensorTest.cpp:190-199`), and the Phase 11 hand-off contract is documented: buffer-staging convention (pass writes `buffer`, `external = {}`, no `externalPath` — zero byte I/O) plus the non-interception note that `SGFP4Dequant` intentionally stays out of `createExecutionWithExternal`.
+
+**Plans**: 0/TBD
+
+### Phase 9: Real-Weight C++ Encoder Port
+
+**Goal**: Port the Python quadtree/dual-mode encoder to C++, operating on real (non-64-aligned) weight tensor shapes. **Plan-time re-evaluation (handoff 2026-08-26):** must be re-evaluated against direct consumption of gnus-poc `fp4_exporter.py --adaptive` output (as the injection tool does); the C++ port may still be justified for self-contained single-command UX — a plan-time decision, not locked.
+**Depends on**: Phase 8
+**Requirements**: SGV2-24, SGV2-25
+**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+
+**Plans**: 0/TBD
+
+### Phase 10: Real-Weight Validation Against Actual Model Statistics
+
+**Goal**: Validate/revise encoder parameters against a real model's weight distributions before graph-rewrite integration (synthetic-fixture-tuned assumptions are the top-flagged risk).
+**Depends on**: Phase 9
+**Requirements**: SGV2-26, SGV2-27
+**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+
+**Plans**: 0/TBD
+
+### Phase 11: Graph-Rewrite PostConverter Pass + CLI Flag
+
+**Goal**: New `PostConverter` pass inserts `SGFP4Dequant` nodes (buffer-staged per Phase 8's D-11 contract); new CLI flag triggers it; `WeightQuantAndCoding.cpp` skip-guard prevents double-processing. Absorbs the v2.0 injection tool's sidecar/rewiring learnings and retires tech debt W-1 (classic_api offset-convention retrofit) and W-2 (arg-stage failCleanup) per the v2.0 milestone audit placement.
+**Depends on**: Phase 8, Phase 10
+**Requirements**: SGV2-28, SGV2-29, SGV2-30
+**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+
+**Plans**: 0/TBD
+
+### Phase 12: End-to-End Validation
+
+**Goal**: A real model converts and runs correct inference on CPU and Vulkan via the new flag.
+**Depends on**: Phase 11
+**Requirements**: SGV2-31, SGV2-32
+**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+
+**Plans**: 0/TBD
+
+**(Renumbering provenance: Phase 8 was Phase 5, 9←6, 10←7, 11←8, 12←9. Dependencies: Phase 8 ← Phase 4 (v1.0) + v2.0 learnings; Phase 9 ← 8; Phase 10 ← 9; Phase 11 ← 8, 10; Phase 12 ← 11.)**
 
 ## Progress
 
