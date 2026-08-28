@@ -13,6 +13,7 @@ metrics:
   artifact_model_bytes: 480
   artifact_sidecar_bytes: 132368
   negative_paths_exit_codes: [1, 1]
+requirements-completed: [SGINJ-01, SGINJ-02, SGINJ-03, SGINJ-04]
 ---
 
 # Plan 05-02 Summary: sgfp4_inject Standalone Injection Tool

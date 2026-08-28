@@ -17,10 +17,10 @@ Requirements for this milestone (v2.0). Each maps to roadmap phases.
 
 ### Injection Core — Artifact Construction & Graph Splicing
 
-- [ ] **SGINJ-01**: The tool accepts a normally-converted `.mnn` (unmodified mnnconvert/llmexport output) plus one or more SGFP4 v2 container files (gnus-poc `fp4_exporter.py --adaptive` output), rejecting legacy v1 containers via version check rather than silently misdecoding
-- [ ] **SGINJ-02**: Per target weight tensor, the tool constructs an `Op` with `type = OpType_SGFP4Dequant`, `main.type = OpParameter_SGFP4DequantParam`, `SGFP4DequantParamT{magic = kSGFP4Magic, external = {offset, size}, dims = {dimO, dimI}}`, with `op->externalPath` set literally on the op itself — this op is NOT one of the types `OpCommonUtils::createExecutionWithExternal` auto-rewrites (unlike Convolution2D/Scale/LayerNorm); a documented gotcha that is easy to miss
-- [ ] **SGINJ-03**: Container bytes are written into a single merged external sidecar with non-overlapping `{offset, size}` ranges per op, and the graph is rewired so downstream consumers (e.g. the MatMul/conv that consumed the original constant weight) read the new `SGFP4Dequant` node's output
-- [ ] **SGINJ-04**: The artifact serializes via `Variable::save(vars, fileName)` — the **direct-to-file** overload (`include/MNN/expr/Expr.hpp:157`), not the in-memory `std::vector<int8_t>` variant the existing test uses — and reloads via Express `Module::load`, decoding weights through the existing CPU Execution within oracle tolerance
+- [x] **SGINJ-01**: The tool accepts a normally-converted `.mnn` (unmodified mnnconvert/llmexport output) plus one or more SGFP4 v2 container files (gnus-poc `fp4_exporter.py --adaptive` output), rejecting legacy v1 containers via version check rather than silently misdecoding
+- [x] **SGINJ-02**: Per target weight tensor, the tool constructs an `Op` with `type = OpType_SGFP4Dequant`, `main.type = OpParameter_SGFP4DequantParam`, `SGFP4DequantParamT{magic = kSGFP4Magic, external = {offset, size}, dims = {dimO, dimI}}`, with `op->externalPath` set literally on the op itself — this op is NOT one of the types `OpCommonUtils::createExecutionWithExternal` auto-rewrites (unlike Convolution2D/Scale/LayerNorm); a documented gotcha that is easy to miss
+- [x] **SGINJ-03**: Container bytes are written into a single merged external sidecar with non-overlapping `{offset, size}` ranges per op, and the graph is rewired so downstream consumers (e.g. the MatMul/conv that consumed the original constant weight) read the new `SGFP4Dequant` node's output
+- [x] **SGINJ-04**: The artifact serializes via `Variable::save(vars, fileName)` — the **direct-to-file** overload (`include/MNN/expr/Expr.hpp:157`), not the in-memory `std::vector<int8_t>` variant the existing test uses — and reloads via Express `Module::load`, decoding weights through the existing CPU Execution within oracle tolerance
 
 ### Classic-API Load & Run Validation
 
@@ -80,10 +80,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SGINJ-01 | Phase 5 | Pending |
-| SGINJ-02 | Phase 5 | Pending |
-| SGINJ-03 | Phase 5 | Pending |
-| SGINJ-04 | Phase 5 | Pending |
+| SGINJ-01 | Phase 5 | Complete |
+| SGINJ-02 | Phase 5 | Complete |
+| SGINJ-03 | Phase 5 | Complete |
+| SGINJ-04 | Phase 5 | Complete |
 | SGINJ-05 | Phase 6 | Complete |
 | SGINJ-06 | Phase 6 | Complete |
 | SGINJ-07 | Phase 7 | Complete |

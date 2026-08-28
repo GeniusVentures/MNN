@@ -10,6 +10,7 @@ metrics:
   tests_passed: 5
   tests_failed: 0
   suites_new: ["op/sgfp4/inject", "op/sgfp4/inject_v1_reject"]
+requirements-completed: [SGINJ-01, SGINJ-04]
 ---
 
 # Plan 05-01 Summary: SGFP4 Inject Graph-Surgery Spike + Version Gate

@@ -28,7 +28,7 @@ Full detail archived to `.planning/milestones/v1.0-ROADMAP.md`; phase docs (PLAN
 
 **Terminology:** the format is called **"SGFP4 v2"** — never "Ultra FP4" (that is the sibling `milestone` workstream's unrelated E2M1/`FP4_ULTRA` format, despite gnus-poc manifest labels suggesting otherwise).
 
-- [ ] **Phase 5: Injection Core — Artifact Construction & Graph Splicing** — Build the tool: load `.mnn`, splice `SGFP4Dequant` nodes with sidecar byte ranges, rewire consumers, serialize to disk
+- [x] **Phase 5: Injection Core — Artifact Construction & Graph Splicing** — Build the tool: load `.mnn`, splice `SGFP4Dequant` nodes with sidecar byte ranges, rewire consumers, serialize to disk (completed 2026-08-26)
 - [x] **Phase 6: Classic-API Load & Run Validation** — Prove injected artifacts run through `Interpreter`/`Session` (not just Express), matching FP32 baseline (completed 2026-08-27)
 - [x] **Phase 7: Multi-Tensor Hardening & Structured-Data Coverage** — Multiple containers/tensors, MIXED/quadtree artifact coverage, clean failure on malformed input (completed 2026-08-28)
 
@@ -46,16 +46,16 @@ Full detail archived to `.planning/milestones/v1.0-ROADMAP.md`; phase docs (PLAN
 3. Byte ranges written into a single merged sidecar are non-overlapping and match each op's `{offset, size}`; the spliced graph's downstream consumers read the new node's output instead of the original constant.
 4. Serialized via `Variable::save(vars, fileName)` — the direct-to-file overload (not the in-memory `std::vector<int8_t>` variant) — and the artifact reloads via Express `Module::load` (with `rtmgr->setExternalFile()` before load) decoding weights through the existing CPU Execution within oracle tolerance.
 
-**Plans**: 2 plans
+**Plans**: 2/2 plans complete
 
 Plans:
 **Wave 1**
 
-- [ ] 05-01-PLAN.md — Runtime-level injection recipe test (A1 spike) + byte-level version-gate helper (SGINJ-01..04)
+- [x] 05-01-PLAN.md — Runtime-level injection recipe test (A1 spike) + byte-level version-gate helper (SGINJ-01..04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 05-02-PLAN.md — `sgfp4_inject` tool: manifest-driven pairing, graph surgery, sidecar merge, save + in-tool verify
+- [x] 05-02-PLAN.md — `sgfp4_inject` tool: manifest-driven pairing, graph surgery, sidecar merge, save + in-tool verify
 
 ### Phase 6: Classic-API Load & Run Validation
 
@@ -118,7 +118,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 | 2. Adaptive Quadtree Layout (CPU, LAYOUT_MIXED) | v1.0 | 2/2 | Complete | 2026-08-24 |
 | 3. Vulkan Decode — Uniform Layouts | v1.0 | 4/4 | Complete | 2026-08-25 |
 | 4. Vulkan Decode — Adaptive Quadtree | v1.0 | 2/2 | Complete | 2026-08-25 |
-| 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 0/2 | Not started | - |
+| 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 2/2 | Complete | 2026-08-26 |
 | 6. Classic-API Load & Run Validation | v2.0 | 2/2 | Complete    | 2026-08-27 |
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 3/3 | Complete    | 2026-08-28 |
 | 8. Schema + Sidecar Wiring | v3.0 | 0/TBD | Not started | - |
