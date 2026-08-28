@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: none
+current_phase: 0
+current_phase_name: v2.0 archived 2026-08-28 — Phases 5/6/7 docs in `.planning/milestones/v2.0-phases/`
 status: planning
-stopped_at: v2.0 shipped & archived 2026-08-28 (verified closeout, audit 8/8) — next: /gsd-new-milestone for v3.0
-last_updated: "2026-08-28T19:30:00.000Z"
+stopped_at: Phase 8 context gathered
+last_updated: "2026-08-28T21:59:28.746Z"
 last_activity: 2026-08-28
-last_activity_desc: v2.0 milestone complete
+last_activity_desc: v2.0 milestone shipped (verified closeout), tagged v2.0
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
-  percent: 100
-current_phase_name: (v2.0 archived — awaiting v3.0 milestone creation)
+  total_phases: 2
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 4
+  percent: 0
 current_plan: none
 ---
 
@@ -67,10 +67,10 @@ Progress: [██████████] 100%
 
 ## Session Continuity
 
-**Last session:** 2026-08-28T01:19:46.808Z
+**Last session:** 2026-08-28T21:59:28.738Z
 
-**Stopped At:** Phase 7 context gathered
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/07-multi-tensor-hardening-structured-data-coverage/07-CONTEXT.md
+**Stopped At:** Phase 8 context gathered
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/08-schema-sidecar-wiring/08-CONTEXT.md
 
 ## Performance Metrics
 
