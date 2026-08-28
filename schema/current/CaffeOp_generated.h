@@ -1442,6 +1442,7 @@ struct SGFP4DequantParamT : public flatbuffers::NativeTable {
   uint32_t magic;
   std::vector<int64_t> external;
   std::vector<int32_t> dims;
+  std::vector<int8_t> buffer;
   SGFP4DequantParamT()
       : magic(0) {
   }
@@ -1461,6 +1462,9 @@ struct SGFP4DequantParam FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   const flatbuffers::Vector<int32_t> *dims() const {
     return GetPointer<const flatbuffers::Vector<int32_t> *>(8);
   }
+  const flatbuffers::Vector<int8_t> *buffer() const {
+    return GetPointer<const flatbuffers::Vector<int8_t> *>(10);
+  }
   bool Verify(flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint32_t>(verifier, 4) &&
@@ -1468,6 +1472,8 @@ struct SGFP4DequantParam FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
            verifier.VerifyVector(external()) &&
            VerifyOffset(verifier, 8) &&
            verifier.VerifyVector(dims()) &&
+           VerifyOffset(verifier, 10) &&
+           verifier.VerifyVector(buffer()) &&
            verifier.EndTable();
   }
   SGFP4DequantParamT *UnPack(const flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -1487,6 +1493,9 @@ struct SGFP4DequantParamBuilder {
   void add_dims(flatbuffers::Offset<flatbuffers::Vector<int32_t>> dims) {
     fbb_.AddOffset(8, dims);
   }
+  void add_buffer(flatbuffers::Offset<flatbuffers::Vector<int8_t>> buffer) {
+    fbb_.AddOffset(10, buffer);
+  }
   explicit SGFP4DequantParamBuilder(flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1503,8 +1512,10 @@ inline flatbuffers::Offset<SGFP4DequantParam> CreateSGFP4DequantParam(
     flatbuffers::FlatBufferBuilder &_fbb,
     uint32_t magic = 0,
     flatbuffers::Offset<flatbuffers::Vector<int64_t>> external = 0,
-    flatbuffers::Offset<flatbuffers::Vector<int32_t>> dims = 0) {
+    flatbuffers::Offset<flatbuffers::Vector<int32_t>> dims = 0,
+    flatbuffers::Offset<flatbuffers::Vector<int8_t>> buffer = 0) {
   SGFP4DequantParamBuilder builder_(_fbb);
+  builder_.add_buffer(buffer);
   builder_.add_dims(dims);
   builder_.add_external(external);
   builder_.add_magic(magic);
@@ -4689,6 +4700,7 @@ inline void SGFP4DequantParam::UnPackTo(SGFP4DequantParamT *_o, const flatbuffer
   { auto _e = magic(); _o->magic = _e; };
   { auto _e = external(); if (_e) { _o->external.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->external[_i] = _e->Get(_i); } } };
   { auto _e = dims(); if (_e) { _o->dims.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->dims[_i] = _e->Get(_i); } } };
+  { auto _e = buffer(); if (_e) { _o->buffer.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->buffer[_i] = _e->Get(_i); } } };
 }
 
 inline flatbuffers::Offset<SGFP4DequantParam> SGFP4DequantParam::Pack(flatbuffers::FlatBufferBuilder &_fbb, const SGFP4DequantParamT* _o, const flatbuffers::rehasher_function_t *_rehasher) {
@@ -4702,11 +4714,13 @@ inline flatbuffers::Offset<SGFP4DequantParam> CreateSGFP4DequantParam(flatbuffer
   auto _magic = _o->magic;
   auto _external = _o->external.size() ? _fbb.CreateVector(_o->external) : 0;
   auto _dims = _o->dims.size() ? _fbb.CreateVector(_o->dims) : 0;
+  auto _buffer = _o->buffer.size() ? _fbb.CreateVector(_o->buffer) : 0;
   return MNN::CreateSGFP4DequantParam(
       _fbb,
       _magic,
       _external,
-      _dims);
+      _dims,
+      _buffer);
 }
 
 inline Convolution3DT *Convolution3D::UnPack(const flatbuffers::resolver_function_t *_resolver) const {
@@ -6194,15 +6208,17 @@ inline const flatbuffers::TypeTable *SGFP4DequantParamTypeTable() {
   static const flatbuffers::TypeCode type_codes[] = {
     { flatbuffers::ET_UINT, 0, -1 },
     { flatbuffers::ET_LONG, 1, -1 },
-    { flatbuffers::ET_INT, 1, -1 }
+    { flatbuffers::ET_INT, 1, -1 },
+    { flatbuffers::ET_CHAR, 1, -1 }
   };
   static const char * const names[] = {
     "magic",
     "external",
-    "dims"
+    "dims",
+    "buffer"
   };
   static const flatbuffers::TypeTable tt = {
-    flatbuffers::ST_TABLE, 3, type_codes, nullptr, nullptr, names
+    flatbuffers::ST_TABLE, 4, type_codes, nullptr, nullptr, names
   };
   return &tt;
 }
