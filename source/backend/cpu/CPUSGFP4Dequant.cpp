@@ -45,8 +45,33 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
     if (nullptr == param) {
         return INVALID_VALUE;
     }
+    // Buffer-first dispatch (D-01/D-02, Plan 08-03): a non-empty inline
+    // `buffer` is the live decode source -- no FileLoader, no externalPath.
+    // Copy into mContainer for safety (the FlatBuffers buffer may point
+    // into the model buffer, which must not be treated as owned storage).
+    const auto* buf = param->buffer();
+    if (nullptr != buf && buf->size() > 0) {
+        mContainer.assign(buf->data(), buf->data() + buf->size());
+        // Entry gate: magic/version framing check (D-02).
+        if (!sgfp4_is_v2_container(mContainer.data(), mContainer.size())) {
+            mContainer.clear();
+            return INVALID_VALUE;
+        }
+        // Dims-consistency: eager oracle decode into scratch (Q2 decision --
+        // the eager oracle doubles as the buffer-mode replacement for the
+        // sidecar path's T-01-04 file-size DoS bound; the buffer is already
+        // fully materialized in memory).
+        std::vector<float> scratch(outputs[0]->elementSize());
+        if (!dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), scratch.data(),
+                                         outputs[0]->elementSize())) {
+            mContainer.clear();
+            return INVALID_VALUE;
+        }
+        return NO_ERROR;
+    }
     // Mirrors ConvolutionCommon.cpp's USE_EXTERNAL_DATA(param) + externalPath
-    // gate: this op only supports the external-sidecar container form.
+    // gate: the empty-buffer fallback is the original external-sidecar
+    // container form (D-04 -- unchanged path).
     if (!USE_EXTERNAL_DATA(param) || nullptr == mOp->externalPath()) {
         return NOT_SUPPORT;
     }

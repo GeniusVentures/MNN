@@ -133,44 +133,64 @@ public:
             MNN_ERROR("VulkanSGFP4Dequant: missing SGFP4DequantParam\n");
             return nullptr;
         }
-        // Same external-sidecar gate as CPUSGFP4Dequant (ConvolutionCommon
-        // USE_EXTERNAL_DATA + externalPath pattern).
-        if (!USE_EXTERNAL_DATA(param) || nullptr == op->externalPath()) {
-            MNN_ERROR("VulkanSGFP4Dequant: op requires external sidecar data\n");
-            return nullptr;
-        }
-        auto external = param->external()->data();
-        int64_t offset = external[0];
-        int64_t size   = external[1];
-        if (offset < 0 || size <= 0) {
-            MNN_ERROR("VulkanSGFP4Dequant: invalid external offset/size\n");
-            return nullptr;
-        }
+        // Container source, filled by either the inline-buffer branch or
+        // the external-sidecar branch below (Plan 08-03 restructure).
+        std::vector<uint8_t> container;
+        // Buffer-first dispatch (D-01/D-03, Plan 08-03): a non-empty inline
+        // `buffer` is the live decode source -- no FileLoader, no
+        // externalPath. Copy into `container` for safety (the FlatBuffers
+        // buffer may point into the model buffer, which must not be
+        // treated as owned storage).
+        const auto* buf = param->buffer();
+        if (nullptr != buf && buf->size() > 0) {
+            container.assign(buf->data(), buf->data() + buf->size());
+            // Entry gate: magic/version framing check (D-02).
+            if (!sgfp4_is_v2_container(container.data(), container.size())) {
+                MNN_ERROR("VulkanSGFP4Dequant: inline buffer failed v2 version gate\n");
+                return nullptr;
+            }
+        } else {
+            // Empty-buffer fallback: the original external-sidecar form
+            // (D-04 -- unchanged path). Same external-sidecar gate as
+            // CPUSGFP4Dequant (ConvolutionCommon USE_EXTERNAL_DATA +
+            // externalPath pattern).
+            if (!USE_EXTERNAL_DATA(param) || nullptr == op->externalPath()) {
+                MNN_ERROR("VulkanSGFP4Dequant: op requires external sidecar data\n");
+                return nullptr;
+            }
+            auto external = param->external()->data();
+            int64_t offset = external[0];
+            int64_t size   = external[1];
+            if (offset < 0 || size <= 0) {
+                MNN_ERROR("VulkanSGFP4Dequant: invalid external offset/size\n");
+                return nullptr;
+            }
 
-        // T-03-02: probe the real on-disk size BEFORE any allocation.
-        size_t fileSize = 0;
-        if (!queryFileSize(op->externalPath()->str(), fileSize)) {
-            MNN_ERROR("VulkanSGFP4Dequant: cannot open sidecar %s\n", op->externalPath()->c_str());
-            return nullptr;
-        }
-        size_t offsetSize = static_cast<size_t>(offset);
-        size_t readSize   = static_cast<size_t>(size);
-        if (offsetSize > fileSize || readSize > fileSize - offsetSize) {
-            MNN_ERROR("VulkanSGFP4Dequant: external {offset,size} exceeds sidecar size\n");
-            return nullptr;
-        }
+            // T-03-02: probe the real on-disk size BEFORE any allocation.
+            size_t fileSize = 0;
+            if (!queryFileSize(op->externalPath()->str(), fileSize)) {
+                MNN_ERROR("VulkanSGFP4Dequant: cannot open sidecar %s\n", op->externalPath()->c_str());
+                return nullptr;
+            }
+            size_t offsetSize = static_cast<size_t>(offset);
+            size_t readSize   = static_cast<size_t>(size);
+            if (offsetSize > fileSize || readSize > fileSize - offsetSize) {
+                MNN_ERROR("VulkanSGFP4Dequant: external {offset,size} exceeds sidecar size\n");
+                return nullptr;
+            }
 
-        FileLoader loader(op->externalPath()->c_str(), true);
-        if (!loader.valid()) {
-            MNN_ERROR("VulkanSGFP4Dequant: FileLoader invalid for sidecar\n");
-            return nullptr;
-        }
+            FileLoader loader(op->externalPath()->c_str(), true);
+            if (!loader.valid()) {
+                MNN_ERROR("VulkanSGFP4Dequant: FileLoader invalid for sidecar\n");
+                return nullptr;
+            }
 
-        std::vector<uint8_t> container(readSize);
-        loader.offset(offset);
-        if (!loader.read(reinterpret_cast<char*>(container.data()), size)) {
-            MNN_ERROR("VulkanSGFP4Dequant: bounded sidecar read failed\n");
-            return nullptr;
+            container.resize(readSize);
+            loader.offset(offset);
+            if (!loader.read(reinterpret_cast<char*>(container.data()), size)) {
+                MNN_ERROR("VulkanSGFP4Dequant: bounded sidecar read failed\n");
+                return nullptr;
+            }
         }
 
         // Output element count: from the output tensor (shape-inference

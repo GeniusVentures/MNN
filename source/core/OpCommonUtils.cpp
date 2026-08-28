@@ -668,6 +668,14 @@ Execution* OpCommonUtils::createExecutionWithExternal(Backend* backend, const st
     return backend->onCreate(inputs, outputs, op);
 #else
     bool hasExternal = false;
+    // D-12 non-interception: OpType_SGFP4Dequant is INTENTIONALLY absent
+    // from this switch. The decoder (CPUSGFP4Dequant / VulkanSGFP4Dequant)
+    // owns its own data-placement dispatch (inline param->buffer() first,
+    // external-sidecar fallback), so SGFP4 ops must flow to
+    // backend->onCreate unmodified and must NOT be auto-rewritten with a
+    // session-derived externalPath like Convolution2D/Scale/LayerNorm
+    // below (SGFP4's externalPath, when present, is the op's own literal
+    // path, not a sidecar shared with this machinery).
     switch (op->main_type()) {
         case OpParameter_Convolution2D:
             hasExternal = USE_EXTERNAL_DATA(op->main_as_Convolution2D());
