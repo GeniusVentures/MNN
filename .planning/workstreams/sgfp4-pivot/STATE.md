@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: 0
-current_phase_name: v2.0 archived 2026-08-28 — Phases 5/6/7 docs in `.planning/milestones/v2.0-phases/`
-status: planning
+current_phase: 08
+current_phase_name: schema-sidecar-wiring
+status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-08-28T21:59:28.746Z"
+last_updated: "2026-08-28T23:04:33.638Z"
 last_activity: 2026-08-28
-last_activity_desc: v2.0 milestone shipped (verified closeout), tagged v2.0
+last_activity_desc: Phase 08 execution started
 progress:
-  total_phases: 2
+  total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 0
   percent: 0
 current_plan: none
 ---
@@ -29,10 +29,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: none (v2.0 archived 2026-08-28 — Phases 5/6/7 docs in `.planning/milestones/v2.0-phases/`)
-Plan: none
-Status: Planning v3.0
-Last activity: 2026-08-28 — v2.0 milestone shipped (verified closeout), tagged v2.0
+Phase: 08 (schema-sidecar-wiring) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 08
+Last activity: 2026-08-28 — Phase 08 execution started
 
 ## Progress
 
