@@ -66,7 +66,15 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 4. Decode-parity tests prove buffer-mode decode == sidecar-mode decode == existing oracle (`SGFP4DequantFixtures` / `dequant_sgfp4_container_cpu`) on both CPU and Vulkan using identical container bytes across the two placements; a converter-path round-trip test drives `RemoveAndStoreParam`/`saveExternalData` on a synthetic `NetT` and asserts 16-byte-aligned, monotonic, non-overlapping sidecar layout, `external == {offset, true-size}`, buffer cleared in the serialized op, and reload+decode parity.
 5. `SGFP4TestUtil.hpp` extracted from the duplicated helpers in `SGFP4ClassicAPITest.cpp` / `SGFP4MultiTensorTest.cpp` / `SGFP4InjectTest.cpp` (retrofitted onto it; correct region-relative offset convention from `SGFP4MultiTensorTest.cpp:190-199`), and the Phase 11 hand-off contract is documented: buffer-staging convention (pass writes `buffer`, `external = {}`, no `externalPath` — zero byte I/O) plus the non-interception note that `SGFP4Dequant` intentionally stays out of `createExecutionWithExternal`.
 
-**Plans**: 0/TBD
+**Plans**: 6 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Append `buffer:[byte]` to `SGFP4DequantParam` + regenerate/commit schema headers (SGV2-22, D-04 regression)
+- [ ] 08-02-PLAN.md — Extract `SGFP4TestUtil.hpp` and retrofit the three test files (D-10 region-relative builder)
+- [ ] 08-03-PLAN.md — Buffer-first dispatch in CPU + Vulkan decoders + D-12 non-interception comment
+- [ ] 08-04-PLAN.md — Aligned `storeWeight` + `loadExternalParam` SGFP4 cases in `RemoveParams.cpp` (SGV2-23)
+- [ ] 08-05-PLAN.md — Buffer-mode decode-parity suites (CPU + Vulkan) vs oracle (D-08)
+- [ ] 08-06-PLAN.md — Converter round-trip test target `TestSGFP4Converter` (D-09)
 
 ### Phase 9: Real-Weight C++ Encoder Port
 
@@ -117,7 +125,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 | 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 2/2 | Complete | 2026-08-26 |
 | 6. Classic-API Load & Run Validation | v2.0 | 2/2 | Complete    | 2026-08-27 |
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 3/3 | Complete    | 2026-08-28 |
-| 8. Schema + Sidecar Wiring | v3.0 | 0/TBD | Not started | - |
+| 8. Schema + Sidecar Wiring | v3.0 | 0/6 | Not started | - |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
 | 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 0/TBD | Not started | - |
 | 11. Graph-Rewrite PostConverter Pass + CLI Flag | v3.0 | 0/TBD | Not started | - |
