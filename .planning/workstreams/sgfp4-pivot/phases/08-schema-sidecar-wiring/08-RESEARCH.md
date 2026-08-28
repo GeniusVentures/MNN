@@ -422,27 +422,18 @@ if (buf != nullptr && buf->size() > 0) {          // D-01 buffer-first
 
 **Note:** The FlatBuffers forward/backward compatibility of the field append (the D-04 regression guarantee) is **verified** from official docs, not assumed — see Sources.
 
-## Open Questions
+## Open Questions (RESOLVED at plan time 2026-08-28 — resolutions recorded in the Phase 8 PLAN.md set)
 
-1. **Where does the D-09 converter round-trip test live and link?**
+1. **Where does the D-09 converter round-trip test live and link?** — **RESOLVED → 08-06:** option (a), a new `TestSGFP4Converter` executable under `tools/converter/source/` linked in `tools/converter/CMakeLists.txt` against `MNNConvertDeps` + `${MNN_DEPS}` (mirroring MNNConvert's static-branch whole-archive linking), with `target_include_directories(.../test/op/)` for `SGFP4TestUtil.hpp`. Keeps `run_test.out` free of the converter dependency.
    - What we know: `RemoveAndStoreParam`/`saveExternalData` are in `MNNConvertDeps` (converter lib), built only with `MNN_BUILD_CONVERTER=ON`; `run_test.out` links only `MNN_DEPS`; workspace builds static (`MNN_BUILD_SHARED_LIBS=OFF`) so the `TestPassManager`/`TestConvertResult` precedents are not built.
    - What's unclear: whether to (a) add a new converter-side test executable under `tools/converter/source/` linking `MNNConvertDeps` (add unconditionally, not in the shared-libs branch), (b) conditionally link `run_test.out` against `MNNConvertDeps` when `MNN_BUILD_CONVERTER=ON`, or (c) drive `MNNConvert` end-to-end (not viable yet — no importer emits an SGFP4 op until Phase 11).
    - Recommendation: **(a)** — a small `tools/converter/source/<name>.cpp` executable (peer to `TestPassManager` but added unconditionally) that constructs a synthetic `NetT` with a populated `SGFP4DequantParamT.buffer`, calls `saveExternalData`, and asserts 16-aligned/monotonic/non-overlapping layout + `external == {offset,true-size}` + buffer cleared + runtime reload parity. This keeps `run_test.out` clean of a converter dependency. (Falls under Claude's Discretion "test naming/placement"; flagging because it may need to live outside `test/op/`.)
 
-2. **Exact buffer-mode validation strength (beyond magic + dims)**
-   - What we know: D-02 mandates "magic check at decode entry, size-vs-dims consistency"; the oracle already does full bounds checks at decode.
-   - What's unclear: whether `onResize` should eagerly call `dequant_sgfp4_container_cpu` (as the Vulkan creator already does) or defer to `onExecute`.
-   - Recommendation: mirror the Vulkan creator's existing host-pre-validation for both backends in buffer mode (consistent, early failure), accepting the small double-decode cost at setup.
+2. **Exact buffer-mode validation strength (beyond magic + dims)** — **RESOLVED → 08-03:** mirror the Vulkan creator's existing host-pre-validation for both backends in buffer mode (consistent, early failure) — `sgfp4_is_v2_container` magic/version gate plus an eager `dequant_sgfp4_container_cpu` dims-consistency check at setup; no reimplementation of file-bounded T-01-04.
 
-3. **Is a `loadExternalParam` SGFP4 read-back case in scope?**
-   - What we know: `loadExternalParam` (`RemoveParams.cpp:118+`) has no SGFP4 case; it exists for converter reload/re-convert paths (`MNNRevert2Buffer`, split passes).
-   - What's unclear: whether Phase 8 needs it (the runtime reload in D-09 is via `Interpreter`/`Module`, not converter `loadExternalParam`).
-   - Recommendation: add the matching case for symmetry (it's ~5 lines mirroring the `Blob` read-back), but treat as optional if it risks scope creep.
+3. **Is a `loadExternalParam` SGFP4 read-back case in scope?** — **RESOLVED → 08-04:** yes, included for symmetry (required for `_postTreatOp` re-convert paths).
 
-4. **One parameterized parity fixture vs two test files (CPU/Vulkan)**
-   - What we know: existing precedent is separate `SGFP4DequantTest.cpp` / `SGFP4VulkanDequantTest.cpp` (and the Vulkan test has the no-device skip guard).
-   - What's unclear: which form the planner prefers for the buffer-mode parity tests.
-   - Recommendation: follow precedent — two files, `SGFP4DequantTest.cpp` (CPU) + `SGFP4VulkanDequantTest.cpp` (Vulkan), each gaining a buffer-mode variant; both read the shared `SGFP4TestUtil.hpp` helpers and `SGFP4DequantFixtures.h` fixtures.
+4. **One parameterized parity fixture vs two test files (CPU/Vulkan)** — **RESOLVED → 08-05:** follow precedent — two files, `SGFP4DequantTest.cpp` (CPU) + `SGFP4VulkanDequantTest.cpp` (Vulkan), each gaining a buffer-mode variant; suites `op/sgfp4/dequant_buffer` + `op/sgfp4/vulkan_buffer_parity` (Vulkan pass-skips with no device).
 
 ## Sources
 
