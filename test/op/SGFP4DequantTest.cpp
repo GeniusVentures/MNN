@@ -565,6 +565,136 @@ private:
 MNNTestSuiteRegister(SGFP4DequantTest, "op/sgfp4/uniform_decode");
 
 // ===========================================================================
+// op/sgfp4/dequant_buffer — buffer-mode (inline param->buffer) decode parity
+// (Plan 08-05, D-08): buffer-mode decode == sidecar-mode decode == oracle,
+// using the SAME fixtures as the sidecar suites, plus a malformed-buffer
+// rejection probe. No sidecar file is written anywhere in this suite.
+// ===========================================================================
+class SGFP4DequantBufferTest : public MNNTestCase {
+public:
+    SGFP4DequantBufferTest()  = default;
+    virtual ~SGFP4DequantBufferTest() = default;
+
+    virtual bool run(int precision) {
+        (void)precision;
+        for (size_t i = 0; i < sgfp4_fixtures::kFixtureCount; ++i) {
+            const auto& fixture = sgfp4_fixtures::kFixtures[i];
+            if (!runBufferModule(fixture.container, fixture.containerSize, fixture)) {
+                return false;
+            }
+        }
+        if (!probeMalformedBuffer()) {
+            return false;
+        }
+        MNN_PRINT("SGFP4DequantBufferTest: buffer-mode parity (%zu fixtures) + malformed probe PASSED\n",
+                  sgfp4_fixtures::kFixtureCount);
+        return true;
+    }
+
+private:
+    // Build a buffer-mode SGFP4Dequant op (inline container bytes, external
+    // empty, externalPath unset) and run it through a CPU Module session.
+    // Pass container=nullptr/size=0 for the malformed probe payload source.
+    bool runBufferModule(const uint8_t* container, size_t containerSize, const sgfp4_fixtures::Fixture& fixture) {
+        std::shared_ptr<MNN::OpT> op(new MNN::OpT);
+        op->type      = MNN::OpType_SGFP4Dequant;
+        op->main.type = MNN::OpParameter_SGFP4DequantParam;
+        auto* param   = new MNN::SGFP4DequantParamT;
+        param->magic  = MNN::kSGFP4Magic;
+        // Buffer mode (D-01): external stays EMPTY and externalPath stays
+        // UNSET so the runtime takes the buffer-first branch (08-03).
+        if (nullptr != container && containerSize > 0) {
+            param->buffer.assign(container, container + containerSize);
+        } else {
+            param->buffer.assign(fixture.container, fixture.container + 8); // truncated garbage
+        }
+        param->dims    = {fixture.dimO, fixture.dimI};
+        op->main.value = param;
+
+        // 0-input Const-like source op (geometry from dims).
+        auto output = Variable::create(Expr::create(op.get(), {}));
+        auto buffer = Variable::save({output});
+
+        MNN::ScheduleConfig config;
+        config.type = MNN_FORWARD_CPU;
+        std::shared_ptr<Executor::RuntimeManager> rtmgr(Executor::RuntimeManager::createRuntimeManager(config));
+
+        std::shared_ptr<Module> m(Module::load({}, {}, reinterpret_cast<const uint8_t*>(buffer.data()),
+                                                buffer.size(), rtmgr));
+        if (nullptr == m) {
+            MNN_ERROR("SGFP4DequantBufferTest: Module::load returned null\n");
+            return false;
+        }
+        auto outputs = m->onForward({});
+        if (outputs.empty()) {
+            MNN_ERROR("SGFP4DequantBufferTest: module produced no outputs\n");
+            return false;
+        }
+        auto outVar = outputs[0];
+        auto* outPtr = outVar->readMap<float>();
+        auto outInfo = outVar->getInfo();
+        if (nullptr == outPtr || nullptr == outInfo) {
+            MNN_ERROR("SGFP4DequantBufferTest: output has no data/info\n");
+            return false;
+        }
+        size_t outCount = static_cast<size_t>(outInfo->size);
+        if (outCount != fixture.expectedCount) {
+            MNN_ERROR("SGFP4DequantBufferTest: output count %zu != expected %zu\n", outCount, fixture.expectedCount);
+            return false;
+        }
+        // Parity: buffer-mode decode == oracle == fixture.expected.
+        if (!checkVectorByRelativeError<float>(outPtr, fixture.expected, static_cast<int>(outCount),
+                                               kFixtureRelativeTolerance)) {
+            MNN_ERROR("SGFP4DequantBufferTest: buffer-mode decode mismatch\n");
+            return false;
+        }
+        return true;
+    }
+
+    // Malformed-buffer probe: a truncated inline buffer must NOT decode to
+    // a usable module (the sgfp4_is_v2_container entry gate from 08-03
+    // rejects it). Module::load drives onResize through a session, so the
+    // rejected op surfaces as a null/failed module — never partial output.
+    bool probeMalformedBuffer() {
+        const sgfp4_fixtures::Fixture* fixture = &sgfp4_fixtures::kFixtures[0];
+        std::shared_ptr<MNN::OpT> op(new MNN::OpT);
+        op->type      = MNN::OpType_SGFP4Dequant;
+        op->main.type = MNN::OpParameter_SGFP4DequantParam;
+        auto* param   = new MNN::SGFP4DequantParamT;
+        param->magic  = MNN::kSGFP4Magic;
+        // First 8 bytes of a valid container: framing gate must reject.
+        param->buffer.assign(fixture->container, fixture->container + 8);
+        param->dims    = {fixture->dimO, fixture->dimI};
+        op->main.value = param;
+
+        auto output = Variable::create(Expr::create(op.get(), {}));
+        auto buffer = Variable::save({output});
+
+        MNN::ScheduleConfig config;
+        config.type = MNN_FORWARD_CPU;
+        std::shared_ptr<Executor::RuntimeManager> rtmgr(Executor::RuntimeManager::createRuntimeManager(config));
+        std::shared_ptr<Module> m(Module::load({}, {}, reinterpret_cast<const uint8_t*>(buffer.data()),
+                                                buffer.size(), rtmgr));
+        if (nullptr != m) {
+            auto outputs = m->onForward({});
+            if (!outputs.empty()) {
+                auto outVar = outputs[0];
+                auto* outPtr = outVar->readMap<float>();
+                auto outInfo = outVar->getInfo();
+                if (nullptr != outPtr && nullptr != outInfo && outInfo->size > 0) {
+                    MNN_ERROR("SGFP4DequantBufferTest: truncated buffer produced a decoded output\n");
+                    return false;
+                }
+            }
+        }
+        MNN_PRINT("SGFP4DequantBufferTest: malformed inline buffer rejected cleanly\n");
+        return true;
+    }
+};
+
+MNNTestSuiteRegister(SGFP4DequantBufferTest, "op/sgfp4/dequant_buffer");
+
+// ===========================================================================
 // op/sgfp4/mixed_decode — LAYOUT_MIXED adaptive/quadtree tests (SGV2-08..11).
 // ===========================================================================
 namespace {

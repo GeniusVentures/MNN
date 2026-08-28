@@ -187,4 +187,121 @@ public:
 
 MNNTestSuiteRegister(SGFP4VulkanDequantTest, "op/sgfp4/vulkan_uniform_parity");
 
+// ===========================================================================
+// op/sgfp4/vulkan_buffer_parity — Vulkan buffer-mode (inline param->buffer)
+// decode parity (Plan 08-05, D-08): GPU buffer-mode decode == CPU oracle,
+// using the SAME fixtures as the sidecar suite. No sidecar file is written
+// and no setExternalFile is called — the container is inline. Pass-skips
+// with no Vulkan device (D-07).
+// ===========================================================================
+class SGFP4VulkanBufferParityTest : public MNNTestCase {
+public:
+    SGFP4VulkanBufferParityTest()  = default;
+    virtual ~SGFP4VulkanBufferParityTest() = default;
+
+    virtual bool run(int precision) {
+        (void)precision;
+
+        // D-07 graceful skip: no Vulkan device → suite still passes.
+        auto vulkanCreator = MNN::MNNGetExtraRuntimeCreator(MNN_FORWARD_VULKAN);
+        if (nullptr == vulkanCreator) {
+            MNN_PRINT("Vulkan backend not available — skipping SGFP4 Vulkan buffer parity test\n");
+            return true;
+        }
+
+        int checked = 0;
+        for (size_t i = 0; i < sgfp4_fixtures::kFixtureCount; ++i) {
+            const sgfp4_fixtures::Fixture& fixture = sgfp4_fixtures::kFixtures[i];
+            ++checked;
+
+            // CPU oracle reference.
+            std::vector<float> cpuOut(fixture.expectedCount);
+            if (!MNN::dequant_sgfp4_container_cpu(fixture.container, fixture.containerSize, cpuOut.data(),
+                                                  fixture.expectedCount)) {
+                MNN_ERROR("SGFP4VulkanBufferParityTest: CPU reference decode failed for '%s'\n", fixture.name);
+                return false;
+            }
+
+            // Tight pass (Precision_High → FP32 shader variant); relaxed
+            // default-precision pass only if tight succeeded (D-06 mirror).
+            bool pass = runBufferVulkanModule(fixture, cpuOut.data(), kFixtureRelativeTolerance, true);
+            if (pass) {
+                pass = runBufferVulkanModule(fixture, cpuOut.data(), kFp16RelativeTolerance, false);
+            }
+            if (!pass) {
+                return false;
+            }
+        }
+
+        MNN_PRINT("SGFP4VulkanBufferParityTest: %d fixtures matched CPU reference on Vulkan via inline buffer "
+                  "(FP32 tight + default-precision passes)\n",
+                  checked);
+        return true;
+    }
+
+private:
+    bool runBufferVulkanModule(const sgfp4_fixtures::Fixture& fixture, const float* cpuRef, float rtol,
+                               bool highPrecision) {
+        std::shared_ptr<MNN::OpT> op(new MNN::OpT);
+        op->type      = MNN::OpType_SGFP4Dequant;
+        op->main.type = MNN::OpParameter_SGFP4DequantParam;
+        auto* param   = new MNN::SGFP4DequantParamT;
+        param->magic  = MNN::kSGFP4Magic;
+        // Buffer mode (D-01): inline bytes; external stays EMPTY and
+        // externalPath stays UNSET (buffer-first branch, 08-03). No sidecar
+        // file, no setExternalFile.
+        param->buffer.assign(fixture.container, fixture.container + fixture.containerSize);
+        param->dims    = {fixture.dimO, fixture.dimI};
+        op->main.value = param;
+
+        // 0-input Const-like source op.
+        auto output = Variable::create(Expr::create(op.get(), {}));
+        auto buffer = Variable::save({output});
+
+        MNN::ScheduleConfig config;
+        config.type = MNN_FORWARD_VULKAN;
+        MNN::BackendConfig backendConfig;
+        if (highPrecision) {
+            backendConfig.precision = MNN::BackendConfig::Precision_High;
+        }
+        backendConfig.memory = MNN::BackendConfig::Memory_High;
+        config.backendConfig = &backendConfig;
+        std::shared_ptr<Executor::RuntimeManager> rtmgr(Executor::RuntimeManager::createRuntimeManager(config));
+
+        std::shared_ptr<Module> m(Module::load({}, {}, reinterpret_cast<const uint8_t*>(buffer.data()),
+                                                buffer.size(), rtmgr));
+        if (nullptr == m) {
+            MNN_ERROR("SGFP4VulkanBufferParityTest: Module::load returned null for '%s'\n", fixture.name);
+            return false;
+        }
+
+        auto outputs = m->onForward({});
+        if (outputs.empty()) {
+            MNN_ERROR("SGFP4VulkanBufferParityTest: module produced no outputs for '%s'\n", fixture.name);
+            return false;
+        }
+        auto outVar  = outputs[0];
+        auto* outPtr = outVar->readMap<float>();
+        auto outInfo = outVar->getInfo();
+        if (nullptr == outPtr || nullptr == outInfo) {
+            MNN_ERROR("SGFP4VulkanBufferParityTest: output has no data/info for '%s'\n", fixture.name);
+            return false;
+        }
+        size_t outCount = static_cast<size_t>(outInfo->size);
+        if (outCount != fixture.expectedCount) {
+            MNN_ERROR("SGFP4VulkanBufferParityTest: '%s' output count %zu != expected %zu\n", fixture.name,
+                      outCount, fixture.expectedCount);
+            return false;
+        }
+        if (!checkVectorByRelativeError<float>(outPtr, cpuRef, static_cast<int>(outCount), rtol)) {
+            MNN_ERROR("SGFP4VulkanBufferParityTest: GPU/CPU buffer-mode parity mismatch for '%s' (rtol=%e)\n",
+                      fixture.name, rtol);
+            return false;
+        }
+        return true;
+    }
+};
+
+MNNTestSuiteRegister(SGFP4VulkanBufferParityTest, "op/sgfp4/vulkan_buffer_parity");
+
 #endif
