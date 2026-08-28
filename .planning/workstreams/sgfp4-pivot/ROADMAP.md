@@ -133,7 +133,7 @@ Plans:
 | 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 2/2 | Complete | 2026-08-26 |
 | 6. Classic-API Load & Run Validation | v2.0 | 2/2 | Complete    | 2026-08-27 |
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 3/3 | Complete    | 2026-08-28 |
-| 8. Schema + Sidecar Wiring | v3.0 | 6/6 | Complete   | 2026-08-28 |
+| 8. Schema + Sidecar Wiring | v3.0 | 6/6 | Complete    | 2026-08-28 |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
 | 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 0/TBD | Not started | - |
 | 11. Graph-Rewrite PostConverter Pass + CLI Flag | v3.0 | 0/TBD | Not started | - |
