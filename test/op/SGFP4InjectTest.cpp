@@ -34,6 +34,7 @@
 #include "MNN/expr/Module.hpp"
 #include "MNNTestSuite.h"
 #include "TestUtils.h"
+#include "SGFP4TestUtil.hpp"
 #include "SGFP4DequantFixtures.h"
 
 using namespace MNN::Express;
@@ -62,22 +63,6 @@ const sgfp4_fixtures::Fixture* findFixture(const char* name) {
         }
     }
     return nullptr;
-}
-
-std::string tempPath(const char* prefix, const char* suffix) {
-    std::ostringstream oss;
-    oss << prefix << static_cast<unsigned long>(std::time(nullptr)) << "_"
-        << static_cast<unsigned long>(std::rand()) << suffix;
-    return oss.str();
-}
-
-bool writeBytes(const std::string& path, const uint8_t* data, size_t size) {
-    std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
-    if (!ofs) {
-        return false;
-    }
-    ofs.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-    return static_cast<size_t>(ofs.tellp()) == size;
 }
 
 // Deterministic input vector: kMatMulInputRows x dimI floats.
@@ -138,12 +123,12 @@ public:
         const int dimO = fixture->dimO;
         const int dimI = fixture->dimI;
 
-        const std::string modelPath   = tempPath("sgfp4_inject_model_", ".mnn");
-        const std::string outPath     = tempPath("sgfp4_inject_out_", ".mnn");
-        const std::string sidecarPath = tempPath("sgfp4_inject_sidecar_", ".mnn.weight");
+        const std::string modelPath   = sgfp4_test::tempPath("sgfp4_inject_model_", ".mnn");
+        const std::string outPath     = sgfp4_test::tempPath("sgfp4_inject_out_", ".mnn");
+        const std::string sidecarPath = sgfp4_test::tempPath("sgfp4_inject_sidecar_", ".mnn.weight");
 
         // Sidecar first: exactly fixture.containerSize bytes at offset 0.
-        if (!writeBytes(sidecarPath, fixture->container, fixture->containerSize)) {
+        if (!sgfp4_test::writeBytes(sidecarPath, fixture->container, fixture->containerSize)) {
             MNN_ERROR("SGFP4InjectTest: failed to write sidecar '%s'\n", sidecarPath.c_str());
             return false;
         }

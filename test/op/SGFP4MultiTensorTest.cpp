@@ -49,6 +49,7 @@
 #include "TestUtils.h"
 #include "fp4/sgfp4_inject_core.hpp"
 #include "SGFP4StructuredFixtures.h"
+#include "SGFP4TestUtil.hpp"
 
 using namespace MNN;
 using namespace MNN::Express;
@@ -64,18 +65,6 @@ constexpr int kStructDimO   = 512; // structured fixture (w1) dims
 constexpr int kStructDimI   = 512;
 constexpr int kUniformDimO  = 512; // in-test uniform container (w2) dims
 constexpr int kUniformDimI  = 64;
-constexpr int kMacroblockEdge = 64;
-
-// Uniform-container framing, generalized over record count (D-06 in Plan
-// 07-03: buildContainerUniform64(dimO, dimI, out) -- 512x64 -> 8 records).
-constexpr size_t kElementsPerLeaf  = static_cast<size_t>(kMacroblockEdge) * kMacroblockEdge; // 4096
-constexpr size_t kNibblePayloadBytes = (kElementsPerLeaf / MNN::kSGFP4NibblesPerWord) * sizeof(uint32_t); // 2048
-constexpr size_t kRecordPrePayload   = 2 * sizeof(uint32_t);                                               // 8
-constexpr size_t kRecordPadBytes     = MNN::kSGFP4Alignment - kRecordPrePayload;                           // 8
-constexpr size_t kRecordSize         = kRecordPrePayload + kRecordPadBytes + kNibblePayloadBytes;          // 2064
-
-constexpr uint32_t kLeafScaleOneBits = 0x3C00; // IEEE754 half(1.0)
-constexpr uint32_t kNibbleCode       = 0x1;    // decodes to S*(+1)+bias = 1.0f
 
 // LCG input generator: identical values feed injected + baseline runs.
 constexpr uint32_t kLcgSeed   = 0x9E3779B9u;
@@ -86,159 +75,23 @@ constexpr float kLcgNormalize = 1.0f / 16777216.0f; // (state >> 8) is 24-bit
 constexpr float kParityRelativeTolerance = 1e-4f;
 
 // ====================================================================
-// Filesystem / serialization helpers (Phase 6 precedents).
+// Plan 08-02: the shared filesystem/serialization helpers and the
+// generalized REGION-RELATIVE container builder now live in
+// SGFP4TestUtil.hpp (namespace sgfp4_test).
 // ====================================================================
-
-std::string tempPath(const char* prefix, const char* suffix) {
-    std::ostringstream oss;
-    oss << prefix << static_cast<unsigned long>(std::time(nullptr)) << "_"
-        << static_cast<unsigned long>(std::rand()) << suffix;
-    return oss.str();
-}
-
-std::string cwdPath() {
-    std::vector<char> buf(1024, '\0');
-#if defined(_WIN32)
-    return std::string(_getcwd(buf.data(), static_cast<int>(buf.size() - 1)));
-#else
-    return std::string(getcwd(buf.data(), buf.size() - 1));
-#endif
-}
-
-bool makeDir(const std::string& path) {
-#if defined(_WIN32)
-    return 0 == _mkdir(path.c_str());
-#else
-    return 0 == mkdir(path.c_str(), 0755);
-#endif
-}
-
-void removeDir(const std::string& path) {
-#if defined(_WIN32)
-    _rmdir(path.c_str());
-#else
-    rmdir(path.c_str());
-#endif
-}
-
-bool fileExists(const std::string& path) {
-    std::ifstream ifs(path);
-    return ifs.good();
-}
-
-void writeU32Le(std::vector<uint8_t>& out, size_t offset, uint32_t value) {
-    out[offset]     = static_cast<uint8_t>(value & 0xFFu);
-    out[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
-    out[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xFFu);
-    out[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFFu);
-}
-
-bool writeBytes(const std::string& path, const uint8_t* data, size_t size) {
-    std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
-    if (!ofs) {
-        return false;
-    }
-    ofs.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-    return static_cast<size_t>(ofs.tellp()) == size;
-}
-
-bool readBytes(const std::string& path, std::vector<uint8_t>& out) {
-    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
-    if (!ifs) {
-        return false;
-    }
-    const std::streamsize size = ifs.tellg();
-    if (size < 0) {
-        return false;
-    }
-    ifs.seekg(0, std::ios::beg);
-    out.resize(static_cast<size_t>(size));
-    if (size > 0) {
-        ifs.read(reinterpret_cast<char*>(out.data()), size);
-    }
-    return static_cast<std::streamsize>(ifs.gcount()) == size;
-}
-
-// Generalized all-UNIFORM_64 container builder (D-06): any [dimO, dimI]
-// with 64-multiple dims; recordCount = (dimO/64)*(dimI/64) sequential
-// records of the degenerate leaf (S=1.0, all nibble codes 1 -> decode 1.0).
-bool buildContainerUniform64(int dimO, int dimI, std::vector<uint8_t>& out) {
-    const int tilesY      = dimO / kMacroblockEdge;
-    const int tilesX      = dimI / kMacroblockEdge;
-    const int recordCount = tilesY * tilesX;
-
-    // Offset table lives at byte 16, record region at align16(16+B*4).
-    // Computed arithmetically; agreement with the format's own inline
-    // helper asserted at runtime below (constexpr calling the inline
-    // sgfp4_align16 trips MSVC C2131 -- Pitfall 4, Phase 6 auto-fix).
-    const size_t offsetTableBytes =
-        MNN::kSGFP4RecordOffsetTableStart + static_cast<size_t>(recordCount) * MNN::kSGFP4RecordOffsetEntrySize;
-    const size_t recordRegionStart = (offsetTableBytes + MNN::kSGFP4Alignment - 1) & ~(MNN::kSGFP4Alignment - 1);
-    if (recordRegionStart != MNN::sgfp4_align16(offsetTableBytes)) {
-        return false;
-    }
-
-    out.assign(recordRegionStart + static_cast<size_t>(recordCount) * kRecordSize, 0);
-    writeU32Le(out, 0, MNN::kSGFP4Magic);
-    out[MNN::kSGFP4VersionByteOffset] = MNN::kSGFP4Version;
-    writeU32Le(out, MNN::kSGFP4RecordCountOffset, static_cast<uint32_t>(recordCount));
-    // Offset-table entries are RELATIVE to the record-region start (the
-    // encoder's convention: offsets.append(cursor) with cursor starting at
-    // 0 -- encode_sgfp4.py; the decoder recomputes recStart = regionStart +
-    // recOffRel). Writing absolute offsets leaves the decode reading
-    // payload-pattern bytes as headers -- deterministic but semantically
-    // wrong framing (surfaced by the garbage-body probe).
-    for (int b = 0; b < recordCount; ++b) {
-        writeU32Le(out, MNN::kSGFP4RecordOffsetTableStart + b * MNN::kSGFP4RecordOffsetEntrySize,
-                   static_cast<uint32_t>(b * kRecordSize));
-    }
-    const uint32_t sbHeader    = static_cast<uint32_t>(MNN::kSGFP4LayoutUniform64) & MNN::kSGFP4LayoutEnumMask;
-    const uint32_t leafHeader  = (kLeafScaleOneBits << MNN::kSGFP4LeafHeaderScaleShift);
-    const uint32_t payloadWord = kNibbleCode * 0x11111111u; // code in all 8 nibbles
-    for (int b = 0; b < recordCount; ++b) {
-        const size_t rec = recordRegionStart + b * kRecordSize;
-        writeU32Le(out, rec, sbHeader);
-        writeU32Le(out, rec + sizeof(uint32_t), leafHeader);
-        const size_t payloadStart = rec + kRecordPrePayload + kRecordPadBytes;
-        for (size_t w = 0; w < kNibblePayloadBytes / sizeof(uint32_t); ++w) {
-            writeU32Le(out, payloadStart + w * sizeof(uint32_t), payloadWord);
-        }
-        // pad bytes stay zero from assign()
-    }
-    return true;
-}
-
-// Parameterized synthetic niche dir writer (D-06 + Pitfall 5: the manifest
-// `path` is the container BASENAME, cross-checked case-insensitively by the
-// tool; sha256 always over the exact container bytes via sgfp4::sha256_hex).
-bool writeNicheDir(const std::vector<uint8_t>& containerBytes, const std::string& dir, const std::string& containerName,
-                   int dimO, int dimI) {
-    if (!makeDir(dir)) {
-        return false;
-    }
-    const std::string containerPath = dir + "/" + containerName;
-    if (!writeBytes(containerPath, containerBytes.data(), containerBytes.size())) {
-        return false;
-    }
-    const std::string digest = sgfp4::sha256_hex(containerBytes.data(), containerBytes.size());
-    std::ostringstream oss;
-    oss << "{\"fp4_binary\":{\"path\":\"" << containerName << "\",\"sha256\":\"" << digest
-        << "\",\"stats\":{\"shape\":[" << dimO << "," << dimI << "]}}}";
-    const std::string manifest = oss.str();
-    return writeBytes(dir + "/manifest.json", reinterpret_cast<const uint8_t*>(manifest.data()), manifest.size());
-}
 
 // Overload with a raw manifest string (malformed probes rewrite the
 // manifest wholesale; the caller computes the JSON).
 bool writeNicheDirRawManifest(const std::vector<uint8_t>& containerBytes, const std::string& dir,
                               const std::string& containerName, const std::string& manifest) {
-    if (!makeDir(dir)) {
+    if (!sgfp4_test::makeDir(dir)) {
         return false;
     }
-    if (!writeBytes(dir + "/" + containerName, containerBytes.data(), containerBytes.size())) {
+    if (!sgfp4_test::writeBytes(dir + "/" + containerName, containerBytes.data(), containerBytes.size())) {
         return false;
     }
-    return writeBytes(dir + "/manifest.json", reinterpret_cast<const uint8_t*>(manifest.data()), manifest.size());
+    return sgfp4_test::writeBytes(dir + "/manifest.json", reinterpret_cast<const uint8_t*>(manifest.data()),
+                                  manifest.size());
 }
 
 std::string manifestJsonFor(const std::vector<uint8_t>& bytes, const std::string& containerName, int dimO, int dimI) {
@@ -350,12 +203,12 @@ public:
                   "provenance)\n",
                   kStructuredMixedCount);
 
-        const std::string cwd = cwdPath();
-        const std::string basePath  = cwd + "/" + tempPath("sgfp4_mt_base_", ".mnn");
-        const std::string outPath   = cwd + "/" + tempPath("sgfp4_mt_out_", ".mnn");
+        const std::string cwd = sgfp4_test::cwdPath();
+        const std::string basePath  = cwd + "/" + sgfp4_test::tempPath("sgfp4_mt_base_", ".mnn");
+        const std::string outPath   = cwd + "/" + sgfp4_test::tempPath("sgfp4_mt_out_", ".mnn");
         const std::string sidecarPath = outPath + ".weight";
-        const std::string structDir  = cwd + "/" + tempPath("sgfp4_mt_nicheA_", ".d");
-        const std::string uniformDir = cwd + "/" + tempPath("sgfp4_mt_nicheB_", ".d");
+        const std::string structDir  = cwd + "/" + sgfp4_test::tempPath("sgfp4_mt_nicheA_", ".d");
+        const std::string uniformDir = cwd + "/" + sgfp4_test::tempPath("sgfp4_mt_nicheB_", ".d");
 
         auto cleanupGuard = [&]() {
             std::remove(basePath.c_str());
@@ -363,10 +216,10 @@ public:
             std::remove(sidecarPath.c_str());
             std::remove((structDir + "/struct_fixture.sgfp4").c_str());
             std::remove((structDir + "/manifest.json").c_str());
-            removeDir(structDir);
+            sgfp4_test::removeDir(structDir);
             std::remove((uniformDir + "/uniform_fixture.sgfp4").c_str());
             std::remove((uniformDir + "/manifest.json").c_str());
-            removeDir(uniformDir);
+            sgfp4_test::removeDir(uniformDir);
         };
 
         bool pass = false;
@@ -378,7 +231,7 @@ public:
                 break;
             }
             std::vector<uint8_t> uniformBytes;
-            if (!buildContainerUniform64(kUniformDimO, kUniformDimI, uniformBytes)) {
+            if (!sgfp4_test::buildContainerUniform64(kUniformDimO, kUniformDimI, uniformBytes)) {
                 MNN_ERROR("SGFP4MultiTensorTest: uniform container builder failed\n");
                 break;
             }
@@ -411,11 +264,12 @@ public:
             //    real-encoder provenance; B = in-test uniform container.
             const std::vector<uint8_t> structBytes(kStructuredMixedData,
                                                    kStructuredMixedData + kStructuredSize);
-            if (!writeNicheDir(structBytes, structDir, "struct_fixture.sgfp4", kStructDimO, kStructDimI)) {
+            if (!sgfp4_test::writeNicheDir(structBytes, structDir, "struct_fixture.sgfp4", kStructDimO, kStructDimI)) {
                 MNN_ERROR("SGFP4MultiTensorTest: failed to write structured niche dir '%s'\n", structDir.c_str());
                 break;
             }
-            if (!writeNicheDir(uniformBytes, uniformDir, "uniform_fixture.sgfp4", kUniformDimO, kUniformDimI)) {
+            if (!sgfp4_test::writeNicheDir(uniformBytes, uniformDir, "uniform_fixture.sgfp4", kUniformDimO,
+                                            kUniformDimI)) {
                 MNN_ERROR("SGFP4MultiTensorTest: failed to write uniform niche dir '%s'\n", uniformDir.c_str());
                 break;
             }
@@ -523,7 +377,7 @@ public:
                 // (dims matched as PAIRS -- both nodes have dimO == 512, so
                 // dimI is the discriminator)
                 std::vector<uint8_t> sidecar;
-                if (!readBytes(sidecarPath, sidecar)) {
+                if (!sgfp4_test::readBytes(sidecarPath, sidecar)) {
                     MNN_ERROR("SGFP4MultiTensorTest: cannot read sidecar '%s'\n", sidecarPath.c_str());
                     break;
                 }
@@ -672,12 +526,12 @@ public:
             "zero_match",       "multi_match",   "garbage_body",
         };
 
-        const std::string cwd = cwdPath();
+        const std::string cwd = sgfp4_test::cwdPath();
 
         // Shared pristine uniform container ([512,64]) + oracle weights for
         // the base model.
         std::vector<uint8_t> pristine;
-        if (!buildContainerUniform64(kUniformDimO, kUniformDimI, pristine)) {
+        if (!sgfp4_test::buildContainerUniform64(kUniformDimO, kUniformDimI, pristine)) {
             MNN_ERROR("SGFP4MalformedInputsTest: uniform container builder failed\n");
             return false;
         }
@@ -696,7 +550,7 @@ public:
 
         // 2-weight base model (same topology as the multi_tensor suite; the
         // uniform-shaped weight is the pairing target except probe 7).
-        const std::string basePath = cwd + "/" + tempPath("sgfp4_mi_base_", ".mnn");
+        const std::string basePath = cwd + "/" + sgfp4_test::tempPath("sgfp4_mi_base_", ".mnn");
         {
             auto input = _Input({1, kInputDim}, NHWC, halide_type_of<float>());
             auto c1    = _Const(w1.data(), {kStructDimO, kStructDimI}, NHWC, halide_type_of<float>());
@@ -712,7 +566,7 @@ public:
 
         // Probe-7 model: TWO [512,512] weights -> one [512,512] niche must
         // hard-fail with "found 2" (D-08 behavior lock).
-        const std::string basePath2 = cwd + "/" + tempPath("sgfp4_mi_base2_", ".mnn");
+        const std::string basePath2 = cwd + "/" + sgfp4_test::tempPath("sgfp4_mi_base2_", ".mnn");
         {
             auto input = _Input({1, kInputDim}, NHWC, halide_type_of<float>());
             auto c1    = _Const(w1.data(), {kStructDimO, kStructDimI}, NHWC, halide_type_of<float>());
@@ -736,16 +590,16 @@ public:
         bool anyRan    = false;
 
         for (int probe = 0; probe < kProbeCount; ++probe) {
-            const std::string outPath   = cwd + "/" + tempPath("sgfp4_mi_out_", ".mnn");
+            const std::string outPath   = cwd + "/" + sgfp4_test::tempPath("sgfp4_mi_out_", ".mnn");
             const std::string sidecarPath = outPath + ".weight";
-            const std::string nicheDir  = cwd + "/" + tempPath("sgfp4_mi_niche_", ".d");
+            const std::string nicheDir  = cwd + "/" + sgfp4_test::tempPath("sgfp4_mi_niche_", ".d");
             const std::string containerName = "probe_fixture.sgfp4";
             auto cleanupProbe = [&](void) {
                 std::remove(outPath.c_str());
                 std::remove(sidecarPath.c_str());
                 std::remove((nicheDir + "/" + containerName).c_str());
                 std::remove((nicheDir + "/manifest.json").c_str());
-                removeDir(nicheDir);
+                sgfp4_test::removeDir(nicheDir);
             };
 
             bool setupOk = true;
@@ -887,7 +741,7 @@ public:
                         const uint32_t garbage = (sgfp4_read_u32_le(bytes.data() + sbHeader0) &
                                                   ~MNN::kSGFP4LayoutEnumMask) |
                                                  0x7u;
-                        writeU32Le(bytes, sbHeader0, garbage);
+                        sgfp4_test::writeU32Le(bytes, sbHeader0, garbage);
                         const std::string digest = sgfp4::sha256_hex(bytes.data(), bytes.size());
                         std::ostringstream oss;
                         oss << "{\"fp4_binary\":{\"path\":\"" << containerName << "\",\"sha256\":\"" << digest
@@ -906,8 +760,8 @@ public:
                 // Seed a stale artifact so the no-partial-output assertion
                 // also proves stale removal (D-11 semantics: a failed run
                 // removes ANY files at the output paths).
-                if (!writeBytes(outPath, reinterpret_cast<const uint8_t*>("stale"), 5) ||
-                    !writeBytes(sidecarPath, reinterpret_cast<const uint8_t*>("stale"), 5)) {
+                if (!sgfp4_test::writeBytes(outPath, reinterpret_cast<const uint8_t*>("stale"), 5) ||
+                    !sgfp4_test::writeBytes(sidecarPath, reinterpret_cast<const uint8_t*>("stale"), 5)) {
                     MNN_ERROR("SGFP4MalformedInputsTest[%d/%s]: failed to seed stale artifacts\n", probe,
                               kProbeNames[probe]);
                     setupOk = false;
@@ -940,11 +794,11 @@ public:
             // -- Assertions: fail + NO output files (D-11).
             bool probePass = (0 != rc);
             if (probePass) {
-                if (fileExists(outPath) || fileExists(sidecarPath)) {
+                if (sgfp4_test::fileExists(outPath) || sgfp4_test::fileExists(sidecarPath)) {
                     MNN_ERROR("SGFP4MalformedInputsTest[%d/%s]: run failed cleanly (rc=%d) BUT output files "
                               "remain (out=%d sidecar=%d) -- D-11 atomicity violated\n",
-                              probe, kProbeNames[probe], rc, static_cast<int>(fileExists(outPath)),
-                              static_cast<int>(fileExists(sidecarPath)));
+                              probe, kProbeNames[probe], rc, static_cast<int>(sgfp4_test::fileExists(outPath)),
+                              static_cast<int>(sgfp4_test::fileExists(sidecarPath)));
                     probePass = false;
                 }
             } else {

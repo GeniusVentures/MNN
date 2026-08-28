@@ -48,6 +48,7 @@
 #include "MNNTestSuite.h"
 #include "TestUtils.h"
 #include "fp4/sgfp4_inject_core.hpp"
+#include "SGFP4TestUtil.hpp"
 
 using namespace MNN;
 using namespace MNN::Express;
@@ -64,28 +65,6 @@ namespace {
 constexpr int kMatrixDim           = 512;
 constexpr int kMacroblockEdge      = 64;
 constexpr int kRecordCount         = (kMatrixDim * kMatrixDim) / (kMacroblockEdge * kMacroblockEdge); // 64
-constexpr size_t kElementsPerLeaf  = static_cast<size_t>(kMacroblockEdge) * kMacroblockEdge;          // 4096
-
-// Per-record framing for the degenerate all-UNIFORM_64 case (mirrors
-// encode_sgfp4.py encode_macroblock): sb_header(4) + leaf header(4) +
-// align16 pad(8) + mode-0 payload (4096 nibbles / 8 per u32 word).
-constexpr size_t kNibblePayloadBytes = (kElementsPerLeaf / MNN::kSGFP4NibblesPerWord) * sizeof(uint32_t); // 2048
-constexpr size_t kRecordPrePayload   = 2 * sizeof(uint32_t);                                               // 8
-constexpr size_t kRecordPadBytes     = MNN::kSGFP4Alignment - kRecordPrePayload;                           // 8
-constexpr size_t kRecordSize         = kRecordPrePayload + kRecordPadBytes + kNibblePayloadBytes;          // 2064
-
-// Record region starts at sgfp4_align16(16 + 64*4) = 272 for the 64-record
-// table. Computed arithmetically (not via the inline sgfp4_align16, which is
-// not constexpr under MSVC constant-expression rules); buildContainerUniform64
-// separately asserts agreement with the helper at runtime.
-constexpr size_t kOffsetTableBytes =
-    MNN::kSGFP4RecordOffsetTableStart + kRecordCount * MNN::kSGFP4RecordOffsetEntrySize; // 272 (already 16-aligned)
-constexpr size_t kRecordRegionStart = (kOffsetTableBytes + MNN::kSGFP4Alignment - 1) & ~(MNN::kSGFP4Alignment - 1);
-
-// Degenerate leaf: scale S = 1.0 (FP16 bits 0x3C00), bias = 0.0, mode 0,
-// every nibble carries the same code so the decode is deterministic.
-constexpr uint32_t kLeafScaleOneHalfBits = 0x3C00; // IEEE754 half(1.0)
-constexpr uint32_t kNibbleCode           = 0x1;    // decodes to S*(+1)+bias = 1.0f
 
 // LCG input generator (D-08): identical values feed injected + baseline.
 constexpr uint32_t kLcgSeed     = 0x9E3779B9u;
@@ -97,114 +76,14 @@ constexpr float kLcgNormalize   = 1.0f / 16777216.0f; // (state >> 8) is 24-bit
 constexpr float kParityRelativeTolerance = 1e-4f;
 
 // ====================================================================
-// Helpers (SGFP4InjectTest.cpp precedent, Phase 5).
+// Plan 08-02 (D-10 pull-forward of the W-1 fix): the shared helpers in
+// SGFP4TestUtil.hpp now provide the container builder and niche-dir
+// writer. The former LOCAL buildContainerUniform64 here wrote ABSOLUTE
+// offset-table entries (kRecordRegionStart + b*kRecordSize) -- the W-1
+// offset-convention divergence -- and is replaced by the shared
+// REGION-RELATIVE builder sgfp4_test::buildContainerUniform64, whose
+// entries are relative to the record-region start (encoder convention).
 // ====================================================================
-
-std::string tempPath(const char* prefix, const char* suffix) {
-    std::ostringstream oss;
-    oss << prefix << static_cast<unsigned long>(std::time(nullptr)) << "_"
-        << static_cast<unsigned long>(std::rand()) << suffix;
-    return oss.str();
-}
-
-std::string cwdPath() {
-    std::vector<char> buf(1024, '\0');
-#if defined(_WIN32)
-    return std::string(_getcwd(buf.data(), static_cast<int>(buf.size() - 1)));
-#else
-    return std::string(getcwd(buf.data(), buf.size() - 1));
-#endif
-}
-
-bool makeDir(const std::string& path) {
-#if defined(_WIN32)
-    return 0 == _mkdir(path.c_str());
-#else
-    return 0 == mkdir(path.c_str(), 0755);
-#endif
-}
-
-void removeDir(const std::string& path) {
-#if defined(_WIN32)
-    _rmdir(path.c_str());
-#else
-    rmdir(path.c_str());
-#endif
-}
-
-void writeU32Le(std::vector<uint8_t>& out, size_t offset, uint32_t value) {
-    out[offset]     = static_cast<uint8_t>(value & 0xFFu);
-    out[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
-    out[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xFFu);
-    out[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xFFu);
-}
-
-bool writeBytes(const std::string& path, const uint8_t* data, size_t size) {
-    std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
-    if (!ofs) {
-        return false;
-    }
-    ofs.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-    return static_cast<size_t>(ofs.tellp()) == size;
-}
-
-// 512x512 all-UNIFORM_64 v2 container (D-04), the degenerate case of
-// encode_sgfp4.py encode_macroblock + encode_container: B=64 records of
-// 4096 elements each, sequential-linear decode order (record b fills
-// output[b*4096 .. b*4096+4096)).
-bool buildContainerUniform64(std::vector<uint8_t>& out) {
-    // Arithmetic kRecordRegionStart must agree with the format's own helper.
-    if (kRecordRegionStart != MNN::sgfp4_align16(kOffsetTableBytes)) {
-        return false;
-    }
-    out.assign(kRecordRegionStart + kRecordCount * kRecordSize, 0);
-
-    // Fixed header: magic + version byte + record count u32 LE, pad0 to 16.
-    writeU32Le(out, 0, MNN::kSGFP4Magic);
-    out[MNN::kSGFP4VersionByteOffset] = MNN::kSGFP4Version;
-    writeU32Le(out, MNN::kSGFP4RecordCountOffset, static_cast<uint32_t>(kRecordCount));
-
-    // Offset table: 64 x u32 LE absolute record offsets.
-    for (int b = 0; b < kRecordCount; ++b) {
-        writeU32Le(out, MNN::kSGFP4RecordOffsetTableStart + b * MNN::kSGFP4RecordOffsetEntrySize,
-                   static_cast<uint32_t>(kRecordRegionStart + b * kRecordSize));
-    }
-
-    // Records: sb_header (layout enum bits 0-2 = LAYOUT_UNIFORM_64 = 0) +
-    // leaf header (S=1.0 << 16 | bias 0 | mode bit 0) + pad + payload.
-    const uint32_t sbHeader   = static_cast<uint32_t>(MNN::kSGFP4LayoutUniform64) & MNN::kSGFP4LayoutEnumMask;
-    const uint32_t leafHeader = (kLeafScaleOneHalfBits << MNN::kSGFP4LeafHeaderScaleShift);
-    const uint32_t payloadWord = kNibbleCode * 0x11111111u; // kNibbleCode in all 8 nibbles
-    for (int b = 0; b < kRecordCount; ++b) {
-        const size_t rec = kRecordRegionStart + b * kRecordSize;
-        writeU32Le(out, rec, sbHeader);
-        writeU32Le(out, rec + sizeof(uint32_t), leafHeader);
-        const size_t payloadStart = rec + kRecordPrePayload + kRecordPadBytes;
-        for (size_t w = 0; w < kNibblePayloadBytes / sizeof(uint32_t); ++w) {
-            writeU32Le(out, payloadStart + w * sizeof(uint32_t), payloadWord);
-        }
-        // pad bytes stay zero from assign()
-    }
-    return true;
-}
-
-// Synthetic niche dir (D-11): <dir>/phase6_fixture.sgfp4 + manifest.json
-// with the JSON shape the tool's rapidjson parser expects.
-bool writeNicheDir(const std::vector<uint8_t>& containerBytes, const std::string& dir) {
-    if (!makeDir(dir)) {
-        return false;
-    }
-    const std::string containerPath = dir + "/phase6_fixture.sgfp4";
-    if (!writeBytes(containerPath, containerBytes.data(), containerBytes.size())) {
-        return false;
-    }
-    const std::string digest = sgfp4::sha256_hex(containerBytes.data(), containerBytes.size());
-    std::ostringstream oss;
-    oss << "{\"fp4_binary\":{\"path\":\"phase6_fixture.sgfp4\",\"sha256\":\"" << digest
-        << "\",\"stats\":{\"shape\":[" << kMatrixDim << "," << kMatrixDim << "]}}}";
-    const std::string manifest = oss.str();
-    return writeBytes(dir + "/manifest.json", reinterpret_cast<const uint8_t*>(manifest.data()), manifest.size());
-}
 
 // Named-I/O base model (D-16/D-02): Input[1,512] 'input' -> MatMul with
 // Const weight[512,512] 'weight' -> 'output'; also serves as the FP32
@@ -284,12 +163,12 @@ struct ClassicFixture {
 };
 
 bool buildInjectedArtifact(ClassicFixture& fx) {
-    const std::string cwd = cwdPath();
+    const std::string cwd = sgfp4_test::cwdPath();
 
     // 1. In-test 512x512 all-UNIFORM_64 container; oracle-valid by
     //    construction (research A1 closed by the assertions below).
     std::vector<uint8_t> containerBytes;
-    buildContainerUniform64(containerBytes);
+    sgfp4_test::buildContainerUniform64(kMatrixDim, kMatrixDim, containerBytes);
     if (!MNN::sgfp4_is_v2_container(containerBytes.data(), containerBytes.size())) {
         MNN_ERROR("SGFP4ClassicAPITest: generated container failed sgfp4_is_v2_container\n");
         return false;
@@ -304,21 +183,21 @@ bool buildInjectedArtifact(ClassicFixture& fx) {
     }
 
     // 3. Base model with weight == oracle (also the FP32 baseline, D-05).
-    fx.basePath = cwd + "/" + tempPath("sgfp4_classic_base_", ".mnn");
+    fx.basePath = cwd + "/" + sgfp4_test::tempPath("sgfp4_classic_base_", ".mnn");
     if (!buildNamedBaseModel(oracleBuf, fx.basePath)) {
         MNN_ERROR("SGFP4ClassicAPITest: failed to build base model '%s'\n", fx.basePath.c_str());
         return false;
     }
 
     // 4. Synthetic niche dir (absolute paths, Pitfall 3).
-    fx.nicheDir = cwd + "/" + tempPath("sgfp4_classic_niche_", ".d");
-    if (!writeNicheDir(containerBytes, fx.nicheDir)) {
+    fx.nicheDir = cwd + "/" + sgfp4_test::tempPath("sgfp4_classic_niche_", ".d");
+    if (!sgfp4_test::writeNicheDir(containerBytes, fx.nicheDir, "phase6_fixture.sgfp4", kMatrixDim, kMatrixDim)) {
         MNN_ERROR("SGFP4ClassicAPITest: failed to write niche dir '%s'\n", fx.nicheDir.c_str());
         return false;
     }
 
     // 5. In-process injection via the shared core (D-12).
-    fx.outPath     = cwd + "/" + tempPath("sgfp4_classic_out_", ".mnn");
+    fx.outPath     = cwd + "/" + sgfp4_test::tempPath("sgfp4_classic_out_", ".mnn");
     fx.sidecarPath = fx.outPath + ".weight";
     const char* argv[] = {"sgfp4_inject",                          // 0
                           "--model",     fx.basePath.c_str(),       // 1..2
@@ -337,7 +216,7 @@ void cleanupFixture(const ClassicFixture& fx) {
     std::remove(fx.sidecarPath.c_str());
     std::remove((fx.nicheDir + "/phase6_fixture.sgfp4").c_str());
     std::remove((fx.nicheDir + "/manifest.json").c_str());
-    removeDir(fx.nicheDir);
+    sgfp4_test::removeDir(fx.nicheDir);
 }
 
 } // namespace
