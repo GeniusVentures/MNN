@@ -1,21 +1,21 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: SGFP4 v2 Model-Artifact Injection Tool
-current_phase: 07
-status: executing
-stopped_at: Phase 7 execution complete (verification 11/11 passed) — v2.0 last phase; milestone ready for completion flow
-last_updated: "2026-08-28T03:11:30.590Z"
+milestone: v3.0
+milestone_name: SGFP4 v2 Converter Integration
+current_phase: none
+status: planning
+stopped_at: v2.0 shipped & archived 2026-08-28 (verified closeout, audit 8/8) — next: /gsd-new-milestone for v3.0
+last_updated: "2026-08-28T19:30:00.000Z"
 last_activity: 2026-08-28
-last_activity_desc: Phase 07 complete
+last_activity_desc: v2.0 milestone complete
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 7
   completed_plans: 7
   percent: 100
-current_phase_name: Multi-Tensor Hardening & Structured-Data Coverage
-current_plan: 05-02 complete
+current_phase_name: (v2.0 archived — awaiting v3.0 milestone creation)
+current_plan: none
 ---
 
 # Project State
@@ -29,14 +29,14 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 07
-Plan: 05-02 complete (all 7 plans complete)
-Status: Executing Phase 7
-Last activity: 2026-08-28 — Phase 07 complete; v2.0 milestone audited (doc consolidation applied)
+Phase: none (v2.0 archived 2026-08-28 — Phases 5/6/7 docs in `.planning/milestones/v2.0-phases/`)
+Plan: none
+Status: Planning v3.0
+Last activity: 2026-08-28 — v2.0 milestone shipped (verified closeout), tagged v2.0
 
 ## Progress
 
-**Phases Complete:** 3/3 (v2.0 milestone)
+**Phases Complete:** 3/3 (v2.0 milestone — SHIPPED)
 
 Progress: [██████████] 100%
 

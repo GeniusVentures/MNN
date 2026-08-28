@@ -1,5 +1,25 @@
 # Milestones
 
+## v2.0 SGFP4 v2 Model-Artifact Injection Tool (Shipped: 2026-08-28)
+
+**Phases completed:** 3 phases, 7 plans (Phases 5-7, workstream `sgfp4-pivot`)
+**Closeout:** verified — milestone audit passed 8/8 (`.planning/milestones/v2.0-MILESTONE-AUDIT.md`)
+
+**Key accomplishments:**
+
+- Express graph-surgery spike proving `Variable::replace` consumer-rewiring (spliced `OpType_SGFP4Dequant` node verifiably replaces the original weight Const) + byte-level v2 version gate `sgfp4_is_v2_container` (Phase 5)
+- Standalone `sgfp4_inject` tool (`MNN_BUILD_SGFP4_TOOLS=ON`): manifest-driven shape pairing, SHA-256 integrity gate, merged 16-byte-aligned non-overlapping sidecar, direct-to-file `Variable::save`, unconditional in-tool decode==oracle verification (Phase 5)
+- Classic Interpreter/Session API validation: injected artifacts load/run via `createFromFile → createSession → runSession` with named I/O surviving injection verbatim, FP32 parity rtol 1e-4 on CPU, sidecar resolving via the op's literal `externalPath` — the exact downstream `SGProcessingManager` path (Phase 6)
+- Structured LAYOUT_MIXED fixture from the real gnus-poc encoder (140,240 B, 12 MIXED superblocks, byte-deterministic regeneration) exercising the quadtree decode path end-to-end (Phase 7)
+- Multi-tensor injection (2 containers, disjoint collision-free ranges, byte-identity) + 13-probe malformed-input clean-failure matrix guaranteeing zero partial or stale artifacts (Phase 7)
+
+**Known tech debt (non-blocking, detailed in v2.0-MILESTONE-AUDIT.md):**
+
+- W-1: `classic_api` test container uses absolute vs. region-relative offset-table convention (parity still valid decode-vs-decode; `multi_tensor` covers the encoder-conformant path)
+- W-2: arg-validation failures skip failCleanup (README over-promises stale removal on arg errors)
+- W-3: `author_structured_fixture.py` hard-codes the gnus-poc absolute path (env-var override suggested)
+- Duplicated test helpers across the three SGFP4 test files (invited the W-1 drift) — extract `SGFP4TestUtil.hpp`
+
 ## v1.0 SGFP4 v2 Decode (Vulkan-parity) (Shipped: 2026-08-26)
 
 **Phases completed:** 4 phases, 10 plans, 20 tasks

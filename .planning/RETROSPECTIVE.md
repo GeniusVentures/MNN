@@ -2,6 +2,43 @@
 
 *A living document updated after each milestone. Lessons feed forward into future planning.*
 
+## Milestone: v2.0 — SGFP4 v2 Model-Artifact Injection Tool
+
+**Shipped:** 2026-08-28
+**Phases:** 3 | **Plans:** 7 | **Sessions:** ~3 (2026-08-26 → 2026-08-28) | **Commits:** 38 | **Code:** 12 files, +11,627 lines
+
+### What Was Built
+- Standalone `sgfp4_inject` tool: normally-converted `.mnn` + gnus-poc SGFP4 v2 containers → new `.mnn` + merged external sidecar with `OpType_SGFP4Dequant` weight-producing nodes
+- Classic Interpreter/Session API proof: injected artifacts run the exact downstream `SGProcessingManager` path with FP32 parity (rtol 1e-4) and named I/O preserved
+- Structured LAYOUT_MIXED fixture from the real gnus-poc encoder (byte-deterministic, 12 MIXED superblocks) + multi-tensor/malformed-input suites (9/9 family green, 13/13 clean-fail probes)
+
+### What Worked
+- Front-loading a real loadable artifact via post-hoc graph surgery (the 2026-08-26 restructure at 0% execution) de-risked the converter milestone before any converter code was written — the tool now serves as the reference implementation v3.0 Phase 11 can absorb
+- Proving the graph-surgery recipe as a runtime-level spike (05-01) *before* building the tool (05-02) meant the tool was a transcription of a proven recipe, not an experiment
+- Tool-core-as-header pattern (`sgfp4_inject_core.hpp` + `sgfp4_inject::run`): one implementation shared by the CLI binary and three test files in-process, no subprocess, no re-implementation
+- Stale-artifact seeding in every malformed probe — made the atomicity (D-11) guarantee regression-tested rather than asserted
+
+### What Was Inefficient
+- Phase 5's formal verification artifact was never generated at phase close (UAT existed, VERIFICATION.md + summary frontmatter did not) — recurred from v1.0 Phase 2 despite that lesson; cost an audit-gate failure and a consolidation pass at milestone close
+- README over-promised failure semantics before arg-stage cleanup was covered (W-2) — docs written one plan ahead of the code's actual guarantees
+- Test helper duplication across three suite files invited a real convention drift bug (W-1: absolute vs. region-relative offsets) that was only caught because Phase 7 happened to re-derive the encoder's convention
+
+### Patterns Established
+- Byte-level container gating (version/magic in the container's own bytes) over manifest-field gating — manifests can lie about format lineage
+- Fixture authoring from the REAL upstream encoder with frozen C-array output + provenance header + deterministic regeneration assert — cross-repo dependency exists only at authoring time
+- Negative-probe tables as suites: mutation-kind loop + stale-artifact seeding + exit-code AND file-absence assertions per probe
+
+### Key Lessons
+1. Same as v1.0 Lesson 1, now verified twice: write the phase's VERIFICATION.md and flip requirement checkboxes **in the phase's own close-out** — the "UAT exists so it's fine" half-measure still fails the formal audit gate
+2. One container/fixture builder per codebase: when two tests hand-roll the same binary format, one will drift (W-1) — extract the shared builder the moment the second consumer appears
+3. A verification gap that *has* runtime evidence closes in minutes (consolidation from existing UAT); one that doesn't closes in hours — always run verify-work in-phase even if the audit feels distant
+
+### Cost Observations
+- Sessions: ~3 across 2026-08-26 → 2026-08-28 (restructure → 3 phases → audit/close)
+- Notable: all 7 plans ran on Windows/MSVC `.build` despite plan shells assuming MSYS2 — exit-code/PASS semantics proved equivalent, no re-planning needed
+
+---
+
 ## Milestone: v1.0 — SGFP4 v2 Decode (Vulkan-parity)
 
 **Shipped:** 2026-08-26
@@ -44,13 +81,16 @@
 | Milestone | Sessions | Phases | Key Change |
 |-----------|----------|--------|------------|
 | v1.0 | ~4 | 4 | First milestone for the sgfp4-pivot workstream; established additive-format pattern (separate OpType, external sidecar) |
+| v2.0 | ~3 | 3 | Injection-tool restructure at 0% execution front-loaded a real artifact; tool-core-as-header; real-encoder fixture authoring |
 
 ### Cumulative Quality
 
 | Milestone | Tests | Coverage | Zero-Dep Additions |
 |-----------|-------|----------|--------------------|
 | v1.0 | 14 CPU/Vulkan parity fixtures + uniform/mixed round-trip suites | Both code modes × all 5 uniform layouts + LAYOUT_MIXED | Reference Python encoder (`encode_sgfp4.py`), no new runtime deps |
+| v2.0 | 9 `op/sgfp4/` suites incl. classic-API parity + 13-probe malformed matrix | Express + classic API; single- & multi-tensor; uniform + structured MIXED | Vendored SHA-256 header, no new runtime deps |
 
 ### Top Lessons (Verified Across Milestones)
 
-1. Close out each phase's verification before moving to the next — deferred verification compounds into milestone-close overhead
+1. Close out each phase's verification before moving to the next — deferred verification compounds into milestone-close overhead *(verified in both v1.0 and v2.0 — v2.0's UAT-exists-but-no-VERIFICATION.md half-measure still failed the audit gate)*
+2. Share binary-format builders across tests — duplicated hand-rolled builders drift (v2.0 W-1)
