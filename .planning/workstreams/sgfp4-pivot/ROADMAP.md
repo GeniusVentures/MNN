@@ -69,10 +69,18 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 **Plans**: 6 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 08-01-PLAN.md — Append `buffer:[byte]` to `SGFP4DequantParam` + regenerate/commit schema headers (SGV2-22, D-04 regression)
 - [ ] 08-02-PLAN.md — Extract `SGFP4TestUtil.hpp` and retrofit the three test files (D-10 region-relative builder)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 08-03-PLAN.md — Buffer-first dispatch in CPU + Vulkan decoders + D-12 non-interception comment
 - [ ] 08-04-PLAN.md — Aligned `storeWeight` + `loadExternalParam` SGFP4 cases in `RemoveParams.cpp` (SGV2-23)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 08-05-PLAN.md — Buffer-mode decode-parity suites (CPU + Vulkan) vs oracle (D-08)
 - [ ] 08-06-PLAN.md — Converter round-trip test target `TestSGFP4Converter` (D-09)
 
