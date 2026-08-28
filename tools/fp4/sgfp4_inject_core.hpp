@@ -295,12 +295,24 @@ inline int run(int argc, const char* argv[]) {
     }
     const std::string sidecarPath = outputPath + ".weight";
 
+    // D-11 failure-cleanup: a failed run removes ANY files at outputPath /
+    // sidecarPath, including a stale artifact from a previous successful run
+    // at the same paths -- downstream consumers must never see an artifact
+    // that does not correspond to the inputs of the failed run. After a
+    // failed run, no <output> / <output>.weight remains. Idiom matches the
+    // std::remove used for the .verify_N.mnn temp files below.
+    const auto failCleanup = [&outputPath, &sidecarPath]() {
+        std::remove(outputPath.c_str());
+        std::remove(sidecarPath.c_str());
+    };
+
     // ---- Per-niche-dir validation --------------------------------------
     std::vector<NicheDir> niches;
     niches.reserve(nicheDirs.size());
     for (const auto& dir : nicheDirs) {
         NicheDir niche;
         if (!loadNicheDir(dir, niche)) {
+            failCleanup();
             return 1;
         }
         niches.push_back(niche);
@@ -310,6 +322,7 @@ inline int run(int argc, const char* argv[]) {
     auto varMap = Variable::loadMap(modelPath.c_str());
     if (varMap.empty()) {
         MNN_ERROR("sgfp4_inject: '%s' loaded as an empty variable map\n", modelPath.c_str());
+        failCleanup();
         return 1;
     }
     auto inputOutputs = Variable::getInputAndOutput(varMap);
@@ -338,6 +351,7 @@ inline int run(int argc, const char* argv[]) {
                           info ? info->dim[0] : -1);
             }
             MNN_PRINT("\n");
+            failCleanup();
             return 1;
         }
         InjectedNode node;
@@ -357,6 +371,7 @@ inline int run(int argc, const char* argv[]) {
         std::ofstream ofs(sidecarPath, std::ios::binary | std::ios::trunc);
         if (!ofs) {
             MNN_ERROR("sgfp4_inject: cannot open sidecar '%s' for write\n", sidecarPath.c_str());
+            failCleanup();
             return 1;
         }
         size_t offsetCursor = 0;
@@ -374,6 +389,7 @@ inline int run(int argc, const char* argv[]) {
             offsetCursor += aligned;
             if (ofs.fail()) {
                 MNN_ERROR("sgfp4_inject: sidecar write failed at offset %zu\n", node.sidecarOffset);
+                failCleanup(); // ofs is scope-closed by the enclosing block exit (Pitfall A5)
                 return 1;
             }
         }
@@ -405,6 +421,7 @@ inline int run(int argc, const char* argv[]) {
         std::shared_ptr<Module> full(Module::load({}, {}, outputPath.c_str(), rtmgr));
         if (nullptr == full) {
             MNN_ERROR("sgfp4_inject: verification reload of '%s' returned null module\n", outputPath.c_str());
+            failCleanup();
             return 1;
         }
     }
@@ -421,29 +438,34 @@ inline int run(int argc, const char* argv[]) {
         std::remove(tempPath.c_str());
         if (nullptr == m) {
             MNN_ERROR("sgfp4_inject: verification sub-module for '%s' failed to load\n", node.weightName.c_str());
+            failCleanup();
             return 1;
         }
         auto outs = m->onForward({});
         if (outs.empty()) {
             MNN_ERROR("sgfp4_inject: verification sub-module for '%s' produced no output\n", node.weightName.c_str());
+            failCleanup();
             return 1;
         }
         const float* got = outs[0]->readMap<float>();
         auto info        = outs[0]->getInfo();
         if (nullptr == got || nullptr == info) {
             MNN_ERROR("sgfp4_inject: verification sub-module for '%s' output unreadable\n", node.weightName.c_str());
+            failCleanup();
             return 1;
         }
         const size_t elementCount = static_cast<size_t>(node.dimO) * node.dimI;
         if (static_cast<size_t>(info->size) != elementCount) {
             MNN_ERROR("sgfp4_inject: verification sub-module for '%s': %d elements != expected %zu\n",
                       node.weightName.c_str(), static_cast<int>(info->size), elementCount);
+            failCleanup();
             return 1;
         }
         std::vector<float> oracle(elementCount, 0.0f);
         if (!MNN::dequant_sgfp4_container_cpu(node.containerBytes.data(), node.containerBytes.size(), oracle.data(),
                                               elementCount)) {
             MNN_ERROR("sgfp4_inject: oracle decode of container for '%s' failed\n", node.weightName.c_str());
+            failCleanup();
             return 1;
         }
         bool ok = true;
@@ -458,6 +480,7 @@ inline int run(int argc, const char* argv[]) {
         if (!ok) {
             MNN_ERROR("sgfp4_inject: verification mismatch for '%s' (decode vs oracle, rtol %g)\n",
                       node.weightName.c_str(), kOracleRelativeTolerance);
+            failCleanup();
             return 1;
         }
         MNN_PRINT("sgfp4_inject: node '%s' {%d,%d} offset=%zu size=%zu verified (decode==oracle)\n",
