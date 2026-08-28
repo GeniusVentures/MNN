@@ -84,7 +84,17 @@ Plans:
 2. At least one structured (non-uniform) container exercises the LAYOUT_MIXED/quadtree decode path end-to-end — the uniform-random demo container produces all `UNIFORM_64` and does NOT count as quadtree coverage (handoff caveat; a structured second artifact must be obtained or generated).
 3. Weight shapes/dims convention (`dims = {dimO, dimI}` on the matrix) is documented and applied; malformed/empty inputs fail cleanly in the tool rather than emitting a corrupt artifact (relevant because a corrupt artifact would crash the downstream unchecked-nullptr path in `SGProcessingManager`, not fail gracefully).
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1** *(independent — run in either order)*
+
+- [ ] 07-01-PLAN.md — D-11 atomicity failure-cleanup in `sgfp4_inject::run()` + `tools/fp4/README.md` (D-13) (SGINJ-07/08)
+- [ ] 07-02-PLAN.md — structured LAYOUT_MIXED fixture authoring via real gnus-poc encoder → `test/op/SGFP4StructuredFixtures.h` (SGINJ-08)
+
+**Wave 2** *(blocked on 07-01 + 07-02)*
+
+- [ ] 07-03-PLAN.md — `test/op/SGFP4MultiTensorTest.cpp`: multi-tensor/structured positive suite (`op/sgfp4/multi_tensor`) + malformed-input probe suite (`op/sgfp4/malformed_inputs`) (SGINJ-07/08)
 
 ### 📋 v3.0 SGFP4 v2 Converter Integration (Planned)
 
@@ -110,7 +120,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 | 4. Vulkan Decode — Adaptive Quadtree | v1.0 | 2/2 | Complete | 2026-08-25 |
 | 5. Injection Core — Artifact Construction & Graph Splicing | v2.0 | 0/2 | Not started | - |
 | 6. Classic-API Load & Run Validation | v2.0 | 2/2 | Complete    | 2026-08-27 |
-| 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 0/TBD | Not started | - |
+| 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 0/3 | Planning complete | - |
 | 8. Schema + Sidecar Wiring | v3.0 | 0/TBD | Not started | - |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
 | 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 0/TBD | Not started | - |
