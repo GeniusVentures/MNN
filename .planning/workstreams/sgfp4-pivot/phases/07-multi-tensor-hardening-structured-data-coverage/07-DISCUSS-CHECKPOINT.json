@@ -1,0 +1,38 @@
+{
+  "phase": 7,
+  "padded_phase": "07",
+  "phase_name": "Multi-Tensor Hardening & Structured-Data Coverage",
+  "started": "2026-08-27",
+  "areas_total": 4,
+  "areas_completed": ["Structured container", "Multi-tensor setup", "Malformed probe depth"],
+  "areas": [
+    {
+      "name": "Structured container",
+      "decisions": [
+        "D-01: The structured LAYOUT_MIXED/quadtree container is produced by the REAL gnus-poc encoder (fp4_exporter.py --adaptive on structured weights) — not the test-oracle-only in-repo encode_sgfp4.py",
+        "D-02: Its bytes are baked into the test as a generated C-array header fixture (SGFP4DequantFixtures.h precedent), with a correct synthetic manifest.json written to a temp dir at runtime — fully self-contained, no runtime Python, no committed binaries, no env-var skips (Phase 6 D-10 precedent)",
+        "D-03: The one-time export run happens at fixture-authoring time (quick-task/manual step in gnus-poc); the cross-repo dependency exists only then, not in the test harness",
+        "D-04: The structured container runs the same classic-API inject->load->run chain as the uniform demo (inside the multi-tensor test) — LAYOUT_MIXED op-level decode correctness is already proven (Phase 2/4); no separate dedicated suite"
+      ]
+    },
+    {
+      "name": "Multi-tensor setup",
+      "decisions": [
+        "D-05: Base model = Input[512] with two distinguishable-shape weights (e.g. w1[512,512] structured + w2 smaller uniform, e.g. [512,64] or [64,64]), each pairing to its own niche dir — extends the Phase 6 D-02 topology precedent",
+        "D-06: Containers: one structured (gnus-poc) + one uniform (existing demo lineage) — a single artifact proves multi-tensor AND structured coverage in one run",
+        "D-07: Validation path = classic API (Interpreter/Session), per SGINJ-07 wording / SGProcessingManager path; Express Module::load coverage stays in the tool's unconditional in-tool verify",
+        "D-08: Same-shape weight collision handling DEFERRED — exact-shape pairing keeps hard-failing on 2 matches; manifest tensor-name keying deferred to v3.0 Phase 11 (real LLM weights need it)"
+      ]
+    }
+    {
+      "name": "Malformed probe depth",
+      "decisions": [
+        "D-09: Full input-failure matrix probed at sgfp4_inject::run() level (in-process): truncated/empty container, bad sha256, v1 container, manifest missing fields, dims disagreeing with matched tensor, zero/multi shape matches — every case exits non-zero with diagnostic",
+        "D-10: Corrupted-payload-byte probes INCLUDED (deferred from Phase 6 D-14): container passes magic/version/sha256 but body bytes are garbage — tool must never crash; either clean structural success or clean failure",
+        "D-11: Atomicity: a failed run must leave NO partial out.mnn/.weight behind — validate everything before writing, or temp-file+rename; leftover partial artifacts are unacceptable",
+        "D-12: One new run_test.out suite (e.g. test/op/SGFP4MultiTensorTest.cpp, op/sgfp4/multi_tensor) carries positive multi-tensor/structured tests AND malformed-input probes — Phase 6 D-09 pattern"
+      ]
+    }
+  ],
+  "pending_areas": ["dims docs location"]
+}
