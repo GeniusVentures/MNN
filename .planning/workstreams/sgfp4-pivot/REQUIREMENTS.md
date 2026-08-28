@@ -29,8 +29,8 @@ Requirements for this milestone (v2.0). Each maps to roadmap phases.
 
 ### Multi-Tensor Hardening & Structured-Data Coverage
 
-- [ ] **SGINJ-07**: Multiple target weight tensors (and/or multiple containers) inject into a single artifact with independent, collision-free sidecar byte ranges, loading and running correctly; weight `dims = {dimO, dimI}` convention is documented and applied
-- [ ] **SGINJ-08**: At least one structured (non-uniform) container exercises the LAYOUT_MIXED/quadtree decode path end-to-end (the uniform-random demo container is all `UNIFORM_64` and does not count — a structured artifact must be obtained or generated); malformed/empty inputs fail cleanly in the tool rather than emitting a corrupt artifact (a corrupt artifact would crash the downstream unchecked-nullptr path in `SGProcessingManager`, not fail gracefully)
+- [x] **SGINJ-07**: Multiple target weight tensors (and/or multiple containers) inject into a single artifact with independent, collision-free sidecar byte ranges, loading and running correctly; weight `dims = {dimO, dimI}` convention is documented and applied
+- [x] **SGINJ-08**: At least one structured (non-uniform) container exercises the LAYOUT_MIXED/quadtree decode path end-to-end (the uniform-random demo container is all `UNIFORM_64` and does not count — a structured artifact must be obtained or generated); malformed/empty inputs fail cleanly in the tool rather than emitting a corrupt artifact (a corrupt artifact would crash the downstream unchecked-nullptr path in `SGProcessingManager`, not fail gracefully)
 
 ## v2 Requirements
 
@@ -86,8 +86,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SGINJ-04 | Phase 5 | Pending |
 | SGINJ-05 | Phase 6 | Complete |
 | SGINJ-06 | Phase 6 | Complete |
-| SGINJ-07 | Phase 7 | Pending |
-| SGINJ-08 | Phase 7 | Pending |
+| SGINJ-07 | Phase 7 | Complete |
+| SGINJ-08 | Phase 7 | Complete |
 
 **Coverage:**
 
