@@ -1,7 +1,16 @@
 set(MNN_SGFP4_TOOLS "")
 
-file(GLOB SGFP4FILES ${CMAKE_CURRENT_LIST_DIR}/*.cpp ${CMAKE_CURRENT_LIST_DIR}/*.hpp)
-add_executable(sgfp4_inject.out ${SGFP4FILES})
+# SGFP4 v2 C++ encoder (Phase 9, Plan 09-01): static lib consumed by
+# run_test.out's parity suites. sgfp4_inject reads pre-made containers and
+# never calls the encoder, so it does NOT link sgfp4_encode.
+add_library(sgfp4_encode STATIC ${CMAKE_CURRENT_LIST_DIR}/sgfp4_encode.cpp)
+target_include_directories(sgfp4_encode PUBLIC ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/3rd_party/half)
+
+# Explicit inject sources (no glob double-compile anti-pattern).
+add_executable(sgfp4_inject.out
+    ${CMAKE_CURRENT_LIST_DIR}/sgfp4_inject.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/sgfp4_inject_core.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/sha256.hpp)
 list(APPEND MNN_SGFP4_TOOLS sgfp4_inject.out)
 
 foreach(TARGET ${MNN_SGFP4_TOOLS})

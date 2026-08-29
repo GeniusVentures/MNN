@@ -73,36 +73,6 @@ public:
         printf("FP4Model DONE\n"); fflush(stdout);
         return true;
     }
-                pi += (chSz + 1) / 2;
-            }
-        }
-        std::vector<float> dqw(32);
-        MNN::dequant_fp4_packed_cpu(pk.data(), dqw.data(), 32);
-        int chSz = 16;
-        for (int i = 0; i < 32; ++i) dqw[i] *= sc[i / chSz];
-
-        // Conv2D with dequantized weights
-        auto x2 = _Input({1, 4, 4, 4}, NCHW, halide_type_of<float>());
-        ::memcpy(x2->writeMap<float>(), inp.data(), 64 * sizeof(float)); x2->unMap();
-        std::shared_ptr<MNN::OpT> op2(new MNN::OpT);
-        op2->type = MNN::OpType_Convolution;
-        op2->main.type = MNN::OpParameter_Convolution2D;
-        op2->main.value = new MNN::Convolution2DT;
-        auto* c2 = op2->main.AsConvolution2D();
-        c2->common.reset(new MNN::Convolution2DCommonT);
-        c2->common->inputCount = 1; c2->common->outputCount = 2;
-        c2->common->kernelX = 2; c2->common->kernelY = 2;
-        c2->common->strideX = 1; c2->common->strideY = 1;
-        c2->weight = dqw;
-        c2->bias.assign(bias, bias + 2);
-        auto fp4Var = Variable::create(Expr::create(op2.get(), {x2}));
-        auto* fp4Out = fp4Var->readMap<float>();
-
-        bool pass = checkVectorByRelativeError(fp4Out, refVec.data(), outSz, 0.02f);
-        if (!pass) MNN_ERROR("FP4Test FAILED\n");
-        else MNN_PRINT("FP4Test PASSED\n");
-        return pass;
-    }
 };
 
 MNNTestSuiteRegister(FP4ModelConversionTest, "op/fp4/conversion");
