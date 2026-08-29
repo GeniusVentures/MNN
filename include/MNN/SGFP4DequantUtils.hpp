@@ -470,6 +470,62 @@ inline bool dequant_sgfp4_container_cpu(const uint8_t* container, size_t contain
     return outCursor == outElementCount;
 }
 
+/**
+ * @brief Padded-plane decode + row-major stride crop (D-11a, Plan 09-02).
+ *
+ * Containers produced from zero-padded planes (D-06) encode the FULL
+ * paddedDimO x paddedDimI plane, but the consumer wants only the true
+ * dimO x dimI region. This overload decodes into a scratch plane of
+ * paddedDimO*paddedDimI floats, then crops row-by-row:
+ *   out[r*dimI + c] = scratch[r*paddedDimI + c], r < dimO, c < dimI
+ * -- a stride crop, NOT a flat prefix copy (Pitfall 5: pad columns would
+ * otherwise contaminate every row past the first).
+ *
+ * When paddedDimO == dimO and paddedDimI == dimI this is equivalent to a
+ * direct dequant_sgfp4_container_cpu call (crop is a no-op).
+ *
+ * @param container    pointer to the raw v2 container bytes (padded-plane encoding)
+ * @param containerSize size of `container` in bytes
+ * @param outData      destination float buffer (must hold dimO*dimI floats)
+ * @param dimO         true output rows
+ * @param dimI         true output cols
+ * @param paddedDimO   padded rows (must be ceil(dimO/64)*64)
+ * @param paddedDimI   padded cols (must be ceil(dimI/64)*64)
+ * @return true on success, false on any malformed input or bad geometry
+ */
+inline bool dequant_sgfp4_container_cpu_crop(const uint8_t* container, size_t containerSize, float* outData, int dimO,
+                                             int dimI, int paddedDimO, int paddedDimI) {
+    if (container == nullptr || outData == nullptr) {
+        return false;
+    }
+    if (dimO <= 0 || dimI <= 0 || paddedDimO <= 0 || paddedDimI <= 0) {
+        return false;
+    }
+    if (paddedDimO < dimO || paddedDimI < dimI) {
+        return false;
+    }
+    // Integer-only guard against overflow (int operands are promoted to
+    // size_t before the multiply, per T-09-06 note).
+    const size_t paddedCount = static_cast<size_t>(paddedDimO) * static_cast<size_t>(paddedDimI);
+    const size_t outCount = static_cast<size_t>(dimO) * static_cast<size_t>(dimI);
+    if (paddedCount == 0 || paddedCount < outCount) {
+        return false;
+    }
+
+    std::vector<float> scratch(paddedCount, 0.0f);
+    if (!dequant_sgfp4_container_cpu(container, containerSize, scratch.data(), paddedCount)) {
+        return false;
+    }
+
+    // Row-major stride crop (never a flat prefix).
+    for (int r = 0; r < dimO; ++r) {
+        const float* srcRow = scratch.data() + static_cast<size_t>(r) * paddedDimI;
+        float* dstRow = outData + static_cast<size_t>(r) * dimI;
+        std::memcpy(dstRow, srcRow, static_cast<size_t>(dimI) * sizeof(float));
+    }
+    return true;
+}
+
 } // namespace MNN
 
 #endif /* SGFP4DequantUtils_hpp */

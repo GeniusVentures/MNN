@@ -15,9 +15,15 @@ layout(binding = 1) writeonly buffer DstBuffer {
 };
 
 layout(binding = 2) uniform ConstBuffer {
-    uint outElementCount; // total decoded element count (host-validated)
-    uint containerBytes;  // container size in bytes (host-validated geometry)
-};
+    // 5-field layout (Plan 09-02, D-11a) -- must match SGFP4DequantConst in
+    // VulkanSGFP4Dequant.cpp exactly. The dispatch bound covers the FULL
+    // padded plane; writes are cropped to the true region.
+    uint paddedOutElementCount; // paddedDimO * paddedDimI (dispatch guard)
+    uint containerBytes;        // container size in bytes (host-validated geometry)
+    uint outDimO;               // true output rows
+    uint outDimI;               // true output cols
+    uint paddedDimI;            // padded col stride (ceil(dimI/64)*64)
+} uConst;
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
@@ -295,9 +301,10 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
 
     // Sole in-shader guard: host pre-validates the container (D-05); the
-    // shader body stays a pure locate+decode so a later quadtree extension
-    // is a drop-in replacement of locateElement.
-    if (idx >= outElementCount) {
+    // shader body stays a pure locate+decode. The dispatch bound covers the
+    // FULL padded plane (D-11a): pad-region invocations locate their element
+    // then early-return before the cropped write.
+    if (idx >= uConst.paddedOutElementCount) {
         return;
     }
 
@@ -315,5 +322,16 @@ void main() {
 
     // Affine reconstruction in FP32 math; FLOAT cast only at the store.
     float c = (laneBits == 4u) ? codeMode0(code) : codeMode1(code);
-    Dst[idx] = FLOAT(S) * FLOAT(c) + FLOAT(bias);
+    float decoded = S * c + bias;
+
+    // Row-major stride crop (Plan 09-02): out[r*outDimI + c] for the true
+    // region only; pad rows/cols are discarded. For 64-aligned dims
+    // paddedDimI == outDimI and r == idx / outDimI, c == idx % outDimI, so
+    // the write index collapses to idx -- byte-identical to the old path.
+    uint row = idx / uConst.paddedDimI;
+    uint col = idx % uConst.paddedDimI;
+    if (row >= uConst.outDimO || col >= uConst.outDimI) {
+        return; // pad region
+    }
+    Dst[row * uConst.outDimI + col] = FLOAT(decoded);
 }

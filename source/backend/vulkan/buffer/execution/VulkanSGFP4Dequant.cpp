@@ -25,8 +25,15 @@ namespace {
 constexpr uint32_t kSgfp4WorkgroupSize = 256;
 
 struct SGFP4DequantConst {
-    uint32_t outElementCount;
+    // 5-field layout (Plan 09-02, D-11a) -- must match the push_constant
+    // block in sgfp4_dequant.comp exactly. paddedOutElementCount drives the
+    // dispatch bound (padded plane); outDimO/outDimI/paddedDimI drive the
+    // row-major crop write out[r*outDimI+c].
+    uint32_t paddedOutElementCount; // = paddedDimO * paddedDimI (dispatch guard)
     uint32_t containerBytes;
+    uint32_t outDimO; // true output rows
+    uint32_t outDimI; // true output cols
+    uint32_t paddedDimI; // padded col stride (ceil(dimI/64)*64)
 };
 
 // FileLoader::size() only reflects bytes already pulled into its internal
@@ -49,11 +56,12 @@ bool queryFileSize(const std::string& path, size_t& outSize) {
 
 } // namespace
 
-VulkanSGFP4Dequant::VulkanSGFP4Dequant(Backend* bn, std::vector<uint8_t> container, uint32_t outElementCount,
+VulkanSGFP4Dequant::VulkanSGFP4Dequant(Backend* bn, std::vector<uint8_t> container, int dimO, int dimI,
                                        bool useFP32Output)
     : VulkanBasicExecution(bn) {
     mUseFP32Output  = useFP32Output;
-    mOutElementCount = outElementCount;
+    mDimO           = dimO;
+    mDimI           = dimI;
     mContainer       = std::move(container);
     mContainerBytes  = static_cast<uint32_t>(mContainer.size());
 
@@ -95,12 +103,27 @@ ErrorCode VulkanSGFP4Dequant::onEncode(const std::vector<Tensor*>& inputs, const
     auto output = outputs[0];
     auto extra  = static_cast<VulkanBackend*>(backend());
 
-    uint32_t elementCount = static_cast<uint32_t>(output->elementSize());
+    // Padded-crop dispatch (Plan 09-02): true dims are carried on the
+    // Execution (from the creator's param->dims()); the shader walks the
+    // FULL padded plane and crops writes to the true region. For 64-aligned
+    // dims paddedOutElementCount == elementCount and the crop check is
+    // always true -- byte-identical behavior to before.
+    int dimO = mDimO;
+    int dimI = mDimI;
+    if (dimO <= 0 || dimI <= 0) {
+        return INVALID_VALUE;
+    }
+    int paddedDimO = ((dimO + 63) / 64) * 64;
+    int paddedDimI = ((dimI + 63) / 64) * 64;
+    uint32_t paddedOutElementCount = static_cast<uint32_t>(paddedDimO) * static_cast<uint32_t>(paddedDimI);
 
     {
         auto c = reinterpret_cast<SGFP4DequantConst*>(mConstBuffer->map());
-        c->outElementCount = elementCount;
-        c->containerBytes  = mContainerBytes;
+        c->paddedOutElementCount = paddedOutElementCount;
+        c->containerBytes        = mContainerBytes;
+        c->outDimO               = static_cast<uint32_t>(dimO);
+        c->outDimI               = static_cast<uint32_t>(dimI);
+        c->paddedDimI            = static_cast<uint32_t>(paddedDimI);
         mConstBuffer->unmap();
     }
 
@@ -113,7 +136,7 @@ ErrorCode VulkanSGFP4Dequant::onEncode(const std::vector<Tensor*>& inputs, const
     mDescriptorSet->writeBuffer(mConstBuffer->buffer(), 2, mConstBuffer->size());
 
     mDequantPipeline->bind(cmdBuffer->get(), mDescriptorSet->get());
-    vkCmdDispatch(cmdBuffer->get(), UP_DIV(elementCount, kSgfp4WorkgroupSize), 1, 1);
+    vkCmdDispatch(cmdBuffer->get(), UP_DIV(paddedOutElementCount, kSgfp4WorkgroupSize), 1, 1);
 
     // Output barrier: make output visible to downstream ops.
     cmdBuffer->barrierSource(outputBuffer.first->buffer(), outputBuffer.second, outputSize);
@@ -204,14 +227,34 @@ public:
             MNN_ERROR("VulkanSGFP4Dequant: empty output\n");
             return nullptr;
         }
+        if (param->dims() == nullptr || param->dims()->size() < 2) {
+            MNN_ERROR("VulkanSGFP4Dequant: missing dims\n");
+            return nullptr;
+        }
+        int dimO = param->dims()->Get(0);
+        int dimI = param->dims()->Get(1);
+        if (dimO <= 0 || dimI <= 0 || static_cast<int64_t>(dimO) * dimI != static_cast<int64_t>(elementCount)) {
+            MNN_ERROR("VulkanSGFP4Dequant: dims disagree with output geometry\n");
+            return nullptr;
+        }
 
         // D-05: one-time host pre-validation with the Phase-1-tested
         // fully-bounds-checked CPU walk (T-03-03). A false return prevents
         // Execution construction entirely: no upload, no dispatch, no
-        // partial output writes.
-        std::vector<float> scratch(static_cast<size_t>(elementCount));
-        if (!dequant_sgfp4_container_cpu(container.data(), container.size(), scratch.data(),
-                                         static_cast<size_t>(elementCount))) {
+        // partial output writes. Padded planes (Plan 09-02, D-11a) validate
+        // through the crop overload -- same walk, padded geometry.
+        int paddedDimO = ((dimO + 63) / 64) * 64;
+        int paddedDimI = ((dimI + 63) / 64) * 64;
+        bool ok;
+        std::vector<float> scratch(static_cast<size_t>(elementCount), 0.0f);
+        if (paddedDimO != dimO || paddedDimI != dimI) {
+            ok = dequant_sgfp4_container_cpu_crop(container.data(), container.size(), scratch.data(), dimO, dimI,
+                                                  paddedDimO, paddedDimI);
+        } else {
+            ok = dequant_sgfp4_container_cpu(container.data(), container.size(), scratch.data(),
+                                             static_cast<size_t>(elementCount));
+        }
+        if (!ok) {
             MNN_ERROR("VulkanSGFP4Dequant: container failed host pre-validation\n");
             return nullptr;
         }
@@ -220,8 +263,7 @@ public:
 
         // FP32 can later be forced from op parameters; FP16 default per D-04.
         bool useFP32Output = false;
-        return new VulkanSGFP4Dequant(backend, std::move(container), static_cast<uint32_t>(elementCount),
-                                      useFP32Output);
+        return new VulkanSGFP4Dequant(backend, std::move(container), dimO, dimI, useFP32Output);
     }
 };
 

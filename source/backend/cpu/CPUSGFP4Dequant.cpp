@@ -45,6 +45,22 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
     if (nullptr == param) {
         return INVALID_VALUE;
     }
+
+    // Padded-geometry derivation (Plan 09-02): the output tensor keeps the
+    // TRUE {dimO, dimI} shape; a container encoded from a zero-padded plane
+    // (D-06) decodes through the crop overload. When both dims are
+    // 64-multiples this is a no-op and the original path runs unchanged.
+    if (outputs.empty() || nullptr == outputs[0]) {
+        return INVALID_VALUE;
+    }
+    if (param->dims() == nullptr || param->dims()->size() < 2) {
+        return INVALID_VALUE;
+    }
+    int dimO = param->dims()->Get(0);
+    int dimI = param->dims()->Get(1);
+    mPaddedDimO = ((dimO + 63) / 64) * 64;
+    mPaddedDimI = ((dimI + 63) / 64) * 64;
+    mIsPadded = (mPaddedDimO != dimO || mPaddedDimI != dimI);
     // Buffer-first dispatch (D-01/D-02, Plan 08-03): a non-empty inline
     // `buffer` is the live decode source -- no FileLoader, no externalPath.
     // Copy into mContainer for safety (the FlatBuffers buffer may point
@@ -60,12 +76,22 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
         // Dims-consistency: eager oracle decode into scratch (Q2 decision --
         // the eager oracle doubles as the buffer-mode replacement for the
         // sidecar path's T-01-04 file-size DoS bound; the buffer is already
-        // fully materialized in memory).
-        std::vector<float> scratch(outputs[0]->elementSize());
-        if (!dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), scratch.data(),
-                                         outputs[0]->elementSize())) {
-            mContainer.clear();
-            return INVALID_VALUE;
+        // fully materialized in memory). Padded planes (D-11a) validate via
+        // the crop overload with the derived padded geometry.
+        if (mIsPadded) {
+            std::vector<float> scratch(outputs[0]->elementSize(), 0.0f);
+            if (!dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), scratch.data(), dimO, dimI,
+                                                  mPaddedDimO, mPaddedDimI)) {
+                mContainer.clear();
+                return INVALID_VALUE;
+            }
+        } else {
+            std::vector<float> scratch(outputs[0]->elementSize());
+            if (!dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), scratch.data(),
+                                             outputs[0]->elementSize())) {
+                mContainer.clear();
+                return INVALID_VALUE;
+            }
         }
         return NO_ERROR;
     }
@@ -128,8 +154,21 @@ ErrorCode CPUSGFP4Dequant::onExecute(const std::vector<Tensor*>& inputs, const s
         return INVALID_VALUE;
     }
     // Malformed container: return an error rather than writing partial
-    // garbage silently.
-    bool ok = dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), dest, elementCount);
+    // garbage silently. Padded planes (D-11a) decode through the crop
+    // overload; the flat-copy path is identical for aligned dims.
+    bool ok;
+    if (mIsPadded) {
+        auto param = mOp->main_as_SGFP4DequantParam();
+        if (nullptr == param || param->dims() == nullptr || param->dims()->size() < 2) {
+            return INVALID_VALUE;
+        }
+        int dimO = param->dims()->Get(0);
+        int dimI = param->dims()->Get(1);
+        ok = dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), dest, dimO, dimI, mPaddedDimO,
+                                              mPaddedDimI);
+    } else {
+        ok = dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), dest, elementCount);
+    }
     if (!ok) {
         return INVALID_VALUE;
     }

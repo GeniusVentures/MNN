@@ -23,8 +23,9 @@ namespace MNN {
 // buffer and onEncode is a pure bind + dispatch (0-input Const-like op).
 class VulkanSGFP4Dequant : public VulkanBasicExecution {
 public:
-    VulkanSGFP4Dequant(Backend* bn, std::vector<uint8_t> container, uint32_t outElementCount,
-                       bool useFP32Output);
+    // Plan 09-02: true {dimO, dimI} replace the bare outElementCount so
+    // onEncode can derive the padded dispatch geometry (D-11a crop write).
+    VulkanSGFP4Dequant(Backend* bn, std::vector<uint8_t> container, int dimO, int dimI, bool useFP32Output);
     virtual ~VulkanSGFP4Dequant();
     virtual ErrorCode onEncode(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                const VulkanCommandPool::Buffer* cmdBuffer) override;
@@ -37,7 +38,8 @@ private:
     std::vector<uint8_t> mContainer; // kept alive alongside the upload for host reference
     bool mUseFP32Output;
     uint32_t mContainerBytes;
-    uint32_t mOutElementCount;
+    int mDimO;
+    int mDimI;
 };
 
 } // namespace MNN

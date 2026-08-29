@@ -31,6 +31,12 @@ public:
 private:
     const Op* mOp = nullptr;
     std::vector<uint8_t> mContainer;
+    // Padded-crop dispatch state (Plan 09-02): dims come from
+    // param->dims(); padded dims derive as ceil(dim/64)*64. Non-64-aligned
+    // shapes decode through dequant_sgfp4_container_cpu_crop.
+    int mPaddedDimO = 0;
+    int mPaddedDimI = 0;
+    bool mIsPadded = false;
 };
 
 } // namespace MNN
