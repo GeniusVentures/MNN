@@ -288,32 +288,37 @@ inline uint32_t pack_leaf_header(uint16_t sBits, uint16_t bBits, int mode) {
 | A4 | `half_float::half` and Python `struct.pack('<e', v)`/`np.float16` produce identical IEEE-754 binary16 bit patterns (both round-to-nearest-even) | Pitfall 4 / Code Examples | LOW-MEDIUM — same IEEE format; confirm via a dedicated parity selftest (tie/denormal values) |
 | A5 | FULL_4X4 (layout enum 5) is reachable by the adaptive path when all 256 leaves are 4×4, contradicting D-01's "never emits FULL_4X4" | Architecture / Open Questions Q4 | MEDIUM — if the C++ classifier omits FULL_4X4, its output diverges from Python on all-split superblocks (decode-equivalent, byte-divergent) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Finding F1 — decoder element-count contract vs D-06 zero-padding (BLOCKING).**
    - What we know: `dequant_sgfp4_container_cpu` requires `outCursor == outElementCount` exactly, rejecting mid-way when `outCursor >= outElementCount` or a leaf's `elementCount > outElementCount - outCursor`. Both `CPUSGFP4Dequant` (`onResize` buffer-mode + `onExecute`) and `VulkanSGFP4Dequant` (creator pre-validation + shader `idx >= outElementCount` guard) pass `outElementCount = outputs[0]->elementSize() = dimO*dimI` (from `ShapeSGFP4Dequant` reading `param->dims`). Zero-padding 100×36 → 128×64 decodes to 8192 elements vs 3600 expected → **decode FAILS**.
    - What's unclear: how D-06 (pad to 64) and D-07 (keep `dims={dimO,dimI}`, crop row-major) can both hold without a decoder change, given the phase boundary lists "any changes to the decoders" as excluded.
    - Recommendation: treat padded-decode support as an explicit, scoped plan item (D-08's own wording implies Phase 9 owns it). Minimal design: the encoder records `paddedDimI = ceil(dimI/64)*64` (or `paddedDims`), and the decoder gains a padded-crop path — decode full padded plane to scratch, then `out[r*dimI+c] = padded[r*paddedCols+c]`. Flag the boundary contradiction to the user during planning; do NOT silently implement a decoder change or silently descope SGV2-25.
+   - **RESOLVED (D-11a):** Phase 9 scope expanded to include the padded-crop decode path. The encoder records true `{dimO, dimI}` in the container; decoders derive `paddedDimI = ((dimI + 63) / 64) * 64` from true dims and crop output via row-stride (D-07). Implemented in Plans 09-01 (encoder zero-pads, records true dims) and 09-02 (decoder crop extension).
 
 2. **Where does the padded column stride live?**
    - What we know: the container's `B` (record count) does not encode the 2D grid (tilesY×tilesX), so a consumer cannot derive the row stride from the container alone. The op param carries only true `dims = {dimO, dimI}` today.
    - What's unclear: whether to extend `SGFP4DequantParam` (schema + flatc regen, Phase 8 precedent exists) or derive it another way.
    - Recommendation: extend the param with optional padded dims (default = `dims`, preserving aligned-shape behavior). Schema regen follows the Phase 8 flow (`schema/generate.ps1`).
+   - **RESOLVED (D-11a):** The padded column stride is derived from true `dimI` at decode time: `paddedDimI = ((dimI + 63) / 64) * 64`. No schema extension is needed — decoders derive it from the existing `dims = {dimO, dimI}` param, preserving all aligned-shape behavior unchanged.
 
 3. **CMake wiring for tests (research question #7).**
    - What we know: `tools/fp4/CMakeLists.txt` globs `*.cpp *.hpp` into `sgfp4_inject.out` (compiles once); `test/CMakeLists.txt` globs `test/**/*.cpp` into `run_test.out` and links only `${MNN_DEPS}`. `MNN_BUILD_SGFP4_TOOLS` (default OFF) and `MNN_BUILD_TEST` are independent options; the current `.build` cache enables both ON.
    - What's unclear: how `run_test.out` links `sgfp4_encode.cpp` (a `tools/fp4` file) without violating D-09's "compiles once into the tools lib."
    - Recommendation: add `add_library(sgfp4_encode STATIC sgfp4_encode.cpp)` in a CMakeLists reachable from both `test/CMakeLists.txt` and `tools/fp4/CMakeLists.txt` (e.g., define it under `MNN_BUILD_TEST OR MNN_BUILD_SGFP4_TOOLS`), narrow the tools glob to exclude `sgfp4_encode.cpp`, and link `sgfp4_encode` into both `run_test.out` and `sgfp4_inject.out`.
+   - **RESOLVED (Plan 09-01 Task 2):** `add_library(sgfp4_encode STATIC)` defined in `tools/fp4/CMakeLists.txt`; glob replaced with explicit source list; `test/CMakeLists.txt` links via `if(TARGET sgfp4_encode)` guard. `sgfp4_inject.out` does NOT link `sgfp4_encode` — inject reads pre-made containers and never calls the encoder (CONTEXT.md Excludes: "any changes to sgfp4_inject").
 
 4. **FULL_4X4 reachability vs D-01.**
    - What we know: `_classify_layout` returns `Layout.FULL_4X4` (enum 5) when all leaves are 4×4 (STATE.md Phase 2: "full ramp amp 60 = all-split → FULL_4X4 collapse"). D-01 asserts FULL_4X4 is "never emitted."
    - What's unclear: whether to mirror `_classify_layout` exactly (emit enum 5 on all-split) or map to LAYOUT_MIXED per D-01's literal wording.
    - Recommendation: mirror `_classify_layout` exactly (trivial cost; decoder already supports enum 5). Both are decode-equivalent under D-04, but exact mirroring removes a byte-divergence class for free.
+   - **RESOLVED (D-11b):** `_classify_layout` mirrored exactly — `kSGFP4LayoutFull4x4` (enum 5) emitted when all leaves are 4×4. Implemented in Plan 09-01 Task 1 `classifyLayout`; verified in Plan 09-04 Task 2 `testFull4x4Layout` using a ±5.0f checkerboard input (MNNTEST_ASSERT).
 
 5. **Fixture shape coverage beyond D-05.**
    - What we know: D-05 names 100×36, 250×128, tiny <64. Discretion allows one-dim-aligned, tiny, and hand-built edge cases.
    - What's unclear: the exact final list.
    - Recommendation: cover {100×36, 250×128, 37×91 (both non-aligned), 64×36 (one-dim-aligned), 5×5 (single partial superblock), 1×1}. Add hand-built zero/constant/tie-value cases for the rounding pitfalls.
+   - **RESOLVED (Plan 09-03):** Shape list: {100×36, 250×128, 37×91, 64×36, 5×5, 1×1, 128×64}. The 128×64 fully-aligned shape was added during checker revision to provide a non-vacuous aligned-fixture leg for Plan 09-05 Task 1. Edge cases (all-zero, NaN/Inf, rounding-tie) are covered in Plan 09-04 Task 2.
 
 ## Environment Availability
 
