@@ -41,6 +41,10 @@ Excludes: v1 fixed-payload format, FULL_4X4 and other layouts the adaptive path 
 - **D-09 (tools/fp4, converter links later):** Build placement is `tools/fp4/` under the existing `MNN_BUILD_SGFP4_TOOLS` CMake structure (single lib home both `sgfp4_inject` and — in Phase 11 — the converter target depend on). No shared-lib target under `source/` and no header-only-only compromise; `.hpp` + `.cpp` pair compiles once into the tools lib.
 - **D-10 (one-shot encode API):** Public API is a single encode function: raw FP32 weights + `{dimO, dimI}` in → container bytes (`std::vector<uint8_t>`) out. Layout/thresholds/mode are fixed at v2-adaptive defaults — no config knobs. If Phase 10's parameter-revision work requires them, the API grows a config struct THEN, not speculatively now.
 
+### Plan-time resolutions (2026-08-28, post-research user rulings)
+- **D-11a (scoped padded-crop decode path — resolves Research Finding F1):** The phase boundary is amended to permit a minimal, scoped decode-path extension for padded planes: CPU oracle (`dequant_sgfp4_container_cpu`), Vulkan Execution, and shape handling accept a decode plane larger than the output element count, writing `out[r*dimI + c] = padded[r*paddedDimI + c]` (true row-major crop — never a flat prefix). The encoder records true `{dimO, dimI}` per D-06; decode math is otherwise unchanged. This overrides the blanket "no decoder changes" exclusion in `<domain>` for this specific crop path only.
+- **D-11b (FULL_4X4 included — resolves Research Q4):** D-01's v2-core layout scope expands to include `LAYOUT_FULL_4X4` (enum 5), because the adaptive path CAN emit it (all-4×4 collapse). The C++ port mirrors `_classify_layout` exactly; explicit golden coverage of the collapse case is at planner's discretion per the existing Discretion entry.
+
 ### Claude's Discretion
 - Exact function/file naming within the `sgfp4_*` conventions (`sgfp4_encode.hpp` suggested but not locked).
 - Internal structure of the encoder (quadtree builder class vs. free functions; MSE accumulation details short of the D-04 parity bar).
