@@ -86,12 +86,26 @@ Plans:
 
 ### Phase 9: Real-Weight C++ Encoder Port
 
-**Goal**: Port the Python quadtree/dual-mode encoder to C++, operating on real (non-64-aligned) weight tensor shapes. **Plan-time re-evaluation (handoff 2026-08-26):** must be re-evaluated against direct consumption of gnus-poc `fp4_exporter.py --adaptive` output (as the injection tool does); the C++ port may still be justified for self-contained single-command UX — a plan-time decision, not locked.
+**Goal**: Port the Python quadtree/dual-mode SGFP4 v2 encoder (`fp4_exporter.py --adaptive`) to C++ as `tools/fp4/sgfp4_encode.hpp/.cpp`, operating on real (non-64-aligned) weight shapes; extend CPU and Vulkan decoders with a minimal padded-crop path (D-11a); verify decode-parity (rtol 1e-4) against Python goldens on both CPU oracle and Vulkan Execution; ship deterministic real-shape golden fixtures (D-05).
 **Depends on**: Phase 8
 **Requirements**: SGV2-24, SGV2-25
-**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
 
-**Plans**: 0/TBD
+**Plans**: 5 plans
+
+Plans:
+**Wave 1** *(independent — run in parallel)*
+
+- [ ] 09-01-PLAN.md — Encoder core `sgfp4_encode.hpp/.cpp` + CMake `sgfp4_encode` STATIC lib (SGV2-24, SGV2-25)
+- [ ] 09-02-PLAN.md — Padded-crop decode path: CPU oracle new overload, `CPUSGFP4Dequant` dispatch, Vulkan Execution + GLSL shader + mandatory regen (SGV2-25)
+
+**Wave 2** *(blocked on 09-01)*
+
+- [ ] 09-03-PLAN.md — Golden fixture generator `author_real_shape_fixture.py` + committed `SGFP4RealShapeFixtures.h` (SGV2-24, SGV2-25)
+
+**Wave 3** *(blocked on 09-01, 09-02, 09-03 — run in parallel)*
+
+- [ ] 09-04-PLAN.md — CPU encode-parity + edge-case tests `SGFP4EncodeTest.cpp` "op/sgfp4/encode" (SGV2-24, SGV2-25)
+- [ ] 09-05-PLAN.md — Vulkan encode-parity tests `SGFP4VulkanEncodeParityTest.cpp` "op/sgfp4/vulkan_encode_parity" (SGV2-24, SGV2-25)
 
 ### Phase 10: Real-Weight Validation Against Actual Model Statistics
 
