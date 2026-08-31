@@ -4,11 +4,11 @@ milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
 current_phase: 9
 current_phase_name: Real-Weight C++ Encoder Port
-status: executing
-stopped_at: Phase 9 context gathered
-last_updated: "2026-08-29T03:24:57.876Z"
-last_activity: 2026-08-28
-last_activity_desc: Phase 08 complete, transitioned to Phase 9
+status: phase-complete
+stopped_at: Phase 9 executed (all 5 plans, 13/13 suites green); ready for verify/transition
+last_updated: "2026-08-31T00:00:00.000Z"
+last_activity: 2026-08-31
+last_activity_desc: Phase 09 complete (encode/parity suites green, encoder byte-exact vs gnus-poc)
 progress:
   total_phases: 5
   completed_phases: 1
@@ -29,10 +29,10 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 9 — Real-Weight C++ Encoder Port
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-08-28 — Phase 08 complete, transitioned to Phase 9
+Phase: 9 — Real-Weight C++ Encoder Port — EXECUTED (all plans)
+Plan: 09-01..09-05 complete (commits 510fad98, 89a903e8, f67f9631, ff822e7c; summaries written)
+Status: Awaiting `/gsd-verify-work 9` / phase-close
+Last activity: 2026-08-31 — Phase 9 execution complete
 
 ## Progress
 
@@ -112,6 +112,10 @@ Progress: [██████████] 100%
 - [Phase 01]: Fixed CPUSGFP4Dequant's broken T-01-04 DoS bound: FileLoader::size() is only populated by the whole-file read(), not the offset+size read this op uses; replaced with a direct std::ifstream file-size probe
 - [Phase 04 P02]: Kept SGFP4VulkanDequantTest class name and op/sgfp4/vulkan_uniform_parity registration string unchanged after removing the LAYOUT_MIXED skip, per CONTEXT.md Claude's-Discretion, avoiding churn to docs/scripts referencing that exact suite string
 - [Phase 04 P02]: Full-suite FP4ModelTest.cpp temp-stub workaround was attempted but blocked by the sandbox classifier while building with a locally-modified out-of-scope file; fell back to the plan's actual required filtered-suite verification (op/sgfp4/, op/fp4, op/vulkan/fp4_dequant_correctness), which had already passed
+
+- [Phase 09]: Decode convention is SPATIAL (plane), not leaf-major stream — the legacy CPU oracle / Vulkan shader appended records linearly, which only equals the padded plane for one-superblock-wide grids; multi-column grids (tiles_x >= 2, e.g. 250x128) exposed it vs the normative gnus-poc decode_v2. Fixed additively via dequant_sgfp4_container_cpu_plane + shader locateElement spatial mapping (ff822e7c)
+- [Phase 09]: half.hpp FP16 conversion in multi-TU MSVC binaries: half(float)/half_cast defaults are inline and get COMDAT-folded with truncating (-1) instantizations from other TUs — HALF_ROUND_STYLE macros compiled per-TU are silently discarded at link time. Use half_cast<half, std::round_to_nearest>(v) (distinct template) for RNE (matches struct.pack('<e'))
+- [Phase 09]: Express test helpers must copy VARP data out before the Var dies — returning readMap<float>() from a function whose outputs vector goes out of scope yields 0xdddddddd canary reads from recycled allocator-pool memory
 
 ## Operator Next Steps
 
