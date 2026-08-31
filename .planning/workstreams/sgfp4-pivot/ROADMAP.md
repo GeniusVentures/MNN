@@ -119,10 +119,11 @@ Plans:
 3. **C++ encode-parity sampled (D-11):** the shipped C++ encoder verified via `sgfp4_encode_dump.out` (`MNN_BUILD_SGFP4_TOOLS`, mirroring `sgfp4_inject.out` pattern) on sampled real layers — both non-64-aligned tensors, the largest aligned plane, one aligned conv kernel, ≥2 light-tier tensors — byte-exact vs `fp4_exporter.py --adaptive` (rtol 1e-4 decode-vs-decode as recorded fallback), decode-error stats matching the Python reference within rtol 1e-4.
 4. **Config struct shipped (D-08/D-09):** `sgfp4_encode.hpp` grows `EncodeConfig` (thresholds only, per D-10) with Python-identical defaults and a config-carrying overload; the knob-less one-shot overload unchanged; all 13 existing sgfp4 suites green WITHOUT test modification (compatibility proof); any threshold divergence rendered as a D-09 documented-delta block (gnus-poc proposal, no cross-repo changes) — or an explicit "no data-justified revision" statement.
 
-**Plans**: 3
+**Plans**: 1/3 plans executed
 
 Plans:
-- [ ] 10-01-PLAN.md — Validation driver `validate_real_weights.py`: corpus extraction, statistics sweep, D-07 all-layer gate, report + sidecar (SGV2-26)
+
+- [x] 10-01-PLAN.md — Validation driver `validate_real_weights.py`: corpus extraction, statistics sweep, D-07 all-layer gate, report + sidecar (SGV2-26)
 - [ ] 10-02-PLAN.md — C++ parity harness `sgfp4_encode_dump.out` under `MNN_BUILD_SGFP4_TOOLS` + standalone byte-exactness smoke (SGV2-27)
 - [ ] 10-03-PLAN.md — `EncodeConfig` struct + parity-sampling integration + data-driven threshold delta loop + final report (SGV2-26, SGV2-27)
 
@@ -161,6 +162,6 @@ Plans:
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 3/3 | Complete    | 2026-08-28 |
 | 8. Schema + Sidecar Wiring | v3.0 | 6/6 | Complete    | 2026-08-28 |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
-| 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 0/TBD | Not started | - |
+| 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 1/3 | In Progress|  |
 | 11. Graph-Rewrite PostConverter Pass + CLI Flag | v3.0 | 0/TBD | Not started | - |
 | 12. End-to-End Validation | v3.0 | 0/TBD | Not started | - |
