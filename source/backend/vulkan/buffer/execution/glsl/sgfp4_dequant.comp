@@ -188,113 +188,128 @@ bool locateMixedLeaf(uint recStart, uint local, out uint leafOrdinal, out uint l
 // --- Framing walk (per-thread re-walk, D-04) ---
 
 // Locate the source payload word + intra-word lane and leaf header for
-// flat output element `idx`, across both uniform (0/1/2/3/5) and
-// LAYOUT_MIXED (4) records. Returns false when the element does not decode
-// against this container's geometry (host pre-validation guarantees
-// well-formed containers; this stays defensive for enum >= 6).
+// padded-plane element `idx` (= row * paddedDimI + col, the padded row-
+// major plane, matching the spatial decode convention of the CPU
+// dequant_sgfp4_container_cpu_plane / gnus-poc decode_v2). The element's
+// superblock is derived SPATIALLY: sbCol = col/64, sbRow = row/64, record
+// b = sbRow * tilesX + sbCol -- NOT the leaf-major stream order (which
+// only coincides with the plane for one-superblock-wide grids; Plan 09-04
+// deviation fix, diagnosed via the 128x64 fixture).
+// Returns false when the element does not decode against this container's
+// geometry (host pre-validation guarantees well-formed containers; this
+// stays defensive for enum >= 6).
 bool locateElement(uint idx, out uint payloadWordByte, out uint inWordLane,
                    out uint laneBitWidth, out float S, out float bias) {
     uint B = read_u32_le(kRecordCountOffset);
     uint offsetTableEnd = kOffsetTableStart + 4u * B;
     uint regionStart = (offsetTableEnd + kAlign16 - 1u) & ~(kAlign16 - 1u);
 
-    uint base = 0u; // output elements already consumed by earlier records
-    for (uint b = 0u; b < B; ++b) {
-        uint recStart = regionStart + read_u32_le(kOffsetTableStart + 4u * b);
-        uint layoutEnum = read_u32_le(recStart) & kLayoutEnumMask;
-
-        // Table 3 uniform geometry: layout enum -> { leaf count N, leaf edge n }.
-        uint N;
-        uint n;
-        if (layoutEnum == 0u) {
-            N = 1u; n = 64u;
-        } else if (layoutEnum == 1u) {
-            N = 4u; n = 32u;
-        } else if (layoutEnum == 2u) {
-            N = 16u; n = 16u;
-        } else if (layoutEnum == 3u) {
-            N = 64u; n = 8u;
-        } else if (layoutEnum == 5u) {
-            N = 256u; n = 4u;
-        } else if (layoutEnum == 4u) {
-            // LAYOUT_MIXED: fully self-contained here (no fixed per-leaf n,
-            // so it cannot fall through to the shared uniform tail below).
-            // A MIXED record always fully tiles the 64x64 macroblock.
-            uint recordElems = kMacroblockElems;
-            if (idx < base + recordElems) {
-                uint local = idx - base;
-                uint leaf;
-                uint leafN;
-                uint inLeaf;
-                uint mixedBlockHeadersStart;
-                uint payloadCursor;
-                locateMixedLeaf(recStart, local, leaf, leafN, inLeaf, mixedBlockHeadersStart, payloadCursor);
-
-                uint headerWord = read_u32_le(mixedBlockHeadersStart + 4u * leaf);
-                uint mode;
-                unpackLeafHeader(headerWord, S, bias, mode);
-
-                if (mode == 0u) {
-                    payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
-                    inWordLane = inLeaf % kNibblesPerWord;
-                    laneBitWidth = 4u;
-                } else {
-                    payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
-                    inWordLane = inLeaf % kSymbolsPerWord;
-                    laneBitWidth = 2u;
-                }
-                return true;
-            }
-            base += recordElems;
-            continue;
-        } else {
-            // enum >= 6 is invalid; host pre-validation rejects it before
-            // dispatch.
-            return false;
-        }
-
-        uint recordElems = N * n * n;
-        if (idx < base + recordElems) {
-            uint local = idx - base;
-            uint leaf = local / (n * n);
-
-            // Block headers follow sb_header; payloads follow, 16-byte aligned.
-            uint blockHeadersStart = recStart + 4u;
-            uint payloadsStart = (blockHeadersStart + 4u * N + kAlign16 - 1u) & ~(kAlign16 - 1u);
-
-            uint headerWord = read_u32_le(blockHeadersStart + 4u * leaf);
-            uint mode;
-            unpackLeafHeader(headerWord, S, bias, mode);
-
-            // Walk the payload cursor sequentially to this leaf (D-04 leaf
-            // stream): every leaf's payload is padded to a 16-byte multiple.
-            uint payloadCursor = payloadsStart;
-            for (uint l = 0u; l < leaf; ++l) {
-                uint prevHeader = read_u32_le(blockHeadersStart + 4u * l);
-                float prevS, prevBias;
-                uint prevMode;
-                unpackLeafHeader(prevHeader, prevS, prevBias, prevMode);
-                uint elems = n * n;
-                uint words = (prevMode == 0u) ? (elems / kNibblesPerWord) : (elems / kSymbolsPerWord);
-                payloadCursor += (4u * words + kAlign16 - 1u) & ~(kAlign16 - 1u);
-            }
-
-            uint inLeaf = local % (n * n);
-            uint elems2 = n * n;
-            if (mode == 0u) {
-                payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
-                inWordLane = inLeaf % kNibblesPerWord;
-                laneBitWidth = 4u;
-            } else {
-                payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
-                inWordLane = inLeaf % kSymbolsPerWord;
-                laneBitWidth = 2u;
-            }
-            return true;
-        }
-        base += recordElems;
+    if (uConst.paddedDimI == 0u || B == 0u) {
+        return false;
     }
-    return false;
+    uint tilesX = uConst.paddedDimI / 64u;
+    if (tilesX == 0u || B % tilesX != 0u) {
+        return false;
+    }
+    uint row  = idx / uConst.paddedDimI;
+    uint col  = idx % uConst.paddedDimI;
+    uint sbRow = row / 64u;
+    uint sbCol = col / 64u;
+    uint b = sbRow * tilesX + sbCol;
+    if (b >= B) {
+        return false;
+    }
+
+    // Within-superblock coordinates (0..63 each).
+    uint localRow = row % 64u;
+    uint localCol = col % 64u;
+
+    uint recStart = regionStart + read_u32_le(kOffsetTableStart + 4u * b);
+    uint layoutEnum = read_u32_le(recStart) & kLayoutEnumMask;
+
+    // Table 3 uniform geometry: layout enum -> { leaf count N, leaf edge n }.
+    uint N;
+    uint n;
+    if (layoutEnum == 0u) {
+        N = 1u; n = 64u;
+    } else if (layoutEnum == 1u) {
+        N = 4u; n = 32u;
+    } else if (layoutEnum == 2u) {
+        N = 16u; n = 16u;
+    } else if (layoutEnum == 3u) {
+        N = 64u; n = 8u;
+    } else if (layoutEnum == 5u) {
+        N = 256u; n = 4u;
+    } else if (layoutEnum == 4u) {
+        // LAYOUT_MIXED: the quadtree walk consumes the within-record flat
+        // (row-major) index directly -- leaves tile the 64x64 macroblock.
+        uint local = localRow * 64u + localCol;
+        uint leaf;
+        uint leafN;
+        uint inLeaf;
+        uint mixedBlockHeadersStart;
+        uint payloadCursor;
+        locateMixedLeaf(recStart, local, leaf, leafN, inLeaf, mixedBlockHeadersStart, payloadCursor);
+
+        uint headerWord = read_u32_le(mixedBlockHeadersStart + 4u * leaf);
+        uint mode;
+        unpackLeafHeader(headerWord, S, bias, mode);
+
+        if (mode == 0u) {
+            payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
+            inWordLane = inLeaf % kNibblesPerWord;
+            laneBitWidth = 4u;
+        } else {
+            payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
+            inWordLane = inLeaf % kSymbolsPerWord;
+            laneBitWidth = 2u;
+        }
+        return true;
+    } else {
+        // enum >= 6 is invalid; host pre-validation rejects it before
+        // dispatch.
+        return false;
+    }
+
+    // Uniform layout: leaf = raster tile index within the superblock;
+    // within-leaf flat index = (rowInTile * n + colInTile), row-major.
+    uint perRow = 64u / n;
+    uint tileRow = localRow / n;
+    uint tileCol = localCol / n;
+    uint leaf = tileRow * perRow + tileCol;
+    uint inLeaf = (localRow % n) * n + (localCol % n);
+
+    // Block headers follow sb_header; payloads follow, 16-byte aligned.
+    uint blockHeadersStart = recStart + 4u;
+    uint payloadsStart = (blockHeadersStart + 4u * N + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+    uint headerWord = read_u32_le(blockHeadersStart + 4u * leaf);
+    uint mode;
+    unpackLeafHeader(headerWord, S, bias, mode);
+
+    // Walk the payload cursor sequentially to this leaf (D-04 leaf
+    // stream): every leaf's payload is padded to a 16-byte multiple.
+    uint payloadCursor = payloadsStart;
+    for (uint l = 0u; l < leaf; ++l) {
+        uint prevHeader = read_u32_le(blockHeadersStart + 4u * l);
+        float prevS, prevBias;
+        uint prevMode;
+        unpackLeafHeader(prevHeader, prevS, prevBias, prevMode);
+        uint elems = n * n;
+        uint words = (prevMode == 0u) ? (elems / kNibblesPerWord) : (elems / kSymbolsPerWord);
+        payloadCursor += (4u * words + kAlign16 - 1u) & ~(kAlign16 - 1u);
+    }
+
+    if (mode == 0u) {
+        payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
+        inWordLane = inLeaf % kNibblesPerWord;
+        laneBitWidth = 4u;
+    } else {
+        payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
+        inWordLane = inLeaf % kSymbolsPerWord;
+        laneBitWidth = 2u;
+    }
+    return true;
 }
 
 void main() {

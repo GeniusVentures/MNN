@@ -25,6 +25,18 @@
 // the 0.8 improvement factor is dead code upstream and intentionally absent.
 //
 
+// The gnus-poc exporter's FP16 conversion (struct.pack('<e')) rounds to
+// nearest-even. half.hpp defaults to truncation (HALF_ROUND_STYLE=-1),
+// which diverges by 1 ulp on values past the FP16 midpoint (diagnosed via
+// SB1 of the 100x36 fixture: scale 0.1712248863 packs to 0x317b in Python
+// vs 0x317a truncated). These MUST precede EVERY include chain that pulls
+// in half.hpp (sgfp4_encode.hpp -> SGFP4DequantUtils.hpp -> half.hpp).
+#ifndef HALF_ROUND_STYLE
+#define HALF_ROUND_STYLE 1
+#endif
+#ifndef HALF_ROUND_TIES_TO_EVEN
+#define HALF_ROUND_TIES_TO_EVEN 1
+#endif
 #include "sgfp4_encode.hpp"
 
 #include <algorithm>
@@ -73,7 +85,18 @@ double rintHalfToEven(double v) {
 }
 
 uint16_t floatToHalfBits(float v) {
-    half_float::half h(v);
+    // Explicit round-to-nearest template argument (NOT the constructor, and
+    // NOT a bare half_cast without R): half.hpp is header-only, so the plain
+    // constructor / default half_cast are inline functions whose rounding
+    // is baked from HALF_ROUND_STYLE per TU. In a multi-TU binary the MSVC
+    // linker COMDAT-folds those inline copies and can keep the truncating
+    // (-1) instantiation from any other TU that includes half.hpp --
+    // an ODR violation that silently disables the macros defined above.
+    // Passing std::round_to_nearest as an explicit template argument
+    // instantiates a DISTINCT template (float2half<round_to_nearest>),
+    // which cannot fold with the truncating copies.
+    half_float::half h =
+        half_float::half_cast<half_float::half, std::round_to_nearest>(v);
     uint16_t bits = 0;
     std::memcpy(&bits, &h, sizeof(bits));
     return bits;
@@ -371,7 +394,8 @@ std::vector<uint8_t> packNibbles(const std::vector<int8_t>& codes, int mode) {
         int shift = bitWidth * (i % perWord);
         words[static_cast<size_t>(word)] |= (sym << static_cast<uint32_t>(shift));
     }
-    std::vector<uint8_t> out(static_cast<size_t>(wordCount) * 4, 0);
+    std::vector<uint8_t> out;
+    out.reserve(static_cast<size_t>(wordCount) * 4);
     for (int w = 0; w < wordCount; ++w) {
         appendU32Le(out, words[static_cast<size_t>(w)]);
     }

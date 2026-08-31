@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <vector>
 #include "half.hpp"
 
 namespace MNN {
@@ -471,6 +472,177 @@ inline bool dequant_sgfp4_container_cpu(const uint8_t* container, size_t contain
 }
 
 /**
+ * @brief Spatial padded-plane decode (Plan 09-04 deviation fix).
+ *
+ * The legacy dequant_sgfp4_container_cpu appends records as a leaf-major
+ * linear STREAM (record 0 fills [0,4096), record 1 fills [4096,8192), ...)
+ * which equals the padded row-major plane ONLY for one-superblock-wide
+ * grids (tiles_x == 1). The normative gnus-poc reference decoder
+ * (sgfp4_decoder.decode_v2) reconstructs the padded plane SPATIALLY:
+ * record b = (block_y, block_x) tiles land at rows block_y*64..+64, cols
+ * block_x*64..+64 -- the only convention that round-trips real weight
+ * planes wider than 64. Diagnosed via the 250x128 fixture (first tiles_x=2
+ * case): Python expected[-0.499939] vs stream compute at element 64.
+ *
+ * This function decodes into `outPlane` (paddedDimI-strided row-major,
+ * paddedDimO*paddedDimI floats) using the spatial convention.
+ *
+ * @return true on success; false on malformed input or geometry mismatch.
+ */
+inline bool dequant_sgfp4_container_cpu_plane(const uint8_t* container, size_t containerSize, float* outPlane,
+                                              size_t paddedCount, int paddedDimI) {
+    if (container == nullptr || outPlane == nullptr || paddedDimI <= 0 || paddedDimI % 64 != 0) {
+        return false;
+    }
+    if (paddedCount == 0 || paddedCount % static_cast<size_t>(paddedDimI) != 0) {
+        return false;
+    }
+    if (containerSize < kSGFP4FixedHeaderSize) {
+        return false;
+    }
+    uint32_t magic = sgfp4_read_u32_le(container);
+    if (magic != kSGFP4Magic) {
+        return false;
+    }
+    if (container[kSGFP4VersionByteOffset] != kSGFP4Version) {
+        return false;
+    }
+    if (kSGFP4RecordCountOffset + 4 > containerSize) {
+        return false;
+    }
+    uint32_t B = sgfp4_read_u32_le(container + kSGFP4RecordCountOffset);
+
+    size_t offsetTableBytes = static_cast<size_t>(B) * kSGFP4RecordOffsetEntrySize;
+    if (offsetTableBytes / kSGFP4RecordOffsetEntrySize != static_cast<size_t>(B)) {
+        return false;
+    }
+    if (kSGFP4RecordOffsetTableStart > containerSize ||
+        offsetTableBytes > containerSize - kSGFP4RecordOffsetTableStart) {
+        return false;
+    }
+    size_t regionStart = sgfp4_align16(kSGFP4RecordOffsetTableStart + offsetTableBytes);
+    if (regionStart > containerSize) {
+        return false;
+    }
+
+    const int tilesX  = paddedDimI / 64;
+    const size_t rows = paddedCount / static_cast<size_t>(paddedDimI);
+    if (rows == 0 || rows % 64 != 0) {
+        return false;
+    }
+    const int tilesY = static_cast<int>(rows / 64);
+    if (static_cast<size_t>(tilesY) * tilesX != static_cast<size_t>(B)) {
+        return false; // geometry must tile the padded plane exactly
+    }
+
+    for (uint32_t b = 0; b < B; ++b) {
+        const int br = static_cast<int>(b) / tilesX;
+        const int bc = static_cast<int>(b) % tilesX;
+
+        size_t offEntry = kSGFP4RecordOffsetTableStart + static_cast<size_t>(b) * kSGFP4RecordOffsetEntrySize;
+        if (offEntry + 4 > containerSize) {
+            return false;
+        }
+        uint32_t recOffRel = sgfp4_read_u32_le(container + offEntry);
+        if (recOffRel > containerSize - regionStart) {
+            return false;
+        }
+        size_t recStart = regionStart + recOffRel;
+        if (recStart + 4 > containerSize) {
+            return false;
+        }
+
+        uint32_t sbHeader   = sgfp4_read_u32_le(container + recStart);
+        uint32_t layoutEnum = sbHeader & kSGFP4LayoutEnumMask;
+        int leafCount = 0;
+        int leafEdge  = 0;
+        QuadNode leaves[256];
+        bool isMixed = (layoutEnum == kSGFP4LayoutMixed);
+        size_t blockHeadersStart = 0;
+        if (isMixed) {
+            if (kSGFP4SplitMapBytes > containerSize - (recStart + 4)) {
+                return false;
+            }
+            const uint32_t* map = reinterpret_cast<const uint32_t*>(container + recStart + 4);
+            if (!sgfp4_walk_quadtree(map, leafCount, leaves, 256)) {
+                return false;
+            }
+            int area = 0;
+            for (int i = 0; i < leafCount; ++i) {
+                area += leaves[i].n * leaves[i].n;
+            }
+            if (area != 64 * 64) {
+                return false;
+            }
+            blockHeadersStart = recStart + 4 + kSGFP4SplitMapBytes;
+        } else {
+            if (!sgfp4_resolve_uniform_layout(layoutEnum, leafCount, leafEdge)) {
+                return false;
+            }
+            blockHeadersStart = recStart + 4;
+        }
+        size_t blockHeadersBytes = static_cast<size_t>(leafCount) * 4;
+        if (blockHeadersBytes > containerSize - blockHeadersStart) {
+            return false;
+        }
+        const uint8_t* blockHeaders = container + blockHeadersStart;
+
+        size_t payloadsStart = sgfp4_align16(blockHeadersStart + blockHeadersBytes);
+        if (payloadsStart > containerSize) {
+            return false;
+        }
+
+        size_t payloadCursor = payloadsStart;
+        for (int leaf = 0; leaf < leafCount; ++leaf) {
+            uint32_t header = sgfp4_read_u32_le(blockHeaders + leaf * 4);
+            float S = 0.0f, bias = 0.0f;
+            int mode = 0;
+            unpack_leaf_header(header, S, bias, mode);
+
+            int n = leafEdge;
+            int leafY = 0;
+            int leafX = 0;
+            if (isMixed) {
+                n     = leaves[leaf].n;
+                leafY = leaves[leaf].y;
+                leafX = leaves[leaf].x;
+            } else {
+                // Uniform leaves are stored raster order: leaf i -> tile
+                // (i/perRow, i%perRow) * n.
+                int perRow = 64 / n;
+                leafY      = (leaf / perRow) * n;
+                leafX      = (leaf % perRow) * n;
+            }
+            int elementCount = n * n;
+            int wordsPerLeaf = (mode == 0) ? (elementCount / kSGFP4NibblesPerWord)
+                                            : (elementCount / kSGFP4SymbolsPerWord);
+            size_t payloadBytes = static_cast<size_t>(wordsPerLeaf) * 4;
+            if (payloadBytes > containerSize - payloadCursor) {
+                return false;
+            }
+
+            // Decode the n x n tile, then spatially place its rows into the
+            // padded plane at (br*64+leafY, bc*64+leafX).
+            float tile[64 * 64];
+            sgfp4_decode_leaf_payload(reinterpret_cast<const uint32_t*>(container + payloadCursor), n, S, bias, mode,
+                                      tile);
+            for (int r = 0; r < n; ++r) {
+                size_t planeRow = static_cast<size_t>(br * 64 + leafY + r);
+                size_t planeCol = static_cast<size_t>(bc * 64 + leafX);
+                if (planeRow >= rows || planeCol + static_cast<size_t>(n) > static_cast<size_t>(paddedDimI)) {
+                    return false;
+                }
+                std::memcpy(outPlane + planeRow * static_cast<size_t>(paddedDimI) + planeCol, tile + r * n,
+                            static_cast<size_t>(n) * sizeof(float));
+            }
+
+            payloadCursor += sgfp4_align16(payloadBytes);
+        }
+    }
+    return true;
+}
+
+/**
  * @brief Padded-plane decode + row-major stride crop (D-11a, Plan 09-02).
  *
  * Containers produced from zero-padded planes (D-06) encode the FULL
@@ -513,7 +685,7 @@ inline bool dequant_sgfp4_container_cpu_crop(const uint8_t* container, size_t co
     }
 
     std::vector<float> scratch(paddedCount, 0.0f);
-    if (!dequant_sgfp4_container_cpu(container, containerSize, scratch.data(), paddedCount)) {
+    if (!dequant_sgfp4_container_cpu_plane(container, containerSize, scratch.data(), paddedCount, paddedDimI)) {
         return false;
     }
 
