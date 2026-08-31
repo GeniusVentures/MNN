@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: 9
-current_phase_name: all plans
-status: phase-complete
-stopped_at: Phase 10 context gathered
-last_updated: "2026-08-31T22:12:50.321Z"
+current_phase: 10
+current_phase_name: real-weight-validation-against-actual-model-statistics
+status: planned
+stopped_at: Phase 10 planned (3 plans, 2 waves) — awaiting execution
+last_updated: "2026-08-31"
 last_activity: 2026-08-31
-last_activity_desc: Phase 9 execution complete
+last_activity_desc: Phase 10 research complete + plans created (10-01..10-03)
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 11
+  total_plans: 14
   completed_plans: 11
-  percent: 40
+  percent: 39
 current_plan: none
 ---
 
@@ -29,10 +29,12 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 9 — Real-Weight C++ Encoder Port — EXECUTED (all plans)
-Plan: 09-01..09-05 complete (commits 510fad98, 89a903e8, f67f9631, ff822e7c; summaries written)
-Status: Awaiting `/gsd-verify-work 9` / phase-close
-Last activity: 2026-08-31 — Phase 9 execution complete
+Phase: 10 — Real-Weight Validation Against Actual Model Statistics — PLANNED
+Plan: none started (10-01..10-03 created; waves 1: 10-01 ∥ 10-02 → 2: 10-03)
+Status: Awaiting `/gsd-execute-phase 10`
+Corpus approved (D-01/D-02): `W:\gnus\models\alexnet_Opset16.onnx` ONLY — 16 FP32 tensors / 61.1M elems, two real non-64-aligned tensors (D-04 synthetic fallback moot)
+Tiny-tensor floor approved (D-03): light tier iff `elements < 4096` OR `dimI == 1`
+Last activity: 2026-08-31 — Phase 10 research + planning complete
 
 ## Progress
 

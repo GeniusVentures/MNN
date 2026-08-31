@@ -112,9 +112,21 @@ Plans:
 **Goal**: Validate/revise encoder parameters against a real model's weight distributions before graph-rewrite integration (synthetic-fixture-tuned assumptions are the top-flagged risk).
 **Depends on**: Phase 9
 **Requirements**: SGV2-26, SGV2-27
-**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+**Success Criteria** (derived at plan time from D-05/D-06/D-07/D-11):
 
-**Plans**: 0/TBD
+1. **All-layer gate green (D-07):** every full-tier weight tensor of the approved corpus (AlexNet ONNX, all 16 FP32 initializers; light tier iff `elements < 4096` OR `dimI == 1` per D-03) meets the effective thresholds' own per-leaf-size targets (worst-leaf plain MSE / relative error vs `max_mse`/`max_relative`) — zero tolerated failing tail; any revision is a documented, data-justified minimal delta re-run green via `--thresholds`.
+2. **Statistics + distribution evidence (D-06):** committed report under `tools/fp4/` (`real_weight_validation_report.md` + `.json` sidecar, D-12) with per-layer shape/projection/tier, kurtosis, outlier share, leaf-size histogram, code-mode mix, pad-overhead rows for non-64-aligned tensors, and corpus provenance (model sha256) — no real weights committed (D-05), no new `test/op/` regression suites.
+3. **C++ encode-parity sampled (D-11):** the shipped C++ encoder verified via `sgfp4_encode_dump.out` (`MNN_BUILD_SGFP4_TOOLS`, mirroring `sgfp4_inject.out` pattern) on sampled real layers — both non-64-aligned tensors, the largest aligned plane, one aligned conv kernel, ≥2 light-tier tensors — byte-exact vs `fp4_exporter.py --adaptive` (rtol 1e-4 decode-vs-decode as recorded fallback), decode-error stats matching the Python reference within rtol 1e-4.
+4. **Config struct shipped (D-08/D-09):** `sgfp4_encode.hpp` grows `EncodeConfig` (thresholds only, per D-10) with Python-identical defaults and a config-carrying overload; the knob-less one-shot overload unchanged; all 13 existing sgfp4 suites green WITHOUT test modification (compatibility proof); any threshold divergence rendered as a D-09 documented-delta block (gnus-poc proposal, no cross-repo changes) — or an explicit "no data-justified revision" statement.
+
+**Plans**: 3
+
+Plans:
+- [ ] 10-01-PLAN.md — Validation driver `validate_real_weights.py`: corpus extraction, statistics sweep, D-07 all-layer gate, report + sidecar (SGV2-26)
+- [ ] 10-02-PLAN.md — C++ parity harness `sgfp4_encode_dump.out` under `MNN_BUILD_SGFP4_TOOLS` + standalone byte-exactness smoke (SGV2-27)
+- [ ] 10-03-PLAN.md — `EncodeConfig` struct + parity-sampling integration + data-driven threshold delta loop + final report (SGV2-26, SGV2-27)
+
+**Wave structure**: 10-01 ∥ 10-02 (Wave 1) → 10-03 (Wave 2)
 
 ### Phase 11: Graph-Rewrite PostConverter Pass + CLI Flag
 
