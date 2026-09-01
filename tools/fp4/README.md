@@ -7,6 +7,14 @@ sidecar where each target weight tensor is produced by an
 `OpType_SGFP4Dequant` node. The resulting artifact loads and runs via the
 classic `Interpreter`/`Session` API.
 
+`sgfp4_encode_dump.out` (Phase 10) is the C++ encode-parity harness: it reads
+a raw little-endian FP32 row-major dump (`dimO*dimI` values) plus dims and
+writes the SGFP4 v2 container via the shipped `sgfp4_encode::encode`. It
+exists so `validate_real_weights.py --encode-dump` can parity-sample the
+shipped C++ encoder itself against gnus-poc `fp4_exporter.py --adaptive` on
+real weights; standalone smoke verified byte-exact containers on aligned and
+non-64-aligned planes. Unlike `sgfp4_inject.out`, it links `sgfp4_encode`.
+
 ## Usage
 
 ```bash
