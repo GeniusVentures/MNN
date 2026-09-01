@@ -750,6 +750,16 @@ std::vector<uint8_t> assembleContainer(const std::vector<std::vector<uint8_t>>& 
 // thresholds come from the caller's EncodeConfig; kDefaultEncodeConfig (the
 // Python-identical DEFAULT_V2_THRESHOLDS values) makes the knob-less
 // overload below a pure forwarder with bit-identical behavior.
+// Python-identical DEFAULT_V2_THRESHOLDS (fp4_exporter.py). The Phase 10
+// real-weight validation derived a data-justified revision (see
+// tools/fp4/real_weight_validation_report.md §Threshold delta), but it is
+// deliberately NOT promoted here: cross-repo default parity outranks the
+// promotion (D-09 — the delta is a gnus-poc-side proposal; adopting it on
+// only one side would make default-vs-default encodes diverge). Consumers
+// wanting the validated table pass it explicitly:
+//   encode(w, dimO, dimI, EncodeConfig{{ {64,0.01,0.384},{32,0.005,0.079},
+//                                       {16,0.002,0.03},{8,0.001,0.015},
+//                                       {4,0.0099,0.03} }});
 const EncodeConfig kDefaultEncodeConfig = {
     EncodeConfig::Gate{64, 0.01, 0.05},
     EncodeConfig::Gate{32, 0.005, 0.03},

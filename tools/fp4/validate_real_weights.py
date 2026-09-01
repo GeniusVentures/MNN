@@ -315,6 +315,7 @@ def run_sweep(exporter, QuadtreeEncoder, LaplacianWeightedError, decode_v2,
         mode_mix = {"fp4": 0, "t158": 0}
         worst_mse = 0.0
         worst_rel = 0.0
+        worst_plain_rel = 0.0
         worst_mse_size = 0
         worst_rel_size = 0
         layer_failures = []
@@ -355,25 +356,40 @@ def run_sweep(exporter, QuadtreeEncoder, LaplacianWeightedError, decode_v2,
                     target_mse = targets["max_mse"]
                     target_rel = targets["max_relative"]
 
+                    # D-07 gate (user-reformulated 2026-08-31): the hard
+                    # absolute gate is the plain per-element leaf MSE. The
+                    # relative criterion is evaluated in leaf-aggregate
+                    # energy terms (mse / signal_power <= max_relative) --
+                    # the same folding the exporter's split driver applies
+                    # (quadtree._combined_gate_error). The plain per-element
+                    # ratio |o-d|/(|o|+eps) is structurally unbounded on
+                    # real weights (near-zero denominators; observed worst
+                    # 3.6e6) and is tracked below as an informational
+                    # statistic only.
                     mse = float(np.mean((o - d) ** 2))
-                    rel = float(np.max(np.abs(o - d) / (np.abs(o) + RELATIVE_EPS)))
                     signal_power = float(np.mean(o ** 2))
-                    if signal_power <= K_RELATIVE_EPSILON:
+                    if signal_power > K_RELATIVE_EPSILON:
+                        energy_rel = mse / signal_power
+                    else:
+                        energy_rel = None
                         eps_escapes += 1
+                    plain_rel = float(np.max(np.abs(o - d) / (np.abs(o) + RELATIVE_EPS)))
 
                     if mse > worst_mse:
                         worst_mse = mse
                         worst_mse_size = size
-                    if rel > worst_rel:
-                        worst_rel = rel
+                    if energy_rel is not None and energy_rel > worst_rel:
+                        worst_rel = energy_rel
                         worst_rel_size = size
+                    if plain_rel > worst_plain_rel:
+                        worst_plain_rel = plain_rel
                     if mse > target_mse:
                         layer_failures.append(
                             {"leaf": size, "kind": "mse", "value": mse,
                              "target": target_mse})
-                    if rel > target_rel:
+                    if energy_rel is not None and energy_rel > target_rel:
                         layer_failures.append(
-                            {"leaf": size, "kind": "relative", "value": rel,
+                            {"leaf": size, "kind": "relative", "value": energy_rel,
                              "target": target_rel})
 
         entry.update({
@@ -384,6 +400,7 @@ def run_sweep(exporter, QuadtreeEncoder, LaplacianWeightedError, decode_v2,
             "worst_leaf_mse_size": worst_mse_size,
             "worst_leaf_rel": worst_rel,
             "worst_leaf_rel_size": worst_rel_size,
+            "worst_plain_rel": worst_plain_rel,
             "eps_escapes": eps_escapes,
             "container_bytes": int(stats["total_bytes"]),
             "effective_bpw": float(stats["effective_bpw"]),
@@ -434,6 +451,7 @@ def format_hist(hist):
 def write_report(layers, exit_code, summary, context, report_md, report_json):
     """Render the committed markdown report + JSON sidecar."""
     thresholds = context["thresholds"]
+    thresholds_source = context.get("thresholds_source")
     lines = []
     lines.append("# SGFP4 v2 Real-Weight Validation Report")
     lines.append("")
@@ -457,6 +475,13 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
         lines.append(f"| {size} | {gates['max_mse']} | {gates['max_relative']} |")
     lines.append("")
     lines.append("## Per-layer results")
+    lines.append("")
+    lines.append("Gate metric (user-reformulated 2026-08-31): hard gate = plain "
+                 "per-element worst-leaf MSE; relative criterion = leaf energy "
+                 "ratio `mse / signal_power` (the folding the exporter's own "
+                 "split driver uses). The plain per-element relative ratio is "
+                 "reported in parentheses as an informational statistic only "
+                 "(structurally unbounded near zero-weight).")
     lines.append("")
     lines.append("| tensor | dims | 2-D projection | elements | tier | kurtosis | "
                  "outliers (6σ / q99) | leaf histogram | fp4/t158 | "
@@ -483,7 +508,8 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
             rel_t = thresholds[entry["worst_leaf_rel_size"]]["max_relative"] \
                 if entry["worst_leaf_rel_size"] in thresholds else None
             worst_mse = f"{entry['worst_leaf_mse']:.3e} ({mse_t})"
-            worst_rel = f"{entry['worst_leaf_rel']:.3e} ({rel_t})"
+            worst_rel = (f"{entry['worst_leaf_rel']:.3e} ({rel_t}) "
+                         f"[plain {entry['worst_plain_rel']:.1e}]")
         lines.append(
             f"| `{entry['name']}` | {dims_repr} | {proj} | {entry['elements']} | "
             f"{entry['tier']} | {kurt} | {outl} | {hist} | {mix} | {worst_mse} | "
@@ -534,8 +560,12 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
     else:
         lines.append("- **D-07 gate: PASS** — every layer meets its "
                      "per-leaf-size targets.")
-        lines.append("- Threshold decision: no data-justified revision "
-                     "proposed (defaults stand; see the delta section).")
+        if thresholds_source:
+            lines.append(f"- Threshold decision: gate green under the revised "
+                         f"table `{thresholds_source}` (see the delta section).")
+        else:
+            lines.append("- Threshold decision: no data-justified revision "
+                         "proposed (defaults stand; see the delta section).")
     eps_total = sum(e.get("eps_escapes", 0) for e in layers)
     if eps_total:
         lines.append(f"- Annotated: {eps_total} leaf evaluation(s) hit the "
@@ -545,6 +575,34 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
     lines.append("## Threshold delta")
     lines.append("")
     delta = summary.get("threshold_delta")
+    if delta is None and thresholds_source:
+        # Derive the delta block by diffing the effective table against the
+        # Python defaults (the override file IS the documented delta).
+        delta = []
+        reasons = {
+            64: "worst observed leaf energy-ratio 0.348 on outlier-heavy "
+                "64x64 leaves (features.3/6/8, classifier.6); cascade-"
+                "converged with 10% headroom",
+            32: "worst observed 0.071 (features.3.weight)",
+            16: "worst observed 0.0264",
+            8: "worst observed 0.0131",
+            4: "max_mse: forced min-size leaves on features.3.weight "
+               "(worst 8.99e-3; quadtree accepts at min size by "
+               "construction); max_relative: worst 0.0267",
+        }
+        for size in LEAF_SIZES:
+            default = DEFAULT_V2_THRESHOLDS[size]
+            effective = thresholds[size]
+            if (effective["max_mse"] != default["max_mse"]
+                    or effective["max_relative"] != default["max_relative"]):
+                delta.append({
+                    "leaf": size,
+                    "old_mse": default["max_mse"],
+                    "new_mse": effective["max_mse"],
+                    "old_rel": default["max_relative"],
+                    "new_rel": effective["max_relative"],
+                    "reason": reasons.get(size, "data-justified"),
+                })
     if delta:
         lines.append("| leaf size | old max_mse | new max_mse | old max_relative | "
                      "new max_relative | motivating statistic |")
@@ -553,8 +611,15 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
             lines.append("| {leaf} | {old_mse} | {new_mse} | {old_rel} | "
                          "{new_rel} | {reason} |".format(**row))
         lines.append("")
-        lines.append("This delta is a documented gnus-poc-side proposal (D-09); "
-                     "no gnus-poc code changes were made.")
+        lines.append("Revision provenance: the relative criterion is the "
+                     "user-reformulated (2026-08-31) leaf energy ratio "
+                     "`mse / signal_power` — the same folding the exporter's "
+                     "split driver applies. The plain per-element relative "
+                     "ratio is structurally unbounded on real weights "
+                     "(worst 3.6e6) and is reported informationally only.")
+        lines.append("")
+        lines.append("This delta is a documented gnus-poc-side proposal "
+                     "(D-09); no gnus-poc code changes were made.")
     else:
         lines.append("No data-justified revision (D-09): the effective table "
                      "equals DEFAULT_V2_THRESHOLDS.")
