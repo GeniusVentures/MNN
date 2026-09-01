@@ -21,11 +21,14 @@ Default output_header_path: test/op/SGFP4RealShapeFixtures.h
 """
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 
-# Locate the gnus-poc repo (override only if your checkout lives elsewhere).
-GNUST_POC_ROOT = Path("W:/gnus/GeniusCognitiveSystem/GNUS-NEO-SWARM/gnus-poc")
+# Locate the gnus-poc repo. W-3 (Phase 11, D-11): root overridable via the
+# SGFP4_GNUS_POC_ROOT env var, falling back to the original hard-coded path
+# (no gnus-poc-side convention exists -- the name is MNN-side).
+GNUST_POC_ROOT = Path(os.environ.get("SGFP4_GNUS_POC_ROOT", "W:/gnus/GeniusCognitiveSystem/GNUS-NEO-SWARM/gnus-poc"))
 sys.path.insert(0, str(GNUST_POC_ROOT))
 
 import numpy as np  # noqa: E402

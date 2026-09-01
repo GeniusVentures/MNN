@@ -34,6 +34,7 @@ import filecmp
 import hashlib
 import json
 import math
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -46,7 +47,9 @@ import numpy as np
 K_ENCODE_REL_TOL = 1e-4
 
 DEFAULT_MODEL = "W:/gnus/models/alexnet_Opset16.onnx"
-DEFAULT_GNUS_POC_ROOT = "W:/gnus/GeniusCognitiveSystem/GNUS-NEO-SWARM/gnus-poc"
+# W-3 (Phase 11, D-11): env-var override with the original hard-coded path
+# as fallback. --gnus-poc-root stays authoritative when passed explicitly.
+DEFAULT_GNUS_POC_ROOT = os.environ.get("SGFP4_GNUS_POC_ROOT", "W:/gnus/GeniusCognitiveSystem/GNUS-NEO-SWARM/gnus-poc")
 
 # D-03 (user-approved) light-tier floor.
 LIGHT_TIER_MAX_ELEMENTS = 4096

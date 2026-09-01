@@ -276,6 +276,24 @@ inline int run(int argc, const char* argv[]) {
     std::string modelPath;
     std::string outputPath;
     std::vector<std::string> nicheDirs;
+
+    // D-11 failure-cleanup: a failed run removes ANY files at outputPath /
+    // sidecarPath, including a stale artifact from a previous successful run
+    // at the same paths -- downstream consumers must never see an artifact
+    // that does not correspond to the inputs of the failed run. After a
+    // failed run, no <output> / <output>.weight remains. Idiom matches the
+    // std::remove used for the .verify_N.mnn temp files below.
+    // W-2 (Phase 11, D-10): hoisted ABOVE the arg-validation returns so
+    // usage()-exit paths also clean up stale artifacts. No-op while
+    // --output is unparsed (empty outputPath guards the removes; the
+    // sidecar path is computed inside, never captured).
+    const auto failCleanup = [&outputPath]() {
+        if (!outputPath.empty()) {
+            std::remove(outputPath.c_str());
+            std::remove((outputPath + ".weight").c_str());
+        }
+    };
+
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--model" && i + 1 < argc) {
@@ -286,25 +304,16 @@ inline int run(int argc, const char* argv[]) {
             outputPath = argv[++i];
         } else {
             usage();
+            failCleanup();
             return 1;
         }
     }
     if (modelPath.empty() || outputPath.empty() || nicheDirs.empty()) {
         usage();
+        failCleanup();
         return 1;
     }
     const std::string sidecarPath = outputPath + ".weight";
-
-    // D-11 failure-cleanup: a failed run removes ANY files at outputPath /
-    // sidecarPath, including a stale artifact from a previous successful run
-    // at the same paths -- downstream consumers must never see an artifact
-    // that does not correspond to the inputs of the failed run. After a
-    // failed run, no <output> / <output>.weight remains. Idiom matches the
-    // std::remove used for the .verify_N.mnn temp files below.
-    const auto failCleanup = [&outputPath, &sidecarPath]() {
-        std::remove(outputPath.c_str());
-        std::remove(sidecarPath.c_str());
-    };
 
     // ---- Per-niche-dir validation --------------------------------------
     std::vector<NicheDir> niches;
