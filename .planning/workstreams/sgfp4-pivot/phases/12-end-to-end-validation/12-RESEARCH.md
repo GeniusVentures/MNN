@@ -293,13 +293,16 @@ Not applicable — no external ecosystem moving parts. All components are repo-i
 
 All other claims were verified by direct code reads (`[VERIFIED: codebase]`) or local probes (`[VERIFIED: local probe]`) this session.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Exit-code propagation scope (Pitfall 5b):** does main propagate `convertModel`'s bool unconditionally (honest, changes exit code of already-failing flag-off conversions 0→1) or only when `useSGFP4` (strictest D-12 reading)?
    - What we know: main currently ignores the bool; D-12 says "zero behavior change for flag-off conversions".
    - Recommendation: strictest D-12 reading (gate on `useSGFP4`) for the phase gate, with the unconditional propagation noted in the plan as an explicit follow-up/decision for the user at checkpoint. Planner should surface this.
+   - **(RESOLVED → 12-01 objective):** strictest D-12 reading locked — `MNNConverter.cpp` main propagates non-zero exit ONLY when `modelPath.useSGFP4` is true and `convertModel` returned false; unconditional propagation recorded as an in-code comment follow-up, not implemented.
 2. **Exact tolerance values (D-02):** locked at plan time from Phase 10 report + a measured baseline-vs-sgfp4 run (Pitfall 9 methodology). Research provides the form and derivation procedure, not the numbers — by design.
+   - **(RESOLVED → 12-02 objective):** measure-then-lock — Task 1 ships `-MeasureOnly`, Task 2 locks `$TolAbs`/`$TolRel` = 2.0x measured worst across BOTH backends (D-06 same gate), with `tools/fp4/real_weight_validation_report.json` cited as form/sanity anchor only; sub-1e-5 measured absolute halts and surfaces.
 3. **Relative-error formula detail:** `max(|b|, eps)` guard vs max-magnitude normalization — planner picks; both satisfy D-01/D-10 (Phase 10 D-07 precedent favors a guarded denominator).
+   - **(RESOLVED → 12-02 objective):** guarded denominator `relErr_i = absErr_i / max(|baseline_i|, 1e-3)` (Phase 10 D-07 precedent); max-abs is the primary gate, relative secondary.
 
 ## Environment Availability
 

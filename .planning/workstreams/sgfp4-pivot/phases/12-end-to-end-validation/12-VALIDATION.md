@@ -1,8 +1,8 @@
 ---
 phase: 12
 slug: end-to-end-validation
-status: draft
-nyquist_compliant: false
+status: planned
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-09-01
 ---
@@ -38,13 +38,12 @@ created: 2026-09-01
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD-at-plan-time | — | — | SGV2-31 | — / — | N/A | e2e (script) | `tools\fp4\<e2e-script>.ps1 -Corpus <alexnet>` (CPU leg PASS) | ❌ W0 | ⬜ pending |
-| TBD-at-plan-time | — | — | SGV2-32 | — / — | N/A | e2e (script) | same script (Vulkan leg PASS + backendType=7 assert) | ❌ W0 | ⬜ pending |
-| TBD-at-plan-time | — | — | D-11 | Tampering (local) | converter exit ≠ 0 on pass failure, no "Converted Success!" | integration | script negative-path leg (forced pass failure → assert exit ≠ 0) | ❌ W0 | ⬜ pending |
-| TBD-at-plan-time | — | — | D-12 | — / — | flag-off conversions byte-identical behavior/exit codes | regression | converter re-run flag-off + `run_test.out op/sgfp4` 13/13 + `TestSGFP4Converter.exe` | ✅ | ⬜ pending |
-| TBD-at-plan-time | — | — | No-regression | — / — | all prior SGFP4 behavior intact | unit/suite | `run_test.out op/sgfp4`; `TestSGFP4Converter.exe` | ✅ | ⬜ pending |
+| 12-01-T1 | 12-01 | 1 | D-11 (library leg) | T-12-01 / T-12-02 | `RunNetPass` returns false on missing pass or `onExecute` false; `optimizeNetImpl` returns nullptr + MNN_ERROR when `useSGFP4` && failed | unit/integration | `cmake --build .build --config Release --target TestSGFP4Converter MNNConvert; if ($LASTEXITCODE -ne 0) { exit 1 }; & .build\Release\TestSGFP4Converter.exe; if ($LASTEXITCODE -ne 0) { exit 1 }; & .build\Release\run_test.out.exe op/sgfp4; if ($LASTEXITCODE -ne 0) { exit 1 }` | ✅ (existing suites) | ⬜ pending |
+| 12-01-T2 | 12-01 | 1 | D-11 (CLI leg) + D-12 | T-12-01 / — | `--sgfp4` + corrupt model → exit ≠ 0, no "Converted Success!"; flag-off exit codes byte-identical (0) | integration | `cmake --build .build --config Release --target MNNConvert; if ($LASTEXITCODE -ne 0) { exit 1 }` then the three MNNConvert invocations (positive `--sgfp4` corpus → $LASTEXITCODE 0; negative `--sgfp4` corrupt → non-zero; flag-off corrupt → 0) per 12-01 Task 2 `<verify>`, plus `run_test.out op/sgfp4` + `TestSGFP4Converter.exe` with $LASTEXITCODE checks | ✅ | ⬜ pending |
+| 12-02-T1 | 12-02 | 2 | SGV2-31 + SGV2-32 (script + measure) | T-12-03 / T-12-05 | vulkaninfo pre-check → exit 2 when no device (no SKIP); `backendType is 7` assert on Vulkan leg; Test-Path pre-checks exit 2 | e2e (script, -MeasureOnly) | `pwsh -File tools/fp4/e2e_validation.ps1 -Corpus W:\gnus\models\alexnet_Opset16.onnx -WorkRoot tmp/p12_measure -MeasureOnly; if ($LASTEXITCODE -ne 0) { exit 1 }` (expect exit 0, measured max-abs/max-rel for both backends printed) | ❌ created in-task (self-providing Wave 0) | ⬜ pending |
+| 12-02-T2 | 12-02 | 2 | SGV2-31 + SGV2-32 (locked gate) + D-11 consumer | T-12-04 / T-12-01 | full-gate run: CPU + Vulkan PASS vs locked tolerances; D-11 negative leg inside same invocation; temp-dir cleanup on pass | e2e (script, full gate) | `pwsh -File tools/fp4/e2e_validation.ps1 -Corpus W:\gnus\models\alexnet_Opset16.onnx; if ($LASTEXITCODE -ne 0) { exit 1 }` (expect exit 0, `PASS: cpu` + `PASS: vulkan`) then `run_test.out op/sgfp4` + `TestSGFP4Converter.exe` with $LASTEXITCODE checks | ✅ after 12-02-T1 | ⬜ pending |
 
-*Task IDs and wave assignments are filled in by the planner from PLAN.md frontmatter.*
+*Task IDs and waves back-filled from 12-01-PLAN.md / 12-02-PLAN.md frontmatter (2026-09-01 revision).*
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -52,8 +51,8 @@ created: 2026-09-01
 
 ## Wave 0 Requirements
 
-- [ ] `tools/fp4/<e2e-script>.ps1` — the phase's central artifact (covers SGV2-31, SGV2-32, D-11 positive/negative legs)
-- [ ] README section in `tools/fp4/README.md` documenting usage + hard Vulkan requirement
+- [ ] `tools/fp4/e2e_validation.ps1` — the phase's central artifact (covers SGV2-31, SGV2-32, D-11 positive/negative legs) — **created by 12-02-T1 itself (self-providing); each task's `<verify>` only runs files its own task (or an earlier wave/task) produces**
+- [ ] README section in `tools/fp4/README.md` documenting usage + hard Vulkan requirement — created by 12-02-T2
 
 *Existing infrastructure covers everything else — no framework installs or fixtures needed.*
 
@@ -82,11 +81,11 @@ Note: the SGFP4 op's own input hardening (DoS bounds, magic/version gates, host 
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (e2e script is self-provided by 12-02-T1)
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** planner (back-filled from PLAN frontmatter, 2026-09-01 revision)
