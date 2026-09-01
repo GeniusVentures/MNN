@@ -14,7 +14,10 @@ int main(int argc, char *argv[]) {
     // parser command line arg
     auto res = MNN::Cli::initializeMNNConvertArgs(modelPath, argc, argv);
     if (!res) {
-        return 0;
+        // OQ1 (Phase 11): parse failure must be observable to scripts --
+        // exit 1, not 0. Covers the D-05 --sgfp4 mutex, help/version paths,
+        // and every other parse rejection.
+        return 1;
     }
     // Convert
     MNN::Cli::convertModel(modelPath);
