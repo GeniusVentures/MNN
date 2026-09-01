@@ -5,8 +5,8 @@ milestone_name: SGFP4 v2 Converter Integration
 current_phase: 12
 current_phase_name: End-to-End Validation
 status: executing
-stopped_at: "Phase 11 context gathered (11-CONTEXT.md committed 54ac5625 — 14 decisions: registered PostConverter pass, inputs>1 skip-guard, --sgfp4 bool flag w/ hard mutex, 4 conv types + D-03 floor, Python-identical thresholds, W-1/W-2/W-3 retirement, TestSGFP4Converter extension + AlexNet CLI smoke)"
-last_updated: "2026-09-01T23:00:19.037Z"
+stopped_at: "Phase 12 context gathered (12-CONTEXT.md committed d8e11326 — 12 decisions: numeric FP32-baseline gate, Phase 10-anchored tolerances, deterministic synthetic input, classic-API Vulkan hard requirement, committed E2E script, SGFP4-scoped RunNetPass escalation fix)"
+last_updated: "2026-09-01T23:16:58.130Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 11 complete, transitioned to Phase 12
 progress:
@@ -69,10 +69,10 @@ Progress: [██████████] 100%
 
 ## Session Continuity
 
-**Last session:** 2026-09-01 (phase 11 context gathering)
+**Last session:** 2026-09-01T23:16:58.124Z
 
-**Stopped At:** Phase 11 context gathered (11-CONTEXT.md committed 54ac5625 — 14 decisions: registered PostConverter pass, inputs>1 skip-guard, --sgfp4 bool flag w/ hard mutex, 4 conv types + D-03 floor, Python-identical thresholds, W-1/W-2/W-3 retirement, TestSGFP4Converter extension + AlexNet CLI smoke)
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/11-graph-rewrite-postconverter-pass-cli-flag/11-CONTEXT.md
+**Stopped At:** Phase 12 context gathered (12-CONTEXT.md committed d8e11326 — 12 decisions: numeric FP32-baseline gate, Phase 10-anchored tolerances, deterministic synthetic input, classic-API Vulkan hard requirement, committed E2E script, SGFP4-scoped RunNetPass escalation fix)
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/12-end-to-end-validation/12-CONTEXT.md
 
 ## Performance Metrics
 
