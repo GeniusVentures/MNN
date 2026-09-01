@@ -446,12 +446,12 @@ MNNConvert ... --sgfp4 --fp16  # assert: MNN_ERROR text, (post-fix) exit 1, no o
 | A4 | Env-var name `SGFP4_GNUS_POC_ROOT` (no gnus-poc-side convention discoverable from this repo) | KEY Q6 | Cosmetic; discretion item anyway. |
 | A5 | Standard CMake glob non-re-trigger behavior | Pitfall 7 | Stale build confusion; mitigated by same-change CMakeLists edit. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **D-05 exit code:** change `MNNConverter.cpp` main to `return 1` on parse failure (recommended, 1 line), or accept exit-0 + error text as the mutex's observable? Needs an explicit plan decision; `pymnn/src/MNNTools.cc` verified unaffected either way.
-2. **Encoder gating (KEY Q1 Option A vs B):** always build `sgfp4_encode` with the converter (recommended: `--sgfp4` always available, matches milestone core value) vs. gate on `MNN_BUILD_SGFP4_TOOLS` (smaller footprint, silent flag absence). Planner locks.
-3. **W-2 verification depth:** manual stale-file check vs. a small `SGFP4InjectTest.cpp` extension — audit item is WARNING-level; recommend the cheap manual/scripted check documented in the plan.
-4. **A2 (Express round-trip):** if D-13 shows node loss, the D-01 placement needs a documented deviation (post-`optimizeNet` invocation from `cli.cpp` before `writeFb`). Pre-authorize this fallback in the plan to avoid mid-phase re-planning.
+1. **D-05 exit code (RESOLVED → plan 11-03, OQ1):** `MNNConverter.cpp` main returns 1 on parse failure (the recommended one-liner) — making the mutex's non-zero exit observable; `pymnn/src/MNNTools.cc` verified unaffected either way.
+2. **Encoder gating (KEY Q1 Option A vs B) (RESOLVED → plan 11-01, OQ2 Option A):** `sgfp4_encode` is always built with the converter (hoisted above `add_subdirectory(tools/converter)`) — `--sgfp4` always available in converter builds, matching the milestone core value; `tools/fp4/CMakeLists.txt` gains an `if(NOT TARGET ...)` guard against double definition.
+3. **W-2 verification depth (RESOLVED → plan 11-02):** the cheap manual/scripted stale-file probe, committed under `tools/fp4/` or documented in the README — proportionate to the WARNING-level audit item; no `SGFP4InjectTest.cpp` extension.
+4. **A2 (Express round-trip) (RESOLVED → plan 11-05, OQ3 contingency):** primary path keeps the D-01 final-batch placement; if D-13 shows node loss, the pre-authorized fallback invokes the pass post-`optimizeNet` from `cli.cpp` before `writeFb`, recorded as a documented D-01 deviation (SUMMARY + STATE), not a silent re-placement.
 
 ## Environment Availability
 
