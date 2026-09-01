@@ -2,7 +2,7 @@
 
 - **Model:** `W:\gnus\models\alexnet_Opset16.onnx`
 - **Model SHA-256:** `4bc388cc32cc789f4d08687a69e46ccf724cfee1e5775f1486847799ae538b53`
-- **Generated (UTC):** 2026-08-31 23:47:30Z
+- **Generated (UTC):** 2026-09-01 00:17:49Z
 - **Toolchain:** python 3.13.4, numpy 2.2.5, onnx 1.18.0
 - **gnus-poc root:** `W:\gnus\GeniusCognitiveSystem\GNUS-NEO-SWARM\gnus-poc`
 - **Threshold table:** DEFAULT_V2_THRESHOLDS (exporter defaults)
@@ -47,7 +47,14 @@ Effective threshold table:
 
 ## C++ encode parity (sgfp4_encode_dump.out)
 
-SKIPPED — run with `--encode-dump <path>` to activate the C++ parity leg (wired in plan 10-03).
+| tensor | byte-exact | decode-stats rtol | status |
+|---|---|---|---|
+| `features.0.weight` | True | 0.0 (byte-exact; decode delta 0.0e+00) | PASS |
+| `classifier.6.weight` | False | within 1e-4 | PASS (rtol fallback) |
+| `classifier.1.weight` | False | within 1e-4 | PASS (rtol fallback) |
+| `features.8.weight` | True | 0.0 (byte-exact; decode delta 0.0e+00) | PASS |
+| `features.0.bias` | True | 0.0 (byte-exact; decode delta 0.0e+00) | PASS |
+| `features.3.bias` | True | 0.0 (byte-exact; decode delta 0.0e+00) | PASS |
 
 ## Summary
 

@@ -2,7 +2,7 @@
   "context": {
     "model_path": "W:\\gnus\\models\\alexnet_Opset16.onnx",
     "model_sha256": "4bc388cc32cc789f4d08687a69e46ccf724cfee1e5775f1486847799ae538b53",
-    "generated_utc": "2026-08-31 23:47:30Z",
+    "generated_utc": "2026-09-01 00:17:49Z",
     "python_version": "3.13.4",
     "numpy_version": "2.2.5",
     "onnx_version": "1.18.0",
@@ -30,10 +30,17 @@
       }
     },
     "thresholds_source": null,
-    "encode_dump": null,
+    "encode_dump": ".build\\Release\\sgfp4_encode_dump.out.exe",
     "workdir": "tmp/sgfp4_validation"
   },
-  "parity_samples": null,
+  "parity_samples": [
+    "features.0.weight",
+    "classifier.6.weight",
+    "classifier.1.weight",
+    "features.8.weight",
+    "features.0.bias",
+    "features.3.bias"
+  ],
   "summary": {
     "total_layers": 16,
     "full_tier": 8,
@@ -110406,7 +110413,48 @@
       }
     ],
     "exit_code": 3,
-    "threshold_delta": null
+    "threshold_delta": null,
+    "parity_ok": true,
+    "parity_rows": [
+      {
+        "name": "features.0.weight",
+        "byte_exact": true,
+        "decode_rtol": "0.0 (byte-exact; decode delta 0.0e+00)",
+        "status": "PASS"
+      },
+      {
+        "name": "classifier.6.weight",
+        "byte_exact": false,
+        "decode_rtol": "within 1e-4",
+        "status": "PASS (rtol fallback)",
+        "rtol_fallback": true
+      },
+      {
+        "name": "classifier.1.weight",
+        "byte_exact": false,
+        "decode_rtol": "within 1e-4",
+        "status": "PASS (rtol fallback)",
+        "rtol_fallback": true
+      },
+      {
+        "name": "features.8.weight",
+        "byte_exact": true,
+        "decode_rtol": "0.0 (byte-exact; decode delta 0.0e+00)",
+        "status": "PASS"
+      },
+      {
+        "name": "features.0.bias",
+        "byte_exact": true,
+        "decode_rtol": "0.0 (byte-exact; decode delta 0.0e+00)",
+        "status": "PASS"
+      },
+      {
+        "name": "features.3.bias",
+        "byte_exact": true,
+        "decode_rtol": "0.0 (byte-exact; decode delta 0.0e+00)",
+        "status": "PASS"
+      }
+    ]
   },
   "layers": [
     {

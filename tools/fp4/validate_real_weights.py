@@ -30,14 +30,20 @@ Exit codes:
 """
 
 import argparse
+import filecmp
 import hashlib
 import json
 import math
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+# Decode-vs-decode contractual tolerance (Phase 9 pattern,
+# test/op/SGFP4EncodeTest.cpp kEncodeRelTol).
+K_ENCODE_REL_TOL = 1e-4
 
 DEFAULT_MODEL = "W:/gnus/models/alexnet_Opset16.onnx"
 DEFAULT_GNUS_POC_ROOT = "W:/gnus/GeniusCognitiveSystem/GNUS-NEO-SWARM/gnus-poc"
@@ -503,7 +509,9 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
     parity_rows = context.get("parity_rows")
     if parity_rows is None:
         lines.append("SKIPPED — run with `--encode-dump <path>` to activate the "
-                     "C++ parity leg (wired in plan 10-03).")
+                     "C++ parity leg.")
+    elif not parity_rows:
+        lines.append("SKIPPED — no samples resolved (check `--sample` values).")
     else:
         lines.append("| tensor | byte-exact | decode-stats rtol | status |")
         lines.append("|---|---|---|---|")
@@ -568,6 +576,105 @@ def write_report(layers, exit_code, summary, context, report_md, report_json):
     report_json.parent.mkdir(parents=True, exist_ok=True)
     report_json.write_text(
         json.dumps(sidecar, indent=2, default=float), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# C++ parity-sampling leg (Plan 10-03, D-11)
+# ---------------------------------------------------------------------------
+
+def run_parity_leg(encode_dump, samples, initializers, exporter,
+                   decode_v2, effective_thresholds, workdir):
+    """Drive sgfp4_encode_dump.out per sampled layer and compare against the
+    gnus-poc reference encode.
+
+    Per layer: write LE FP32 dump -> invoke harness -> byte-compare vs
+    export_weights(adaptive=True) -> decode the C++-produced bytes and check
+    decode-error statistics against the Python-computed reference at rtol
+    1e-4 -> delete the transient dump.
+
+    Returns (parity_rows, ok) where ok is False on any mismatch (exit 4).
+    """
+    harness = Path(encode_dump)
+    if not harness.is_file():
+        # Windows subtlety recorded in 10-02: the .exe suffix is required.
+        print(f"encode-dump harness not found: {harness}", file=sys.stderr)
+        sys.exit(1)
+    work = Path(workdir)
+    work.mkdir(parents=True, exist_ok=True)
+
+    by_name = {t["name"]: t for t in initializers}
+    parity_rows = []
+    ok = True
+    for name in samples:
+        tensor = by_name.get(name)
+        if tensor is None:
+            print(f"sample '{name}' not found in model", file=sys.stderr)
+            sys.exit(1)
+        plane = tensor["plane"]
+        dim_o, dim_i = plane.shape
+
+        dump_path = work / f"{name.replace('.', '_')}.f32"
+        cpp_path = work / f"{name.replace('.', '_')}_cpp.sgfp4"
+        plane.astype("<f4").tofile(dump_path)
+
+        proc = subprocess.run(
+            [str(harness), "--weights", str(dump_path),
+             "--dimO", str(dim_o), "--dimI", str(dim_i), "--out", str(cpp_path)],
+            capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = "encoder-rejected (exit 2)" if proc.returncode == 2 \
+                else f"harness exit {proc.returncode}"
+            parity_rows.append({"name": name, "byte_exact": False,
+                                "decode_rtol": None,
+                                "status": f"FAIL ({detail})"})
+            ok = False
+            dump_path.unlink(missing_ok=True)
+            continue
+
+        py_binary, _ = exporter.export_weights(
+            plane, name, adaptive=True, thresholds=effective_thresholds)
+        py_path = work / f"{name.replace('.', '_')}_py.sgfp4"
+        py_path.write_bytes(py_binary)
+
+        row = {"name": name}
+        if filecmp.cmp(str(py_path), str(cpp_path), shallow=False):
+            row["byte_exact"] = True
+            row["decode_rtol"] = "n/a (byte-exact)"
+            row["status"] = "PASS"
+        else:
+            # Contractual fallback: decode-vs-decode rtol check.
+            py_dec = decode_v2(py_binary, dim_o, dim_i)
+            cpp_bytes = cpp_path.read_bytes()
+            cpp_dec = decode_v2(cpp_bytes, dim_o, dim_i)
+            py_err = np.abs(plane.astype(np.float64) - py_dec.astype(np.float64))
+            cpp_err = np.abs(plane.astype(np.float64) - cpp_dec.astype(np.float64))
+            stats_ok = (
+                math.isclose(float(py_err.max()), float(cpp_err.max()),
+                             rel_tol=K_ENCODE_REL_TOL)
+                and math.isclose(float(np.mean(py_err ** 2)),
+                                 float(np.mean(cpp_err ** 2)),
+                                 rel_tol=K_ENCODE_REL_TOL))
+            row["byte_exact"] = False
+            row["decode_rtol"] = "within 1e-4" if stats_ok else "EXCEEDED"
+            row["status"] = "PASS (rtol fallback)" if stats_ok else "FAIL"
+            row["rtol_fallback"] = True
+            if not stats_ok:
+                ok = False
+
+        # Decode-error stats check on the byte-exact path too: the C++
+        # container decoded via the Python oracle must agree with the
+        # Python container's stats (trivially true when byte-exact, but
+        # computed from the C++ bytes for evidence).
+        if row["byte_exact"]:
+            cpp_dec = decode_v2(cpp_path.read_bytes(), dim_o, dim_i)
+            py_dec = decode_v2(py_binary, dim_o, dim_i)
+            d = np.abs(cpp_dec.astype(np.float64) - py_dec.astype(np.float64))
+            row["decode_rtol"] = f"0.0 (byte-exact; decode delta {float(d.max()):.1e})"
+
+        parity_rows.append(row)
+        dump_path.unlink(missing_ok=True)
+
+    return parity_rows, ok
 
 
 # ---------------------------------------------------------------------------
@@ -665,8 +772,6 @@ def main() -> int:
     }
 
     if args.encode_dump:
-        # Parity leg (plan 10-03): samples resolved now; the leg itself
-        # reports SKIPPED until wired.
         context["parity_samples"] = (args.sample if args.sample
                                      else default_sample_names(initializers))
 
@@ -674,6 +779,20 @@ def main() -> int:
         exporter, QuadtreeEncoder, LaplacianWeightedError, decode_v2,
         initializers, thresholds)
     summary["threshold_delta"] = None
+
+    if args.encode_dump:
+        parity_rows, parity_ok = run_parity_leg(
+            args.encode_dump, context["parity_samples"], initializers,
+            exporter, decode_v2, thresholds, args.workdir)
+        context["parity_rows"] = parity_rows
+        summary["parity_ok"] = parity_ok
+        summary["parity_rows"] = parity_rows
+        if not parity_ok and exit_code == 0:
+            exit_code = 4
+        elif not parity_ok:
+            # Gate failure already failed the run; parity mismatch escalates
+            # the diagnostic code so both conditions are visible.
+            exit_code = 4
 
     write_report(layers, exit_code, summary, context,
                  Path(args.report), Path(args.report).with_suffix(".json"))
