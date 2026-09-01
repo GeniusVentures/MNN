@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: 10
-current_phase_name: real-weight-validation-against-actual-model-statistics
+current_phase: 11
+current_phase_name: Graph-Rewrite PostConverter Pass + CLI Flag
 status: verifying
 stopped_at: Phase 10 all 3 plans complete (gate green exit 0, parity 6/6 PASS, EncodeConfig shipped)
-last_updated: "2026-09-01T01:52:04.108Z"
-last_activity: 2026-08-31
-last_activity_desc: Phase 10 execution started
+last_updated: "2026-09-01T02:00:15.001Z"
+last_activity: 2026-09-01
+last_activity_desc: Phase 10 complete, transitioned to Phase 11
 progress:
   total_phases: 5
   completed_phases: 3
@@ -29,12 +29,12 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 10 (real-weight-validation-against-actual-model-statistics) — EXECUTING
-Plan: 3 of 3
+Phase: 11 — Graph-Rewrite PostConverter Pass + CLI Flag
+Plan: Not started
 Status: Phase complete — ready for verification
 Corpus approved (D-01/D-02): `W:\gnus\models\alexnet_Opset16.onnx` ONLY — 16 FP32 tensors / 61.1M elems, two real non-64-aligned tensors (D-04 synthetic fallback moot)
 Tiny-tensor floor approved (D-03): light tier iff `elements < 4096` OR `dimI == 1`
-Last activity: 2026-08-31 — Phase 10 execution started
+Last activity: 2026-09-01 — Phase 10 complete, transitioned to Phase 11
 
 ## Progress
 
