@@ -912,6 +912,20 @@ if(APPLE)
     ENDIF()
 endif()
 if (NOT MNN_SKIPBUILD_GEOMETRY)
+    # Phase 11, Plan 11-01 (OQ2 Option A): hoist the SGFP4 v2 encoder lib
+    # ABOVE the converter subdirectory so the target exists when
+    # tools/converter configures -- --sgfp4 then always works in a
+    # converter build without requiring MNN_BUILD_SGFP4_TOOLS.
+    # tools/fp4/CMakeLists.txt re-guards the same definition with
+    # if(NOT TARGET ...) so both options ON define it exactly once.
+    IF(MNN_BUILD_CONVERTER)
+        add_library(sgfp4_encode STATIC ${CMAKE_CURRENT_LIST_DIR}/tools/fp4/sgfp4_encode.cpp)
+        target_include_directories(sgfp4_encode PUBLIC ${CMAKE_CURRENT_LIST_DIR}/tools/fp4
+                ${CMAKE_CURRENT_LIST_DIR}/include ${CMAKE_CURRENT_LIST_DIR}/3rd_party/half)
+        # Linux SHARED MNNConvertDeps links this static lib in -- PIC is
+        # required there; harmless under MSVC.
+        set_target_properties(sgfp4_encode PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    ENDIF()
     add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/tools/converter)
 endif()
 IF(WIN32 AND MNN_BUILD_CONVERTER AND MNN_BUILD_SHARED_LIBS)

@@ -26,4 +26,15 @@
  */
 std::unique_ptr<MNN::NetT> optimizeNet(std::unique_ptr<MNN::NetT>& netT, bool forTraining, modelConfig& config, const std::vector<std::string>& expectPasses);
 
+namespace MNN {
+namespace Express {
+/**
+ *@brief run named PostConverter passes against originNet (definition in
+ * PostConverter.cpp; declared here so standalone tests can drive passes
+ * directly -- Phase 11, Plan 11-01 / consumed by Plan 11-04).
+ */
+void RunNetPass(const std::vector<std::string>& passes, std::unique_ptr<MNN::NetT>& originNet);
+} // namespace Express
+} // namespace MNN
+
 #endif // OPTIMIZER_HPP

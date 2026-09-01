@@ -43,6 +43,10 @@ IF(MNN_BUILD_CONVERTER)
   ELSE()
     add_library(MNNConvertDeps STATIC ${COMMON_SRC} ${MNN_CONVERTER_BACKENDS_OBJECTS} ${CMAKE_CURRENT_LIST_DIR}/../../3rd_party/flatbuffers/src/util.cpp)
   ENDIF()
+  # Phase 11, Plan 11-01: the SGFP4 v2 encoder (InsertSGFP4Dequant pass).
+  # One line after the SHARED/STATIC branch covers both; the target is
+  # hoisted above this subdirectory in the root CMakeLists.txt.
+  target_link_libraries(MNNConvertDeps PUBLIC sgfp4_encode)
   
   
   IF(NOT MNN_BUILD_SHARED_LIBS)
