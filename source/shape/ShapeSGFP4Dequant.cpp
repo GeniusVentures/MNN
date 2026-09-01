@@ -31,7 +31,15 @@ class ShapeSGFP4Dequant : public SizeComputer {
             output->setLength(i, dims->Get(i));
         }
         output->buffer().type = halide_type_of<float>();
-        TensorUtils::getDescribe(output)->dimensionFormat = MNN_DATA_FORMAT_NHWC;
+        // Phase 11 (D-13 deviation): a rank>=3 output is conv-weight
+        // geometry {O, I, kH, kW} written by the converter's
+        // InsertSGFP4Dequant pass -- NCHW (CAFFE-equivalent) format so
+        // Tensor::channel() resolves dim[1] (the input-channel) the way
+        // conv shape inference and ConvolutionTiledExecutorMultiInput
+        // expect. Rank-2 outputs (injection-tool artifacts consumed by
+        // MatMul) keep the original NHWC tag -- unchanged behavior.
+        TensorUtils::getDescribe(output)->dimensionFormat =
+            (dims->size() >= 3) ? MNN_DATA_FORMAT_NCHW : MNN_DATA_FORMAT_NHWC;
         return true;
     }
 };

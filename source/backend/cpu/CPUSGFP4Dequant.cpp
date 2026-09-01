@@ -38,6 +38,26 @@ bool queryFileSize(const std::string& path, size_t& outSize) {
     return true;
 }
 
+// Dims interpretation (Phase 11, D-13 deviation): dims[0] is always the
+// encode plane's dimO; the remaining dims multiply to dimI. The 2-D
+// {dimO, dimI} form (injection-tool artifacts, MatMul consumers) reads
+// identically to before; the 4-D conv-weight form {O, I, kH, kW} written
+// by the converter's InsertSGFP4Dequant pass yields I*kH*kW -- the same
+// flat decode plane, now exposed with conv-weight geometry so
+// ShapeConvolution / ConvolutionTiledExecutorMultiInput see a valid
+// weight tensor.
+bool readDecodeDims(const SGFP4DequantParam* param, int& dimO, int& dimI) {
+    if (nullptr == param || nullptr == param->dims() || param->dims()->size() < 2) {
+        return false;
+    }
+    dimO = param->dims()->Get(0);
+    dimI = 1;
+    for (flatbuffers::uoffset_t i = 1; i < param->dims()->size(); ++i) {
+        dimI *= param->dims()->Get(i);
+    }
+    return dimO > 0 && dimI > 0;
+}
+
 } // namespace
 
 ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs) {
@@ -53,11 +73,10 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
     if (outputs.empty() || nullptr == outputs[0]) {
         return INVALID_VALUE;
     }
-    if (param->dims() == nullptr || param->dims()->size() < 2) {
+    int dimO = 0, dimI = 0;
+    if (!readDecodeDims(param, dimO, dimI)) {
         return INVALID_VALUE;
     }
-    int dimO = param->dims()->Get(0);
-    int dimI = param->dims()->Get(1);
     mPaddedDimO = ((dimO + 63) / 64) * 64;
     mPaddedDimI = ((dimI + 63) / 64) * 64;
     mIsPadded = (mPaddedDimO != dimO || mPaddedDimI != dimI);
@@ -159,11 +178,10 @@ ErrorCode CPUSGFP4Dequant::onExecute(const std::vector<Tensor*>& inputs, const s
     bool ok;
     if (mIsPadded) {
         auto param = mOp->main_as_SGFP4DequantParam();
-        if (nullptr == param || param->dims() == nullptr || param->dims()->size() < 2) {
+        int dimO = 0, dimI = 0;
+        if (!readDecodeDims(param, dimO, dimI)) {
             return INVALID_VALUE;
         }
-        int dimO = param->dims()->Get(0);
-        int dimI = param->dims()->Get(1);
         ok = dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), dest, dimO, dimI, mPaddedDimO,
                                               mPaddedDimI);
     } else {

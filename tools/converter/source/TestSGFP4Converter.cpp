@@ -305,7 +305,12 @@ int main(int argc, const char* argv[]) {
             const auto* dp = dq->main.AsSGFP4DequantParam();
             CHECK(nullptr != dp, "T1: dequant param");
             CHECK(dp->magic == MNN::kSGFP4Magic, "T1: magic");
-            CHECK(dp->dims.size() == 2 && dp->dims[0] == 64 && dp->dims[1] == 128, "T1: dims == {64,128}");
+            // D-13 deviation contract: kernelX/kernelY schema-default to
+            // 1, so a kernels-unset synthetic conv emits {64,128,1,1};
+            // T6b covers explicit 2x2 kernels -> {64,32,2,2}.
+            CHECK(dp->dims.size() == 4 && dp->dims[0] == 64 && dp->dims[1] == 128 && dp->dims[2] == 1 &&
+                      dp->dims[3] == 1,
+                  "T1: dims == conv-weight {64,128,1,1} (default kernels)");
             CHECK(!dp->buffer.empty(), "T1: buffer non-empty (D-11 buffer contract)");
             CHECK(dp->external.empty(), "T1: external == {}");
             CHECK(dq->externalPath.empty(), "T1: externalPath empty");
@@ -421,6 +426,33 @@ int main(int argc, const char* argv[]) {
             CHECK(sconv->inputIndexes[1] == 1, "T6: new index == pre-push tensors size");
             CHECK(sg->tensors[0] == tensorsBefore[0], "T6: existing tensor unrenumbered");
             CHECK(net6->oplists.size() == rootOpsBefore, "T6: root oplists untouched");
+        }
+
+        // ---- Test 6b: 4-D conv-weight dims (D-13 deviation) ------------
+        {
+            std::unique_ptr<MNN::NetT> net6b(new MNN::NetT);
+            net6b->tensorName = {"x", "y"};
+            std::vector<float> w6b;
+            fillRamp(w6b, (size_t)64 * 128, 8);
+            auto conv6b   = makeConvOp(64, 128, w6b, 0);
+            auto* c6b     = conv6b->main.AsConvolution2D();
+            c6b->common->kernelX = 2; // 128 = ic*2*2 -> ic = 32
+            c6b->common->kernelY = 2;
+            net6b->oplists.push_back(std::move(conv6b));
+            RunNetPass({"InsertSGFP4Dequant"}, net6b);
+            CHECK(1 == countSgfp4Ops(net6b.get()), "T6b: rewritten");
+            const auto* dq6b = net6b->oplists[0]->type == MNN::OpType_SGFP4Dequant
+                                   ? net6b->oplists[0].get() : net6b->oplists[1].get();
+            const auto* dp6b = dq6b->main.AsSGFP4DequantParam();
+            CHECK(dp6b->dims.size() == 4 && dp6b->dims[0] == 64 && dp6b->dims[1] == 32 && dp6b->dims[2] == 2 &&
+                      dp6b->dims[3] == 2,
+                  "T6b: dims == 4-D conv-weight {64,32,2,2}");
+            // Decode plane unchanged: dimO x product(rest).
+            std::vector<float> dec6b((size_t)64 * 128);
+            CHECK(MNN::dequant_sgfp4_container_cpu(reinterpret_cast<const uint8_t*>(dp6b->buffer.data()),
+                                                   dp6b->buffer.size(), dec6b.data(), dec6b.size()),
+                  "T6b: container decodes at flat plane size");
+            CHECK(fp4Approx(dec6b, w6b), "T6b: decode approximates source");
         }
 
         // ---- Test 7: spilled-weight reload (KEY Q3) --------------------

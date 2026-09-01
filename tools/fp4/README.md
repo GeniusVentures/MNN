@@ -80,3 +80,45 @@ Any failure exits non-zero with an `MNN_ERROR` diagnostic and leaves **no**
 `<output>` / `<output>.weight` behind — including removal of a previous run's
 stale artifact at the same paths. Downstream consumers never see an artifact
 that does not correspond to the inputs of the (failed) run.
+
+## `mnnconvert --sgfp4` smoke (Phase 11, D-13/D-14 — manual gate)
+
+The converter-side path (Phase 11): `MNNConvert --sgfp4` drives the
+registered `InsertSGFP4Dequant` PostConverter pass (before `ReIndexTensor`),
+rewriting conv-family FP32 weights into buffer-staged `SGFP4Dequant`
+producer nodes. This smoke is a **test-time manual gate** — the corpus is a
+developer-machine dependency, NOT an always-on CI gate.
+
+Corpus provenance: `W:\gnus\models\alexnet_Opset16.onnx` (sha256
+`4bc388cc…`, Phase 10 D-01/D-02 approval; 16 FP32 tensors / 61.1M elems,
+8 full-tier conv-family weights: 5 feature convs + 3 classifier FC→convs).
+
+1. **Flag-ON conversion** (exit 0, artifact written):
+   ```powershell
+   .build\Release\MNNConvert.exe -f ONNX `
+       --modelFile W:\gnus\models\alexnet_Opset16.onnx `
+       --MNNModel tmp\p11_smoke.mnn --sgfp4 --dumpPass
+   # expect: "[DumpPass] PostConvert::InsertSGFP4Dequant: ops 74 -> 82"
+   #         (K = 8 SGFP4Dequant nodes; second execution "no change"),
+   #         "Converted Success!", exit 0
+   ```
+2. **Node-count assertion**: the artifact contains exactly **8**
+   `SGFP4Dequant` ops and 8 two-input (rewired) convolutions (flatbuffers
+   `GetNet` scan — see `TestSGFP4Converter` PHASE C for the assertion
+   pattern). A count mismatch is a finding, not a pass.
+3. **Decode leg**: load the artifact via the classic Interpreter/Session
+   API (`createFromFile` → `createSession` → `resizeTensor({1,3,224,224})`
+   → `resizeSession` → `runSession`) — must return `NO_ERROR`. This proves
+   the full flag→pass→buffer→artifact→runtime chain. Note (D-13 deviation,
+   Phase 11): the pass writes **4-D conv-weight dims** `{O, I, kH, kW}` so
+   conv shape inference and `ConvolutionTiledExecutorMultiInput` see a
+   valid weight tensor; the decoder treats `dims[0]` as dimO and the
+   product of the remaining dims as dimI (2-D artifacts unchanged).
+4. **Mutex leg**: `--sgfp4 --fp16` (or `--hqq`/`--weightQuantBits`) →
+   `MNN_ERROR: --sgfp4 cannot be combined with …`, **exit 1**, no output
+   file.
+
+**Flag-OFF (D-14):** without `--sgfp4` the pass is dead code — the same
+corpus converts identically to a flag-less build, all 13 `op/sgfp4`
+suites pass with zero `test/` modifications, and
+`TestSGFP4Converter.exe` (PHASE A+B+C) is green.

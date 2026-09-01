@@ -134,7 +134,12 @@ bool reloadSpilledConvWeights(Convolution2DT* param, const std::string& opName) 
 
 // Build the buffer-staged SGFP4 producer OpT (Phase 8 D-11 contract; shape
 // from TestSGFP4Converter.cpp's makeSgfp4Op reference).
-std::unique_ptr<OpT> makeSgfp4DequantOp(const std::vector<uint8_t>& container, int dimO, int dimI,
+// D-13 deviation (Phase 11): dims carries the CONV-WEIGHT geometry
+// {O, I, kH, kW} (MatMul-derived convs included -- see caller); the flat
+// decode plane stays dimO x dimI by construction, and the decoder derives
+// it as dims[0] x product(dims[1..]).
+std::unique_ptr<OpT> makeSgfp4DequantOp(const std::vector<uint8_t>& container,
+                                        const std::vector<int>& decodeDims,
                                         const std::string& name, int outputIndex) {
     std::unique_ptr<OpT> op(new OpT);
     op->type            = OpType_SGFP4Dequant;
@@ -142,7 +147,7 @@ std::unique_ptr<OpT> makeSgfp4DequantOp(const std::vector<uint8_t>& container, i
     op->main.type       = OpParameter_SGFP4DequantParam;
     auto* param         = new SGFP4DequantParamT;
     param->magic        = kSGFP4Magic;
-    param->dims         = {dimO, dimI};
+    param->dims         = decodeDims;
     // SGFP4DequantParamT::buffer is std::vector<int8_t> (flatc [byte]);
     // copy the raw container bytes across.
     param->buffer.resize(container.size());
@@ -242,12 +247,25 @@ bool processOplist(std::vector<std::unique_ptr<OpT>>& ops, NameAppender appendTe
             continue;
         }
 
+        // Conv-weight geometry for the emitted tensor (D-13 deviation):
+        // recover kH/kW from the common param; the input-channel count is
+        // kernelSize / (kH*kW). MatMul-derived convs carry 1x1 kernels, so
+        // they generalize cleanly. If common disagrees with the weight
+        // layout (kernelSize not divisible), fall back to flat {dimO, dimI}
+        // -- the 2-D legacy form decodes identically.
+        std::vector<int> tensorDims = {dimO, dimI};
+        const int kx = common->kernelX;
+        const int ky = common->kernelY;
+        if (kx > 0 && ky > 0 && (kernelSize % (kx * ky)) == 0) {
+            tensorDims = {dimO, kernelSize / (kx * ky), ky, kx};
+        }
+
         // Node construction + splice. Producer precedes consumer.
         const int newIndex = (int)appendTensorName(std::string());
         std::string nodeName = op->name.empty() ? ("sgfp4_weight_" + std::to_string(newIndex))
                                                 : (op->name + "_sgfp4");
         appendTensorName(nodeName);
-        auto dequantOp = makeSgfp4DequantOp(container, dimO, dimI, nodeName, newIndex);
+        auto dequantOp = makeSgfp4DequantOp(container, tensorDims, nodeName, newIndex);
         // (sub)graph tensor namespace grew before mutation; failure paths
         // above have already exited. Mutate only now (transactional rule).
         iter = ops.insert(iter, std::move(dequantOp));
