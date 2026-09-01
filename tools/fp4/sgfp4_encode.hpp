@@ -28,10 +28,36 @@
 
 namespace sgfp4_encode {
 
+// Phase 10, Plan 10-03 (D-08): explicit threshold tunable (Phase 9's D-10
+// deferral resolved). Defaults are the Python-identical
+// DEFAULT_V2_THRESHOLDS values (fp4_exporter.py); revisions land only as
+// deliberate, data-justified deltas from those defaults. Future knobs are
+// deliberately absent (D-10: thresholds only).
+struct EncodeConfig {
+    struct Gate {
+        int leafSize;       // 64 / 32 / 16 / 8 / 4 (kDefaultV2Thresholds order)
+        double maxMse;
+        double maxRelative;
+    };
+    Gate leafGates[5];
+};
+
+// The shipped default config: values identical to gnus-poc
+// DEFAULT_V2_THRESHOLDS. Defined in sgfp4_encode.cpp (extern linkage;
+// do not define another copy at namespace scope in this header).
+extern const EncodeConfig kDefaultEncodeConfig;
+
 // Encode the dimO x dimI row-major FP32 weight plane into an SGFP4 v2
 // adaptive container (byte vector). See file header for the invalid-input
 // contract (empty vector return).
 std::vector<uint8_t> encode(const float* weights, int dimO, int dimI);
+
+// Config-carrying overload: identical to the one-shot encode above when
+// handed kDefaultEncodeConfig; threads caller gate values through the
+// quadtree split policy otherwise. An overload (NOT a default argument) so
+// "which call site uses tuned values" stays greppable. Same invalid-input
+// contract (empty vector return).
+std::vector<uint8_t> encode(const float* weights, int dimO, int dimI, const EncodeConfig& config);
 
 } // namespace sgfp4_encode
 

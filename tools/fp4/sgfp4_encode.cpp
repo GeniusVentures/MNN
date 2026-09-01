@@ -487,11 +487,13 @@ void tryBlock(const QuadtreeContext& ctx, int y, int x, int size, std::vector<Le
     extractRegion(ctx, y, x, size, region);
     const int n = size * size;
 
-    // Threshold for this leaf size (DEFAULT_V2_THRESHOLDS covers all sizes).
-    const Threshold* threshold = &kDefaultV2Thresholds[4];
+    // Threshold for this leaf size (the ctx table covers all sizes; the
+    // leafSize keys are the config-carried values, so the lookup honors
+    // overrides exactly like the defaults did).
+    const Threshold* threshold = &ctx.thresholds[4];
     for (int i = 0; i < 5; ++i) {
-        if (kDefaultV2Thresholds[i].leafSize == size) {
-            threshold = &kDefaultV2Thresholds[i];
+        if (ctx.thresholds[i].leafSize == size) {
+            threshold = &ctx.thresholds[i];
             break;
         }
     }
@@ -744,7 +746,19 @@ std::vector<uint8_t> assembleContainer(const std::vector<std::vector<uint8_t>>& 
 // Public entry
 // ---------------------------------------------------------------------------
 
-std::vector<uint8_t> encode(const float* weights, int dimO, int dimI) {
+// Phase 10, Plan 10-03 (D-08): config-carrying overload. The quadtree gate
+// thresholds come from the caller's EncodeConfig; kDefaultEncodeConfig (the
+// Python-identical DEFAULT_V2_THRESHOLDS values) makes the knob-less
+// overload below a pure forwarder with bit-identical behavior.
+const EncodeConfig kDefaultEncodeConfig = {
+    EncodeConfig::Gate{64, 0.01, 0.05},
+    EncodeConfig::Gate{32, 0.005, 0.03},
+    EncodeConfig::Gate{16, 0.002, 0.02},
+    EncodeConfig::Gate{8, 0.001, 0.01},
+    EncodeConfig::Gate{4, 0.0005, 0.005},
+};
+
+std::vector<uint8_t> encode(const float* weights, int dimO, int dimI, const EncodeConfig& config) {
     if (weights == nullptr || dimO <= 0 || dimI <= 0 || dimO > kMaxDim || dimI > kMaxDim) {
         return {};
     }
@@ -774,6 +788,11 @@ std::vector<uint8_t> encode(const float* weights, int dimO, int dimI) {
     QuadtreeContext ctx;
     ctx.plane = plane.data();
     ctx.paddedDimI = paddedDimI;
+    for (int i = 0; i < 5; ++i) {
+        ctx.thresholds[i].leafSize    = config.leafGates[i].leafSize;
+        ctx.thresholds[i].maxMse      = config.leafGates[i].maxMse;
+        ctx.thresholds[i].maxRelative = config.leafGates[i].maxRelative;
+    }
 
     std::vector<std::vector<uint8_t>> records;
     records.reserve(static_cast<size_t>(tilesY) * tilesX);
@@ -786,6 +805,10 @@ std::vector<uint8_t> encode(const float* weights, int dimO, int dimI) {
     }
 
     return assembleContainer(records);
+}
+
+std::vector<uint8_t> encode(const float* weights, int dimO, int dimI) {
+    return encode(weights, dimO, dimI, kDefaultEncodeConfig);
 }
 
 } // namespace sgfp4_encode
