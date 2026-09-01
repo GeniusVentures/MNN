@@ -134,9 +134,32 @@ Plans:
 **Goal**: New `PostConverter` pass inserts `SGFP4Dequant` nodes (buffer-staged per Phase 8's D-11 contract); new CLI flag triggers it; `WeightQuantAndCoding.cpp` skip-guard prevents double-processing. Absorbs the v2.0 injection tool's sidecar/rewiring learnings and retires tech debt W-1 (classic_api offset-convention retrofit) and W-2 (arg-stage failCleanup) per the v2.0 milestone audit placement.
 **Depends on**: Phase 8, Phase 10
 **Requirements**: SGV2-28, SGV2-29, SGV2-30
-**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+**Success Criteria** (derived at plan time from D-01..D-14 + research):
 
-**Plans**: 0/TBD
+1. **Pass shipped & invoked (D-01/D-03/D-06/D-07/D-08, SGV2-28):** registered `"InsertSGFP4Dequant"` PostConverter runs in the final batch BEFORE `ReIndexTensor`; covers the 4 conv types across oplists + subgraphs; light-tier floor (`elements < 4096` OR `dimI == 1`) honored; encoding threads the greppable `kSGFP4ConverterEncodeConfig` (Python-identical defaults, validated delta documented as unused-by-default); inserted ops are buffer-staged (`buffer` populated, `external == {}`, no `externalPath`); both in-param and external-spilled weights handled (flush + FileLoader reload + bias restore); idempotent under the double-`RunOptimize` via the `inputs==1` condition; encode failures propagate transactionally (conv skipped untouched, pass returns false).
+2. **CLI flag + mutex (D-04/D-05, SGV2-29):** boolean `--sgfp4` → `modelConfig::useSGFP4` ("SGFP4 v2" terminology); combined with `--weightQuantBits`/`--hqq`/`--fp16` = MNN_ERROR + non-zero exit (OQ1 `return 1` fix in MNNConverter.cpp).
+3. **Skip-guard (D-02, SGV2-30):** `WeightQuantAndCoding` early-returns on `inputIndexes.size() > 1` before any weight transform (incl. the sparse path).
+4. **Tests + smoke (D-12/D-13):** `TestSGFP4Converter` PHASE C covers insertion/rewiring/clearing/buffer-contract/light-tier/subgraph/idempotency/spill/flag-off/skip-guard/round-trip; a real `mnnconvert --sgfp4` run on the approved AlexNet corpus yields a `.mnn` with the expected SGFP4Dequant node count (8 candidates minus light-tier skips) that loads via the classic API; OQ3 fallback (post-optimizeNet invocation from cli.cpp) pre-authorized only as a documented D-01 deviation.
+5. **No-regression (D-14):** flag OFF = dead code; all 13 `op/sgfp4` suites + existing converter tests green with zero test-file edits (`git status test/` clean).
+6. **Tech debt retired (D-09/D-10/D-11):** W-1 verified-and-closed (already fixed at `1df51b7e` — verify + annotate, no edit); W-2 `failCleanup` hoisted above arg validation (stale-artifact removal on usage-exit paths, probe recorded); W-3 `SGFP4_GNUS_POC_ROOT` env-var override in the three tools/fp4 scripts.
+
+**Plans**: 5 plans
+
+Plans:
+
+**Wave 1** *(independent — run in parallel)*
+
+- [ ] 11-01-PLAN.md — CMake hoist + `useSGFP4` field + `InsertSGFP4Dequant` pass + registration + D-02 skip-guard (SGV2-28, SGV2-30)
+- [ ] 11-02-PLAN.md — Tech-debt retirement: W-1 verify-close, W-2 failCleanup hoist, W-3 env-var root (SGV2-30 hygiene)
+
+**Wave 2** *(blocked on 11-01)*
+
+- [ ] 11-03-PLAN.md — `--sgfp4` flag + D-05 mutex + OQ1 exit-code fix (SGV2-29)
+- [ ] 11-04-PLAN.md — `TestSGFP4Converter` PHASE C pass-mechanics tests, D-12 (SGV2-28, SGV2-30)
+
+**Wave 3** *(blocked on 11-02, 11-03, 11-04)*
+
+- [ ] 11-05-PLAN.md — D-13 corpus smoke + D-14 flag-off no-regression gate + README (SGV2-28, SGV2-29, SGV2-30)
 
 ### Phase 12: End-to-End Validation
 
