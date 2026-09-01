@@ -166,9 +166,23 @@ Plans:
 **Goal**: A real model converts and runs correct inference on CPU and Vulkan via the new flag.
 **Depends on**: Phase 11
 **Requirements**: SGV2-31, SGV2-32
-**Success Criteria**: TBD at plan time (phase detail to be finalized when planned).
+**Success Criteria**: 
+1. **D-11 exit-code honesty (converter prerequisite):** `mnnconvert --sgfp4` with a failed/skipped `InsertSGFP4Dequant` pass exits non-zero with `MNN_ERROR` and never prints "Converted Success!"; flag-off behavior byte-identical (D-12); all 13 `op/sgfp4` suites + `TestSGFP4Converter` green.
+2. **SGV2-31 (CPU gate):** `tools/fp4/e2e_validation.ps1 -Corpus <alexnet.onnx>` converts FP32 + `--sgfp4`, runs both artifacts via the classic API on CPU, and the SGFP4 output matches the FP32 baseline within locked tolerances (max-abs primary + guarded-relative, Phase 10-anchored, measured-then-locked).
+3. **SGV2-32 (Vulkan gate):** the SAME artifact via classic API + `MNN_FORWARD_VULKAN` (precision High, `backendType=7` asserted) matches the SAME baseline with the SAME tolerance; no Vulkan device = hard FAIL, never SKIP (D-07).
+4. **One committed, documented artifact:** the script prints per-backend PASS/FAIL with D-10 diagnostics (max-abs, max-rel, failing index), includes the D-11 negative leg, and `tools/fp4/README.md` documents usage, tolerance derivation, and the hard Vulkan requirement.
 
-**Plans**: 0/TBD
+**Plans**: 0/2 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [ ] 12-01-PLAN.md — RunNetPass bool return + SGFP4-gated nullptr failure + cli.cpp null-guard + useSGFP4-gated main exit (D-11/D-12)
+
+**Wave 2** *(blocked on 12-01 — negative leg needs the fixed binary)*
+
+- [ ] 12-02-PLAN.md — Committed `tools/fp4/e2e_validation.ps1` E2E gate (CPU + Vulkan vs FP32 baseline, measure-then-lock tolerances, D-10 diagnostics, D-11 negative leg) + README (SGV2-31, SGV2-32)
 
 **(Renumbering provenance: Phase 8 was Phase 5, 9←6, 10←7, 11←8, 12←9. Dependencies: Phase 8 ← Phase 4 (v1.0) + v2.0 learnings; Phase 9 ← 8; Phase 10 ← 9; Phase 11 ← 8, 10; Phase 12 ← 11.)**
 
