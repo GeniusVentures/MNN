@@ -50,7 +50,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 - [x] **Phase 8: Schema + Sidecar Wiring** - Add `buffer:[byte]` to `SGFP4DequantParam` and wire `RemoveParams.cpp` to externalize it through the existing shared sidecar mechanism (completed 2026-08-28)
 - [ ] **Phase 9: Real-Weight C++ Encoder Port** - Port the Python quadtree/dual-mode encoder to C++, operating on real (non-64-aligned) weight tensor shapes
 - [x] **Phase 10: Real-Weight Validation Against Actual Model Statistics** - Validate/revise encoder parameters against a real model's weight distributions before graph-rewrite integration (completed 2026-09-01)
-- [ ] **Phase 11: Graph-Rewrite PostConverter Pass + CLI Flag** - New `PostConverter` pass inserts `SGFP4Dequant` nodes; new CLI flag triggers it; `WeightQuantAndCoding.cpp` skip-guard prevents double-processing
+- [x] **Phase 11: Graph-Rewrite PostConverter Pass + CLI Flag** - New `PostConverter` pass inserts `SGFP4Dequant` nodes; new CLI flag triggers it; `WeightQuantAndCoding.cpp` skip-guard prevents double-processing (completed 2026-09-01)
 - [ ] **Phase 12: End-to-End Validation** - A real model converts and runs correct inference on CPU and Vulkan via the new flag
 
 ### Phase 8: Schema + Sidecar Wiring
@@ -143,23 +143,23 @@ Plans:
 5. **No-regression (D-14):** flag OFF = dead code; all 13 `op/sgfp4` suites + existing converter tests green with zero test-file edits (`git status test/` clean).
 6. **Tech debt retired (D-09/D-10/D-11):** W-1 verified-and-closed (already fixed at `1df51b7e` — verify + annotate, no edit); W-2 `failCleanup` hoisted above arg validation (stale-artifact removal on usage-exit paths, probe recorded); W-3 `SGFP4_GNUS_POC_ROOT` env-var override in the three tools/fp4 scripts.
 
-**Plans**: 5 plans
+**Plans**: 5/5 plans complete
 
 Plans:
 
 **Wave 1** *(independent — run in parallel)*
 
-- [ ] 11-01-PLAN.md — CMake hoist + `useSGFP4` field + `InsertSGFP4Dequant` pass + registration + D-02 skip-guard (SGV2-28, SGV2-30)
-- [ ] 11-02-PLAN.md — Tech-debt retirement: W-1 verify-close, W-2 failCleanup hoist, W-3 env-var root (SGV2-30 hygiene)
+- [x] 11-01-PLAN.md — CMake hoist + `useSGFP4` field + `InsertSGFP4Dequant` pass + registration + D-02 skip-guard (SGV2-28, SGV2-30)
+- [x] 11-02-PLAN.md — Tech-debt retirement: W-1 verify-close, W-2 failCleanup hoist, W-3 env-var root (SGV2-30 hygiene)
 
 **Wave 2** *(blocked on 11-01)*
 
-- [ ] 11-03-PLAN.md — `--sgfp4` flag + D-05 mutex + OQ1 exit-code fix (SGV2-29)
-- [ ] 11-04-PLAN.md — `TestSGFP4Converter` PHASE C pass-mechanics tests, D-12 (SGV2-28, SGV2-30)
+- [x] 11-03-PLAN.md — `--sgfp4` flag + D-05 mutex + OQ1 exit-code fix (SGV2-29)
+- [x] 11-04-PLAN.md — `TestSGFP4Converter` PHASE C pass-mechanics tests, D-12 (SGV2-28, SGV2-30)
 
 **Wave 3** *(blocked on 11-02, 11-03, 11-04)*
 
-- [ ] 11-05-PLAN.md — D-13 corpus smoke + D-14 flag-off no-regression gate + README (SGV2-28, SGV2-29, SGV2-30)
+- [x] 11-05-PLAN.md — D-13 corpus smoke + D-14 flag-off no-regression gate + README (SGV2-28, SGV2-29, SGV2-30)
 
 ### Phase 12: End-to-End Validation
 
@@ -186,5 +186,5 @@ Plans:
 | 8. Schema + Sidecar Wiring | v3.0 | 6/6 | Complete    | 2026-08-28 |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
 | 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 3/3 | Complete    | 2026-09-01 |
-| 11. Graph-Rewrite PostConverter Pass + CLI Flag | v3.0 | 0/TBD | Not started | - |
+| 11. Graph-Rewrite PostConverter Pass + CLI Flag | v3.0 | 5/5 | Complete    | 2026-09-01 |
 | 12. End-to-End Validation | v3.0 | 0/TBD | Not started | - |

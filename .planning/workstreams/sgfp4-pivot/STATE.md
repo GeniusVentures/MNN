@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: 11
-current_phase_name: Graph-Rewrite PostConverter Pass + CLI Flag
+current_phase: 12
+current_phase_name: End-to-End Validation
 status: executing
-stopped_at: Phase 11 context gathered (11-CONTEXT.md, 14 decisions locked)
-last_updated: "2026-09-01T19:53:45.579Z"
+stopped_at: "Phase 11 context gathered (11-CONTEXT.md committed 54ac5625 — 14 decisions: registered PostConverter pass, inputs>1 skip-guard, --sgfp4 bool flag w/ hard mutex, 4 conv types + D-03 floor, Python-identical thresholds, W-1/W-2/W-3 retirement, TestSGFP4Converter extension + AlexNet CLI smoke)"
+last_updated: "2026-09-01T23:00:19.037Z"
 last_activity: 2026-09-01
-last_activity_desc: Phase 10 complete, transitioned to Phase 11
+last_activity_desc: Phase 11 complete, transitioned to Phase 12
 progress:
   total_phases: 5
-  completed_phases: 3
-  total_plans: 14
-  completed_plans: 14
-  percent: 60
+  completed_phases: 4
+  total_plans: 19
+  completed_plans: 19
+  percent: 80
 current_plan: none
 ---
 
@@ -29,12 +29,12 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 11 — Graph-Rewrite PostConverter Pass + CLI Flag
+Phase: 12 — End-to-End Validation
 Plan: Not started
-Status: Ready to execute
+Status: Executing Phase 11
 Corpus approved (D-01/D-02): `W:\gnus\models\alexnet_Opset16.onnx` ONLY — 16 FP32 tensors / 61.1M elems, two real non-64-aligned tensors (D-04 synthetic fallback moot)
 Tiny-tensor floor approved (D-03): light tier iff `elements < 4096` OR `dimI == 1`
-Last activity: 2026-09-01 — Phase 10 complete, transitioned to Phase 11
+Last activity: 2026-09-01 — Phase 11 complete, transitioned to Phase 12
 
 ## Progress
 
