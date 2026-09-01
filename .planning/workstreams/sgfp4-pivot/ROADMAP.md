@@ -49,7 +49,7 @@ Formerly the v2.0 milestone (roadmapped 2026-08-25 at 0% execution; moved 2026-0
 
 - [x] **Phase 8: Schema + Sidecar Wiring** - Add `buffer:[byte]` to `SGFP4DequantParam` and wire `RemoveParams.cpp` to externalize it through the existing shared sidecar mechanism (completed 2026-08-28)
 - [ ] **Phase 9: Real-Weight C++ Encoder Port** - Port the Python quadtree/dual-mode encoder to C++, operating on real (non-64-aligned) weight tensor shapes
-- [ ] **Phase 10: Real-Weight Validation Against Actual Model Statistics** - Validate/revise encoder parameters against a real model's weight distributions before graph-rewrite integration
+- [x] **Phase 10: Real-Weight Validation Against Actual Model Statistics** - Validate/revise encoder parameters against a real model's weight distributions before graph-rewrite integration (completed 2026-09-01)
 - [ ] **Phase 11: Graph-Rewrite PostConverter Pass + CLI Flag** - New `PostConverter` pass inserts `SGFP4Dequant` nodes; new CLI flag triggers it; `WeightQuantAndCoding.cpp` skip-guard prevents double-processing
 - [ ] **Phase 12: End-to-End Validation** - A real model converts and runs correct inference on CPU and Vulkan via the new flag
 
@@ -119,13 +119,13 @@ Plans:
 3. **C++ encode-parity sampled (D-11):** the shipped C++ encoder verified via `sgfp4_encode_dump.out` (`MNN_BUILD_SGFP4_TOOLS`, mirroring `sgfp4_inject.out` pattern) on sampled real layers — both non-64-aligned tensors, the largest aligned plane, one aligned conv kernel, ≥2 light-tier tensors — byte-exact vs `fp4_exporter.py --adaptive` (rtol 1e-4 decode-vs-decode as recorded fallback), decode-error stats matching the Python reference within rtol 1e-4.
 4. **Config struct shipped (D-08/D-09):** `sgfp4_encode.hpp` grows `EncodeConfig` (thresholds only, per D-10) with Python-identical defaults and a config-carrying overload; the knob-less one-shot overload unchanged; all 13 existing sgfp4 suites green WITHOUT test modification (compatibility proof); any threshold divergence rendered as a D-09 documented-delta block (gnus-poc proposal, no cross-repo changes) — or an explicit "no data-justified revision" statement.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans complete
 
 Plans:
 
 - [x] 10-01-PLAN.md — Validation driver `validate_real_weights.py`: corpus extraction, statistics sweep, D-07 all-layer gate, report + sidecar (SGV2-26)
 - [x] 10-02-PLAN.md — C++ parity harness `sgfp4_encode_dump.out` under `MNN_BUILD_SGFP4_TOOLS` + standalone byte-exactness smoke (SGV2-27)
-- [ ] 10-03-PLAN.md — `EncodeConfig` struct + parity-sampling integration + data-driven threshold delta loop + final report (SGV2-26, SGV2-27)
+- [x] 10-03-PLAN.md — `EncodeConfig` struct + parity-sampling integration + data-driven threshold delta loop + final report (SGV2-26, SGV2-27)
 
 **Wave structure**: 10-01 ∥ 10-02 (Wave 1) → 10-03 (Wave 2)
 
@@ -162,6 +162,6 @@ Plans:
 | 7. Multi-Tensor Hardening & Structured-Data Coverage | v2.0 | 3/3 | Complete    | 2026-08-28 |
 | 8. Schema + Sidecar Wiring | v3.0 | 6/6 | Complete    | 2026-08-28 |
 | 9. Real-Weight C++ Encoder Port | v3.0 | 0/TBD | Not started | - |
-| 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 2/3 | In Progress|  |
+| 10. Real-Weight Validation Against Actual Model Statistics | v3.0 | 3/3 | Complete   | 2026-09-01 |
 | 11. Graph-Rewrite PostConverter Pass + CLI Flag | v3.0 | 0/TBD | Not started | - |
 | 12. End-to-End Validation | v3.0 | 0/TBD | Not started | - |
