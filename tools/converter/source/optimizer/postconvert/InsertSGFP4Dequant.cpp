@@ -42,13 +42,13 @@
 //
 
 #include <cstring>
+#include <fstream>
 #include <vector>
 
 #include <MNN/MNNDefine.h>
 #include "../PostTreatUtils.hpp"
 #include "config.hpp"
 #include "../Global.hpp"
-#include "core/FileLoader.hpp"
 #include "MNN/SGFP4DequantUtils.hpp"
 #include "sgfp4_encode.hpp"
 
@@ -80,17 +80,27 @@ bool isSgfp4TargetOpType(MNN::OpType t) {
 // {weightOffset, weightBytes, biasBytes} (storeWeight pairs in
 // RemoveParams.cpp). Returns false on any open/seek/read failure or short
 // read -- the caller skips the conv untouched (T-11-01).
+//
+// NOTE (deviation from research KEY Q3): reads via std::ifstream, NOT
+// FileLoader. This pass runs INSIDE optimizeNet, while the converter's
+// own externalFile ofstream still holds the temp bin open. MSVC's
+// fopen_s/_wfopen_s (FileLoader's open path) requests EXCLUSIVE sharing,
+// so opening the bin there is a guaranteed sharing violation at this
+// point in the pipeline (writeFb.cpp's reload works only because it runs
+// after the stream closed). std::ifstream opens deny-none and reads the
+// flushed bytes back correctly (probe: TestSGFP4Converter PHASE C T7).
 bool reloadSpilledConvWeights(Convolution2DT* param, const std::string& opName) {
     if (param->external.size() != 3) {
         return false;
     }
-    FileLoader fl(kConvertExternalDataFile);
-    if (!fl.valid()) {
+    std::ifstream bin(kConvertExternalDataFile, std::ios::binary);
+    if (!bin.is_open()) {
         MNN_ERROR("InsertSGFP4Dequant: op '%s': cannot open %s for spilled-weight reload\n", opName.c_str(),
                   kConvertExternalDataFile);
         return false;
     }
-    if (0 != fl.offset(param->external[0])) {
+    bin.seekg((std::streamoff)param->external[0], std::ios::beg);
+    if (!bin.good()) {
         MNN_ERROR("InsertSGFP4Dequant: op '%s': seek to offset %lld in %s failed\n", opName.c_str(),
                   (long long)param->external[0], kConvertExternalDataFile);
         return false;
@@ -102,14 +112,16 @@ bool reloadSpilledConvWeights(Convolution2DT* param, const std::string& opName) 
                   opName.c_str(), (long long)param->external[1]);
         return false;
     }
-    if (!fl.read(reinterpret_cast<char*>(weight.data()), param->external[1])) {
+    bin.read(reinterpret_cast<char*>(weight.data()), (std::streamsize)param->external[1]);
+    if (bin.gcount() != (std::streamsize)param->external[1]) {
         MNN_ERROR("InsertSGFP4Dequant: op '%s': short read of %lld weight bytes from %s\n", opName.c_str(),
                   (long long)param->external[1], kConvertExternalDataFile);
         return false;
     }
     if (param->external[2] > 0) {
         param->bias.resize((size_t)(param->external[2] / (int64_t)sizeof(float)));
-        if (!fl.read(reinterpret_cast<char*>(param->bias.data()), param->external[2])) {
+        bin.read(reinterpret_cast<char*>(param->bias.data()), (std::streamsize)param->external[2]);
+        if (bin.gcount() != (std::streamsize)param->external[2]) {
             MNN_ERROR("InsertSGFP4Dequant: op '%s': short read of %lld bias bytes from %s\n", opName.c_str(),
                       (long long)param->external[2], kConvertExternalDataFile);
             return false;
