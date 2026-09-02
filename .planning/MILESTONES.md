@@ -1,5 +1,26 @@
 # Milestones
 
+## v3.0 SGFP4 v2 Converter Integration (Shipped: 2026-09-02)
+
+**Phases completed:** 5 phases, 21 plans (Phases 8-12, workstream `sgfp4-pivot`)
+**Closeout:** verified — 11/11 requirements (SGV2-22..32); 09/12-VERIFICATION.md consolidated from UAT evidence at close (v2.0 Phase-5 precedent); no standalone milestone audit (per-phase VERIFICATION reports + 10/10 Phase-12 UAT instead)
+
+**Key accomplishments:**
+
+- Schema `SGFP4DequantParam.buffer:[byte]` + buffer-first decode dispatch (CPU+Vulkan) + aligned 16-byte sidecar externalization in `RemoveParams.cpp`; `SGFP4TestUtil.hpp` dedup (Phase 8)
+- Byte-exact C++ port of gnus-poc `fp4_exporter.py --adaptive` (`tools/fp4/sgfp4_encode`) — 0 diff bytes vs Python; padded-crop decode path on CPU + Vulkan for non-64-aligned real shapes; deterministic committed fixtures (Phase 9)
+- Real-weight validation on the AlexNet corpus: D-07 gate reformulated (plain worst-leaf MSE), threshold convergence 581→0 in 3 iterations, committed acceptance report; `EncodeConfig` with Python-identical defaults (promotion declined to preserve cross-repo parity) (Phase 10)
+- `InsertSGFP4Dequant` PostConverter pass (buffer-staged, idempotent, transactional failures, 4-D conv dims) + `--sgfp4` CLI flag with hard mutex + `WeightQuantAndCoding` skip-guard; v2.0 tech debt W-1/W-2/W-3 retired (Phase 11)
+- E2E gate `tools/fp4/e2e_validation.ps1`: `mnnconvert --sgfp4` artifact runs correct inference on CPU + Vulkan vs FP32 baseline (locked tolerances, D-10 diagnostics, exit-code honesty) — surfacing and fixing 2 correctness-critical codec defects: spatial decode convention + encoder split-map coordinates/order (Phase 12)
+
+**Known gaps / deferred:**
+
+- D-09: threshold-table promotion in gnus-poc defaults — upstream proposal route; consumers pass `EncodeConfig` explicitly
+- E2E corpus (AlexNet ONNX) is a test-time dependency, documented in `tools/fp4/README.md` — not an always-on CI gate
+- Vulkan leg requires a real device by design (hard FAIL, never SKIP)
+- `MNN_BUILD_SGFP4_TOOLS` defaults OFF — release-packaging note for CLI binaries
+- SGV2-33..37 (Performance & Coverage) never scoped — deferred candidates for v4.0
+
 ## v2.0 SGFP4 v2 Model-Artifact Injection Tool (Shipped: 2026-08-28)
 
 **Phases completed:** 3 phases, 7 plans (Phases 5-7, workstream `sgfp4-pivot`)

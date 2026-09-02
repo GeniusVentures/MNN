@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.0
+milestone: v3.0 (shipped; next TBD)
 milestone_name: SGFP4 v2 Converter Integration
-current_phase: 12
-current_phase_name: end-to-end-validation
-status: verifying
-stopped_at: "Phase 12 COMPLETE: both plans executed (12-01 RunNetPass D-11 chain; 12-02 E2E gate + 2 codec fixes: spatial decode convention + encoder split-map bugs). Full gate PASS cpu+vulkan+D-11, 13/13 suites. Commits: c6d6906e a0728c4c 54bbeaf8 6292e25f 7f5ed0e0"
-last_updated: "2026-09-02T01:51:47.552Z"
+current_phase: none
+current_phase_name: none
+status: milestone_complete
+stopped_at: "v3.0 SHIPPED 2026-09-02: 5/5 phases, 21/21 plans, SGV2-22..32 complete 11/11. Archived to .planning/milestones/v3.0-*. 09/12-VERIFICATION consolidated at close. Tag v3.0."
+last_updated: "2026-09-02T18:45:00.000Z"
 last_activity: 2026-09-02
-last_activity_desc: Phase 12 execution started
+last_activity_desc: v3.0 milestone completed and archived
 progress:
   total_phases: 5
   completed_phases: 5
@@ -29,16 +29,16 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 12 (end-to-end-validation) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
+Phase: none — **v3.0 SHIPPED 2026-09-02** (Phases 8-12, 21/21 plans, SGV2-22..32 complete 11/11)
+Plan: none
+Status: Milestone complete — next milestone undefined
 Corpus approved (D-01/D-02): `W:\gnus\models\alexnet_Opset16.onnx` ONLY — 16 FP32 tensors / 61.1M elems, two real non-64-aligned tensors (D-04 synthetic fallback moot)
 Tiny-tensor floor approved (D-03): light tier iff `elements < 4096` OR `dimI == 1`
-Last activity: 2026-09-02 — Phase 12 execution started
+Last activity: 2026-09-02 — v3.0 milestone archived (ROADMAP collapsed, REQUIREMENTS reset, phase docs → `.planning/milestones/v3.0-phases/`, tag v3.0)
 
 ## Progress
 
-**Phases Complete:** 3/3 (v2.0 milestone — SHIPPED)
+**Phases Complete:** 3/3 (v3.0 milestone — SHIPPED 2026-09-02) · all milestones: v1.0 ✅ v2.0 ✅ v3.0 ✅
 
 Progress: [██████████] 100%
 
@@ -58,21 +58,22 @@ Progress: [██████████] 100%
 
 ### Pending Todos
 
+- **v3.0 archived 2026-09-02** (`.planning/milestones/v3.0-ROADMAP.md`, `v3.0-REQUIREMENTS.md` 11/11 complete, `v3.0-phases/`). 09-VERIFICATION.md and 12-VERIFICATION.md consolidated at close from UAT evidence (5/5, 10/10) per the v2.0 Phase-5 precedent. Next: `/gsd-new-milestone --ws sgfp4-pivot` — deferred candidates SGV2-33..37 (Performance & Coverage) in `.planning/milestones/v3.0-REQUIREMENTS.md`.
 - v1.0 archived 2026-08-26 (`.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`). SGV2-07..11 checkboxes and traceability rows corrected during archival (were stale — work was done, verify step just never flipped them).
-- **2026-08-26 restructure:** v2.0 is now the Model-Artifact Injection Tool (Phases 5-7, SGINJ-01..08), drafted from the SGFP4 handoff. The former v2.0 Converter Integration moved to v3.0 (Phases 8-12, SGV2-22..32) at 0% execution / zero plans — no renumbering cost. Next: `/gsd-plan-phase 5`.
-- v3.0 planning-time re-evaluations (noted in ROADMAP.md/REQUIREMENTS.md): whether the Phase 9 C++ encoder port is still justified vs. direct consumption of gnus-poc exporter output (injection tool consumes Python-produced containers directly); the real-validation model/corpus selection and non-64-multiple tiling/padding convention gaps move with Phase 10; the CLI flag naming question moves with Phase 11.
-- Starter artifact for Phase 5: `gnus-poc/models/specialists_mlx/demo/fp4/demo.sgfp4` (132,368 bytes, 512×512, byte-verified) — uniform random noise, all `UNIFORM_64`; a structured (non-uniform) second artifact is REQUIRED before Phase 7's quadtree coverage criterion can pass.
+- **2026-08-26 restructure:** v2.0 was the Model-Artifact Injection Tool (Phases 5-7, SGINJ-01..08), shipped 2026-08-28 and archived. The former Converter Integration moved to v3.0 (Phases 8-12, SGV2-22..32) — now also shipped.
+- Starter artifact for Phase 5 (historical): `gnus-poc/models/specialists_mlx/demo/fp4/demo.sgfp4` (132,368 bytes, 512×512, byte-verified) — superseded by the v3.0 converter path.
 - Do NOT consume gnus-poc `pipeline/runner.py` default quantize output (invokes exporter without `--adaptive` → legacy v1, unsupported by the decoder). gnus-poc-side fix needed; not this workstream's job.
 - Terminology: the format is "SGFP4 v2" — never "Ultra FP4" (that name collision with gnus-poc manifests refers to a different, unrelated E2M1 format from the sibling `milestone` workstream).
-- `test/op/FP4ModelTest.cpp` (pre-existing, unrelated dead code from `milestone` workstream commit `cffaf4bd`) still blocks a from-scratch `run_test.out` build; see `01-affine-dual-mode-decode-core-cpu-uniform-layouts/deferred-items.md`. Recommend the `milestone` workstream's own Phase 4 plan 04-02 fix or remove it — confirmed still broken/unfixed as of this session (04-02-SUMMARY.md's Deviations section).
-- Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — deferred, acknowledged in MILESTONES.md v1.0 entry; run `/gsd-verify-work 2` retroactively if a formal verification artifact is ever wanted
+- `test/op/FP4ModelTest.cpp` (pre-existing dead code from `milestone` workstream commit `cffaf4bd`) was minimally repaired in Phase 9 to link `run_test.out` (orphaned fragment deleted, `FP4ModelConversionTest` preserved) — the `milestone` workstream should ratify or supersede.
+- Doc debt: no `02-VERIFICATION.md` exists (Phases 1 and 3 have one) — deferred, acknowledged in MILESTONES.md v1.0 entry; run `/gsd-verify-work 2` retroactively if a formal verification artifact is ever wanted.
+- v3.0 deferred items: D-09 gnus-poc threshold-table promotion (upstream proposal); E2E corpus is a test-time dependency (documented in `tools/fp4/README.md`, not an always-on CI gate); Vulkan leg requires a real device (hard FAIL by design); `MNN_BUILD_SGFP4_TOOLS` defaults OFF (release-packaging note).
 
 ## Session Continuity
 
-**Last session:** 2026-09-02T01:51:47.546Z
+**Last session:** 2026-09-02 (v3.0 close)
 
-**Stopped At:** Phase 12 COMPLETE: both plans executed (12-01 RunNetPass D-11 chain; 12-02 E2E gate + 2 codec fixes: spatial decode convention + encoder split-map bugs). Full gate PASS cpu+vulkan+D-11, 13/13 suites. Commits: c6d6906e a0728c4c 54bbeaf8 6292e25f 7f5ed0e0
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/12-end-to-end-validation/12-02-SUMMARY.md
+**Stopped At:** v3.0 SHIPPED 2026-09-02 — requirements SGV2-22..32 complete 11/11; 09/12-VERIFICATION.md consolidated from UAT evidence at close (v2.0 Phase-5 precedent); ROADMAP collapsed, REQUIREMENTS reset, phase docs archived to `.planning/milestones/v3.0-phases/`; tag v3.0.
+**Resume File:** none — run `/gsd-new-milestone --ws sgfp4-pivot` to define v4.0 (deferred candidates: SGV2-33..37)
 
 ## Performance Metrics
 
