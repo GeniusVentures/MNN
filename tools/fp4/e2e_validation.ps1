@@ -21,7 +21,8 @@
 #   Form/sanity anchor: tools/fp4/real_weight_validation_report.json
 #   (context.thresholds."64": max_mse 0.01, max_relative 0.384 - weight-level
 #   metrics, cited for provenance only, never transcribed as output gates).
-#   Locked values below = 2.0x measured worst across BOTH backends, <date>.
+#   Locked values below = 2.0x measured worst across BOTH backends, locked
+#   2026-09-01 (see the LOCKED block below for per-backend measured values).
 #   CAVEAT: the driver's output.txt text dump carries ~1e-5 print precision
 #   (std::ofstream default ~6 significant digits) - tolerances below that
 #   floor are meaningless (Pitfall 2/A3).
@@ -45,11 +46,21 @@ param(
 $ErrorActionPreference = "Stop"
 
 # ----------------------------------------------------------------------------
-# Locked tolerances (Task 2 fills these from -MeasureOnly data).
-# MUST-LOCK: placeholders until measured; do not ship a gate run on 0.0.
+# LOCKED tolerances (measure-then-lock, Plan 12-02 Task 2).
+# Derivation (2026-09-01, corpus W:\gnus\models\alexnet_Opset16.onnx, seed
+# 20260901, after the Phase 12 codec fixes -- spatial decode convention +
+# encoder split-map fixes, commit 54bbeaf8):
+#   measured cpu:    max-abs 5.07216500 (idx 533), max-rel 237.302592 (idx 573)
+#   measured vulkan: max-abs 3.92699000 (idx 533), max-rel 474.300803 (idx 638)
+#   measured worst across BOTH backends: max-abs 5.07216500, max-rel 474.300803
+#   locked = 2.0x measured worst (documented margin), same gate for both
+#   backends (D-06).
+# Form/sanity anchor (provenance only, never transcribed): tools/fp4/
+# real_weight_validation_report.json context.thresholds."64"
+# (max_mse 0.01, max_relative 0.384) -- weight-level metrics.
 # ----------------------------------------------------------------------------
-$TolAbs = 0.0   # MUST-LOCK: 2.0 x measured worst max-abs  (both backends)
-$TolRel = 0.0   # MUST-LOCK: 2.0 x measured worst max-rel  (both backends)
+$TolAbs = 10.14433    # = 2.0 x 5.07216500
+$TolRel = 948.601606  # = 2.0 x 474.300803
 $Eps    = 1e-3  # guarded relative-error denominator floor (Phase 10 D-07)
 $Seed   = 20260901
 
@@ -61,7 +72,7 @@ if (-not (Test-Path $MnnConvert)) { Write-Host "FAIL: MNNConvert not found at '$
 if (-not (Test-Path $Driver)) { Write-Host "FAIL: driver not found at '$Driver' (pass -Driver)"; exit 2 }
 
 # NOTE: capture via cmd /c so vulkaninfo's stderr loader warnings merge as
-# plain text — under $ErrorActionPreference=Stop a native 2>&1 redirect in
+# plain text - under $ErrorActionPreference=Stop a native 2>&1 redirect in
 # PS 5.1 turns stderr lines into ErrorRecords and can throw.
 $vulkanInfo = $null
 try {

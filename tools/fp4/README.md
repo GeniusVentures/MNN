@@ -122,3 +122,73 @@ Corpus provenance: `W:\gnus\models\alexnet_Opset16.onnx` (sha256
 corpus converts identically to a flag-less build, all 13 `op/sgfp4`
 suites pass with zero `test/` modifications, and
 `TestSGFP4Converter.exe` (PHASE A+B+C) is green.
+
+## SGFP4 v2 end-to-end validation (Phase 12 -- test-time manual gate)
+
+One committed script invocation converts the approved corpus FP32 (baseline)
+and SGFP4, runs both artifacts on CPU AND Vulkan (classic API), and gates the
+SGFP4 outputs against the same FP32 baseline with locked tolerances --
+closing SGV2-31 (CPU) and SGV2-32 (Vulkan) for the v3.0 milestone. Like the
+Phase 11 smoke, this is a **test-time manual gate**: the corpus is a
+developer-machine dependency, NOT an always-on CI gate.
+
+Corpus provenance: `W:\gnus\models\alexnet_Opset16.onnx` (sha256 `4bc388cc…`,
+Phase 10 D-01/D-02 approval; 8 full-tier conv-family weights).
+
+**Prerequisites:** built `.build\Release` binaries (`MNNConvert.exe`,
+`MNNV2Basic.out.exe`) AND a **WORKING VULKAN DEVICE** -- hard requirement,
+no SKIP semantics (D-07): the script runs `vulkaninfo --summary` up front and
+exits 2 when no device is found.
+
+```powershell
+pwsh tools/fp4/e2e_validation.ps1 -Corpus W:\gnus\models\alexnet_Opset16.onnx
+# expect: "node-presence: InsertSGFP4Dequant ops 74 -> 82"
+#         "vulkan backend confirmed: backendType is 7"
+#         "PASS: cpu max-abs=... (idx ...), max-rel=... (idx ...)"
+#         "PASS: vulkan max-abs=..., max-rel=..."
+#         "PASS: D-11 negative leg (corrupt + --sgfp4 -> exit 1, no 'Converted Success!')"
+#         "E2E VALIDATION: PASS (cpu + vulkan + D-11 negative)", exit 0
+```
+
+| Parameter | Required | Default | Purpose |
+|-----------|----------|---------|---------|
+| `-Corpus` | yes | -- | ONNX model to convert + run |
+| `-MnnConvert` | no | `.build/Release/MNNConvert.exe` | converter binary |
+| `-Driver` | no | `.build/Release/MNNV2Basic.out.exe` | classic-API session driver (D-09: existing driver, no new validator target) |
+| `-WorkRoot` | no | `tmp/p12_e2e` | scratch dir (removed on pass, kept on fail) |
+| `-MeasureOnly` | no | off | print measured max-abs/max-rel + suggested lock, no gating |
+
+**Tolerance methodology (measure-then-lock):** the gate is max-abs (primary)
+AND guarded relative error (secondary): `relErr_i = absErr_i /
+max(|baseline_i|, 1e-3)`. Form/sanity anchor: `tools/fp4/
+real_weight_validation_report.json` (`context.thresholds."64"`: max_mse 0.01,
+max_relative 0.384 -- weight-level metrics, cited for provenance only, never
+transcribed as output gates). Measured (2026-09-01, post Phase-12 codec
+fixes, seed 20260901): cpu max-abs 5.07216500 / max-rel 237.302592; vulkan
+max-abs 3.92699000 / max-rel 474.300803. **Locked** = 2.0x measured worst
+across both backends, same gate for both (D-06): `TolAbs = 10.14433`,
+`TolRel = 948.601606`. Caveat: the driver's `output.txt` text dump carries
+~1e-5 print precision (~6 significant digits) -- tolerances below that floor
+are meaningless.
+
+**Synthetic input:** seed `20260901`, uniform `[-1, 1)`, 150,528 floats
+(1x3x224x224), written once and byte-identically fed to all three legs
+(baseline-cpu / sgfp4-cpu / sgfp4-vulkan, each in an isolated working
+directory; precision mask 1 = Precision_High on every leg).
+
+**Exit codes:** 0 = all gates PASS; 1 = tolerance or assertion FAIL
+(per-backend diagnostics: max-abs + argmax index, max-rel + argmax index);
+2 = infra (missing corpus/binaries or no Vulkan device).
+
+**D-11 negative leg:** each run also converts ~1 KB of garbage with
+`--sgfp4` and asserts a non-zero exit with NO `Converted Success!` -- the
+consumer-side proof of Plan 12-01's converter error-escalation chain.
+
+**Phase 12 codec fixes (inherent to this gate's numbers):** the gate exposed
+two codec defects fixed in this phase -- (1) the CPU runtime decoder used a
+leaf-concat stream order where the normative convention (gnus-poc
+`decode_v2`, and the Vulkan shader) is spatial padded-plane placement; (2)
+the C++ encoder's MIXED split-map walk compared global coordinates against a
+local walk and pushed children in the wrong order, corrupting every deep
+quadtree outside superblock (0,0). Tolerances above are measured against the
+fixed codec.
