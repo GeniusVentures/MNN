@@ -36,7 +36,6 @@ private:
     // shapes decode through dequant_sgfp4_container_cpu_crop.
     int mPaddedDimO = 0;
     int mPaddedDimI = 0;
-    bool mIsPadded = false;
 };
 
 } // namespace MNN

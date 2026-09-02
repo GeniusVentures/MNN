@@ -79,7 +79,6 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
     }
     mPaddedDimO = ((dimO + 63) / 64) * 64;
     mPaddedDimI = ((dimI + 63) / 64) * 64;
-    mIsPadded = (mPaddedDimO != dimO || mPaddedDimI != dimI);
     // Buffer-first dispatch (D-01/D-02, Plan 08-03): a non-empty inline
     // `buffer` is the live decode source -- no FileLoader, no externalPath.
     // Copy into mContainer for safety (the FlatBuffers buffer may point
@@ -95,22 +94,23 @@ ErrorCode CPUSGFP4Dequant::onResize(const std::vector<Tensor*>& inputs, const st
         // Dims-consistency: eager oracle decode into scratch (Q2 decision --
         // the eager oracle doubles as the buffer-mode replacement for the
         // sidecar path's T-01-04 file-size DoS bound; the buffer is already
-        // fully materialized in memory). Padded planes (D-11a) validate via
-        // the crop overload with the derived padded geometry.
-        if (mIsPadded) {
-            std::vector<float> scratch(outputs[0]->elementSize(), 0.0f);
-            if (!dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), scratch.data(), dimO, dimI,
-                                                  mPaddedDimO, mPaddedDimI)) {
-                mContainer.clear();
-                return INVALID_VALUE;
-            }
-        } else {
-            std::vector<float> scratch(outputs[0]->elementSize());
-            if (!dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), scratch.data(),
-                                             outputs[0]->elementSize())) {
-                mContainer.clear();
-                return INVALID_VALUE;
-            }
+        // fully materialized in memory).
+        //
+        // Phase 12 (Plan 12-02) codec fix: ALWAYS decode through the spatial
+        // padded-plane overload. The flat dequant_sgfp4_container_cpu is a
+        // leaf-major LINEAR STREAM that equals the row-major plane only for
+        // one-superblock-wide grids (tiles_x == 1); the normative convention
+        // (gnus-poc decode_v2, matched by the encoder's superblock ordering)
+        // places record (by, bx) at rows by*64..+64 / cols bx*64..+64. Real
+        // conv weights with dimI > 64 decoded to garbage through the flat
+        // path (reproducer: encode->flat-decode on 128+-col planes diverges
+        // ~2x; spatial round-trips at FP4 noise level). The crop overload's
+        // aligned case is the spatial decode with a no-op stride crop.
+        std::vector<float> scratch(outputs[0]->elementSize(), 0.0f);
+        if (!dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), scratch.data(), dimO, dimI,
+                                              mPaddedDimO, mPaddedDimI)) {
+            mContainer.clear();
+            return INVALID_VALUE;
         }
         return NO_ERROR;
     }
@@ -173,20 +173,16 @@ ErrorCode CPUSGFP4Dequant::onExecute(const std::vector<Tensor*>& inputs, const s
         return INVALID_VALUE;
     }
     // Malformed container: return an error rather than writing partial
-    // garbage silently. Padded planes (D-11a) decode through the crop
-    // overload; the flat-copy path is identical for aligned dims.
-    bool ok;
-    if (mIsPadded) {
-        auto param = mOp->main_as_SGFP4DequantParam();
-        int dimO = 0, dimI = 0;
-        if (!readDecodeDims(param, dimO, dimI)) {
-            return INVALID_VALUE;
-        }
-        ok = dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), dest, dimO, dimI, mPaddedDimO,
-                                              mPaddedDimI);
-    } else {
-        ok = dequant_sgfp4_container_cpu(mContainer.data(), mContainer.size(), dest, elementCount);
+    // garbage silently. All planes decode through the SPATIAL crop overload
+    // (Phase 12 codec fix -- see onResize); the aligned case is the same
+    // spatial decode with a no-op stride crop.
+    auto param = mOp->main_as_SGFP4DequantParam();
+    int dimO = 0, dimI = 0;
+    if (!readDecodeDims(param, dimO, dimI)) {
+        return INVALID_VALUE;
     }
+    bool ok = dequant_sgfp4_container_cpu_crop(mContainer.data(), mContainer.size(), dest, dimO, dimI, mPaddedDimO,
+                                               mPaddedDimI);
     if (!ok) {
         return INVALID_VALUE;
     }

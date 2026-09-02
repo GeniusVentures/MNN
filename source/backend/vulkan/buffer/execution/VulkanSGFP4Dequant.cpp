@@ -241,19 +241,18 @@ public:
         // D-05: one-time host pre-validation with the Phase-1-tested
         // fully-bounds-checked CPU walk (T-03-03). A false return prevents
         // Execution construction entirely: no upload, no dispatch, no
-        // partial output writes. Padded planes (Plan 09-02, D-11a) validate
-        // through the crop overload -- same walk, padded geometry.
+        // partial output writes.
+        // Phase 12 (Plan 12-02) codec fix: always validate through the
+        // SPATIAL crop overload -- the flat dequant_sgfp4_container_cpu is
+        // a leaf-major linear stream, only plane-correct for
+        // one-superblock-wide grids. The shader already decodes spatially;
+        // this keeps host validation and device decode on the same
+        // convention (the aligned case is a no-op stride crop).
         int paddedDimO = ((dimO + 63) / 64) * 64;
         int paddedDimI = ((dimI + 63) / 64) * 64;
-        bool ok;
         std::vector<float> scratch(static_cast<size_t>(elementCount), 0.0f);
-        if (paddedDimO != dimO || paddedDimI != dimI) {
-            ok = dequant_sgfp4_container_cpu_crop(container.data(), container.size(), scratch.data(), dimO, dimI,
-                                                  paddedDimO, paddedDimI);
-        } else {
-            ok = dequant_sgfp4_container_cpu(container.data(), container.size(), scratch.data(),
-                                             static_cast<size_t>(elementCount));
-        }
+        bool ok = dequant_sgfp4_container_cpu_crop(container.data(), container.size(), scratch.data(), dimO, dimI,
+                                                   paddedDimO, paddedDimI);
         if (!ok) {
             MNN_ERROR("VulkanSGFP4Dequant: container failed host pre-validation\n");
             return nullptr;

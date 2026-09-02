@@ -471,11 +471,20 @@ inline int run(int argc, const char* argv[]) {
             return 1;
         }
         std::vector<float> oracle(elementCount, 0.0f);
-        if (!MNN::dequant_sgfp4_container_cpu(node.containerBytes.data(), node.containerBytes.size(), oracle.data(),
-                                              elementCount)) {
-            MNN_ERROR("sgfp4_inject: oracle decode of container for '%s' failed\n", node.weightName.c_str());
-            failCleanup();
-            return 1;
+        // Phase 12 codec fix: the oracle must use the normative SPATIAL
+        // padded-plane decode (the runtime's convention, gnus-poc decode_v2).
+        // The flat stream decoder is leaf-concat order, only plane-correct for
+        // one-superblock-wide grids; the verification module's runtime decode
+        // goes through CPUSGFP4Dequant (spatial), so the oracle must match.
+        {
+            const int pdO = ((node.dimO + 63) / 64) * 64;
+            const int pdI = ((node.dimI + 63) / 64) * 64;
+            if (!MNN::dequant_sgfp4_container_cpu_crop(node.containerBytes.data(), node.containerBytes.size(),
+                                                       oracle.data(), node.dimO, node.dimI, pdO, pdI)) {
+                MNN_ERROR("sgfp4_inject: oracle decode of container for '%s' failed\n", node.weightName.c_str());
+                failCleanup();
+                return 1;
+            }
         }
         bool ok = true;
         for (size_t k = 0; k < elementCount; ++k) {

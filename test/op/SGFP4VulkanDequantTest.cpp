@@ -143,12 +143,18 @@ public:
 
             bool pass = true;
             // (b+c) CPU reference decode + fixture-drift guard.
+            // Phase 12 codec fix: fixtures are in the normative SPATIAL
+            // plane order now; the CPU reference decode must be spatial too.
             std::vector<float> cpuOut(fixture.expectedCount);
-            if (!MNN::dequant_sgfp4_container_cpu(fixture.container, fixture.containerSize, cpuOut.data(),
-                                                  fixture.expectedCount)) {
-                MNN_ERROR("SGFP4VulkanDequantTest: CPU reference decode failed for '%s'\n", fixture.name);
-                std::remove(sidecarPath.c_str());
-                return false;
+            {
+                const int pdO = ((fixture.dimO + 63) / 64) * 64;
+                const int pdI = ((fixture.dimI + 63) / 64) * 64;
+                if (!MNN::dequant_sgfp4_container_cpu_crop(fixture.container, fixture.containerSize, cpuOut.data(),
+                                                           fixture.dimO, fixture.dimI, pdO, pdI)) {
+                    MNN_ERROR("SGFP4VulkanDequantTest: CPU reference decode failed for '%s'\n", fixture.name);
+                    std::remove(sidecarPath.c_str());
+                    return false;
+                }
             }
             if (!checkVectorByRelativeError<float>(cpuOut.data(), fixture.expected,
                                                    static_cast<int>(fixture.expectedCount),
@@ -214,12 +220,16 @@ public:
             const sgfp4_fixtures::Fixture& fixture = sgfp4_fixtures::kFixtures[i];
             ++checked;
 
-            // CPU oracle reference.
+            // CPU oracle reference (Phase 12 codec fix: spatial / normative).
             std::vector<float> cpuOut(fixture.expectedCount);
-            if (!MNN::dequant_sgfp4_container_cpu(fixture.container, fixture.containerSize, cpuOut.data(),
-                                                  fixture.expectedCount)) {
-                MNN_ERROR("SGFP4VulkanBufferParityTest: CPU reference decode failed for '%s'\n", fixture.name);
-                return false;
+            {
+                const int pdO = ((fixture.dimO + 63) / 64) * 64;
+                const int pdI = ((fixture.dimI + 63) / 64) * 64;
+                if (!MNN::dequant_sgfp4_container_cpu_crop(fixture.container, fixture.containerSize, cpuOut.data(),
+                                                           fixture.dimO, fixture.dimI, pdO, pdI)) {
+                    MNN_ERROR("SGFP4VulkanBufferParityTest: CPU reference decode failed for '%s'\n", fixture.name);
+                    return false;
+                }
             }
 
             // Tight pass (Precision_High → FP32 shader variant); relaxed

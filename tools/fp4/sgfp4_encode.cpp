@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -592,7 +593,13 @@ uint32_t classifyLayout(const std::vector<Leaf>& leaves) {
 }
 
 // Pre-order DFS bitmap consumed by the decoder walk (TL/TR/BL/BR).
-void buildSplitMapBits(const std::vector<Leaf>& leaves, uint32_t (&words)[kSGFP4SplitMapWords]) {
+void buildSplitMapBits(const std::vector<Leaf>& leaves, uint32_t (&words)[kSGFP4SplitMapWords],
+                       int originY, int originX) {
+    // Phase 12 codec fix: Leaf.y/x are GLOBAL padded-plane coordinates
+    // (tryBlock receives sbR*64/sbC*64 origins), but the split-map walk is
+    // in-records LOCAL (the decoder's sgfp4_walk_quadtree starts at
+    // (0,0,64)). Subtract the superblock origin before comparing, or every
+    // superblock except (0,0) emits a corrupt split map.
     const int total = static_cast<int>(leaves.size());
     int leafIndex = 0;
     int bitIndex = 0;
@@ -615,12 +622,14 @@ void buildSplitMapBits(const std::vector<Leaf>& leaves, uint32_t (&words)[kSGFP4
             break;
         }
         const Leaf& leaf = leaves[static_cast<size_t>(leafIndex)];
+        const int localY = leaf.y - originY;
+        const int localX = leaf.x - originX;
         if (f.size == kMinLeafSize) {
             // Forced leaf; emits no bit. The leaf must match.
             leafIndex++;
             continue;
         }
-        if (leaf.y == f.y && leaf.x == f.x && leaf.size == f.size) {
+        if (localY == f.y && localX == f.x && leaf.size == f.size) {
             if (bitIndex < kSplitMapMaxBits) {
                 bits[bitIndex++] = 0; // leaf
             } else {
@@ -638,11 +647,14 @@ void buildSplitMapBits(const std::vector<Leaf>& leaves, uint32_t (&words)[kSGFP4
             break;
         }
         int half = f.size / 2;
-        // Push reverse so TL pops first.
-        stack[top++] = WalkFrame{f.y + half, f.x + half, half};
-        stack[top++] = WalkFrame{f.y, f.x + half, half};
-        stack[top++] = WalkFrame{f.y + half, f.x, half};
-        stack[top++] = WalkFrame{f.y, f.x, half};
+        // Push reverse so TL pops first, then TR, BL, BR (Phase 12 codec
+        // fix: the previous order popped BL before TR, emitting a bitstream
+        // the decoder's TL/TR/BL/BR walk misread -- corrupt split maps on
+        // every deep MIXED tree outside superblock (0,0)).
+        stack[top++] = WalkFrame{f.y + half, f.x + half, half}; // BR
+        stack[top++] = WalkFrame{f.y + half, f.x, half};        // BL
+        stack[top++] = WalkFrame{f.y, f.x + half, half};        // TR
+        stack[top++] = WalkFrame{f.y, f.x, half};               // TL
     }
     (void)overflow;
 
@@ -670,7 +682,19 @@ std::vector<uint8_t> assembleSuperblockRecord(const std::vector<Leaf>& leaves) {
     std::vector<Leaf> ordered;
     if (layout == kSGFP4LayoutMixed) {
         uint32_t words[kSGFP4SplitMapWords];
-        buildSplitMapBits(leaves, words);
+        // The walk is LOCAL to this record: derive the origin from the first
+        // leaf's superblock (all leaves share it).
+        int originY = leaves.empty() ? 0 : (leaves[0].y / kMacroblockSize) * kMacroblockSize;
+        int originX = leaves.empty() ? 0 : (leaves[0].x / kMacroblockSize) * kMacroblockSize;
+        buildSplitMapBits(leaves, words, originY, originX);
+#ifdef SGFP4_ENCODE_DEBUG_DUMP
+        fprintf(stderr, "[sgfp4_encode] MIXED record origin=(%d,%d) nleaves=%zu map=%08x %08x %08x first=(%d,%d,%d)\n",
+                originY, originX, leaves.size(), words[0], words[1], words[2], leaves[0].y, leaves[0].x,
+                leaves[0].size);
+        for (size_t li = 0; li < leaves.size(); ++li) {
+            fprintf(stderr, "  leaf[%zu] global=(%d,%d) size=%d\n", li, leaves[li].y, leaves[li].x, leaves[li].size);
+        }
+#endif
         for (int i = 0; i < kSGFP4SplitMapWords; ++i) {
             appendU32Le(record, words[i]);
         }

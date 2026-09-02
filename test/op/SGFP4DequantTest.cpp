@@ -78,8 +78,14 @@ private:
         for (size_t i = 0; i < sgfp4_fixtures::kFixtureCount; ++i) {
             const auto& fixture = sgfp4_fixtures::kFixtures[i];
             std::vector<float> out(fixture.expectedCount, 0.0f);
-            bool ok = MNN::dequant_sgfp4_container_cpu(fixture.container, fixture.containerSize, out.data(),
-                                                        fixture.expectedCount);
+            // Phase 12 codec fix: fixtures' expected vectors are now in the
+            // normative SPATIAL plane order; decode through the spatial crop
+            // overload (flat stream order was only plane-correct for
+            // one-superblock-wide grids).
+            const int pdO = ((fixture.dimO + 63) / 64) * 64;
+            const int pdI = ((fixture.dimI + 63) / 64) * 64;
+            bool ok = MNN::dequant_sgfp4_container_cpu_crop(fixture.container, fixture.containerSize, out.data(),
+                                                           fixture.dimO, fixture.dimI, pdO, pdI);
             if (!ok) {
                 MNN_ERROR("SGFP4DequantTest: fixture '%s' decode returned false\n", fixture.name);
                 return false;
@@ -148,17 +154,31 @@ private:
         const int elementCount = 4 * leafElements;
 
         std::vector<float> out(elementCount, 0.0f);
-        bool ok = MNN::dequant_sgfp4_container_cpu(container.data(), container.size(), out.data(), elementCount);
+        // Phase 12 codec fix: decode SPATIALLY (the normative placement):
+        // leaf k's marker lands on its quadrant TILE, not a concat span.
+        bool ok = MNN::dequant_sgfp4_container_cpu_crop(container.data(), container.size(), out.data(), 64, 64, 64,
+                                                        64);
         if (!ok) {
             MNN_ERROR("SGFP4DequantTest: hand-built traversal golden decode returned false\n");
             return false;
         }
+        // Quadrant markers: leaf order TL(0), TR(1), BL(2), BR(3) maps to
+        // spatial tiles: TL rows 0..32 cols 0..32, TR rows 0..32 cols 32..64,
+        // BL rows 32..64 cols 0..32, BR rows 32..64 cols 32..64.
+        static const int kQuadRow[4] = {0, 0, 32, 32};
+        static const int kQuadCol[4] = {0, 32, 0, 32};
         for (int k = 0; k < 4; ++k) {
             std::vector<float> expected(leafElements, bias[k]);
-            if (!checkVectorByRelativeError<float>(out.data() + k * leafElements, expected.data(), leafElements,
+            std::vector<float> tile(leafElements);
+            for (int r = 0; r < n; ++r) {
+                for (int c = 0; c < n; ++c) {
+                    tile[(size_t)r * n + c] = out[(size_t)(kQuadRow[k] + r) * 64 + (kQuadCol[k] + c)];
+                }
+            }
+            if (!checkVectorByRelativeError<float>(tile.data(), expected.data(), leafElements,
                                                     kFixtureRelativeTolerance)) {
-                MNN_ERROR("SGFP4DequantTest: leaf %d did not decode to its bias marker %f (TL/TR/BL/BR order "
-                          "violation)\n", k, bias[k]);
+                MNN_ERROR("SGFP4DequantTest: leaf %d did not decode to its bias marker %f on its spatial quadrant "
+                          "(TL/TR/BL/BR order violation)\n", k, bias[k]);
                 return false;
             }
         }
@@ -828,28 +848,39 @@ private:
             return false;
         }
 
-        // Decode and verify the fixture's own expected stream agrees with the
-        // enumerator's leaf layout block-for-block: block i spans
-        // elements [cursor, cursor + n_i*n_i) and must match the fixture
-        // expected in that span (the encoder emitted leaves in the same DFS
-        // order -- agreement here proves both sides share one traversal).
+        // Phase 12 codec fix: decode SPATIALLY (normative placement) and
+        // verify each enumerator leaf lands on its (x, y) tile of the plane
+        // with the fixture's expected values there -- agreement proves both
+        // sides share one traversal AND one spatial placement convention.
         std::vector<float> out(fixture->expectedCount, 0.0f);
-        bool ok = MNN::dequant_sgfp4_container_cpu(fixture->container, fixture->containerSize, out.data(),
-                                                    fixture->expectedCount);
+        bool ok = MNN::dequant_sgfp4_container_cpu_crop(fixture->container, fixture->containerSize, out.data(),
+                                                       fixture->dimO, fixture->dimI, 64, 64);
         if (!ok) {
             MNN_ERROR("SGFP4MixedDecodeTest: mixed_asymmetric decode returned false\n");
             return false;
         }
-        size_t cursor = 0;
         for (int i = 0; i < expectCount; ++i) {
-            size_t blockElements = static_cast<size_t>(expect[i].n) * expect[i].n;
-            if (!checkVectorByRelativeError<float>(out.data() + cursor, fixture->expected + cursor,
-                                                    static_cast<int>(blockElements), kMixedTolerance)) {
-                MNN_ERROR("SGFP4MixedDecodeTest: DFS block %d (leaf %dx%d @ (%d,%d)) mismatch vs encoder "
-                          "order\n", i, expect[i].n, expect[i].n, expect[i].x, expect[i].y);
+            const int ln = expect[i].n;
+            size_t blockElements = static_cast<size_t>(ln) * ln;
+            std::vector<float> tile(blockElements);
+            std::vector<float> want(blockElements);
+            for (int r = 0; r < ln; ++r) {
+                for (int c = 0; c < ln; ++c) {
+                    tile[(size_t)r * ln + c] = out[(size_t)(expect[i].y + r) * fixture->dimI + (expect[i].x + c)];
+                    want[(size_t)r * ln + c] =
+                        fixture->expected[(size_t)(expect[i].y + r) * fixture->dimI + (expect[i].x + c)];
+                }
+            }
+            if (!checkVectorByRelativeError<float>(tile.data(), want.data(), static_cast<int>(blockElements),
+                                                    kMixedTolerance)) {
+                MNN_ERROR("SGFP4MixedDecodeTest: DFS block %d (leaf %dx%d @ (%d,%d)) mismatch vs spatial "
+                          "placement\n", i, ln, ln, expect[i].x, expect[i].y);
                 return false;
             }
-            cursor += blockElements;
+        }
+        size_t cursor = 0;
+        for (int i = 0; i < expectCount; ++i) {
+            cursor += static_cast<size_t>(expect[i].n) * expect[i].n;
         }
         if (cursor != fixture->expectedCount) {
             MNN_ERROR("SGFP4MixedDecodeTest: enumerator block total %zu != expected %zu\n", cursor,
@@ -874,8 +905,10 @@ private:
                 return false;
             }
             std::vector<float> out(fixture->expectedCount, 0.0f);
-            bool ok = MNN::dequant_sgfp4_container_cpu(fixture->container, fixture->containerSize, out.data(),
-                                                        fixture->expectedCount);
+            const int pdO = ((fixture->dimO + 63) / 64) * 64;
+            const int pdI = ((fixture->dimI + 63) / 64) * 64;
+            bool ok = MNN::dequant_sgfp4_container_cpu_crop(fixture->container, fixture->containerSize, out.data(),
+                                                           fixture->dimO, fixture->dimI, pdO, pdI);
             if (!ok) {
                 MNN_ERROR("SGFP4MixedDecodeTest: fixture '%s' decode returned false\n", fixture->name);
                 return false;

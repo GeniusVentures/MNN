@@ -226,7 +226,10 @@ public:
         do {
             // -- 1. Oracle decodes: w1 = structured fixture, w2 = uniform.
             std::vector<float> w1(static_cast<size_t>(kStructDimO) * kStructDimI, 0.0f);
-            if (!MNN::dequant_sgfp4_container_cpu(kStructuredMixedData, kStructuredSize, w1.data(), w1.size())) {
+            // Phase 12 codec fix: spatial (normative) oracle decode.
+            if (!MNN::dequant_sgfp4_container_cpu_crop(kStructuredMixedData, kStructuredSize, w1.data(), kStructDimO,
+                                                       kStructDimI, ((kStructDimO + 63) / 64) * 64,
+                                                       ((kStructDimI + 63) / 64) * 64)) {
                 MNN_ERROR("SGFP4MultiTensorTest: oracle decode of structured fixture failed\n");
                 break;
             }
@@ -240,7 +243,9 @@ public:
                 break;
             }
             std::vector<float> w2(static_cast<size_t>(kUniformDimO) * kUniformDimI, 0.0f);
-            if (!MNN::dequant_sgfp4_container_cpu(uniformBytes.data(), uniformBytes.size(), w2.data(), w2.size())) {
+            if (!MNN::dequant_sgfp4_container_cpu_crop(uniformBytes.data(), uniformBytes.size(), w2.data(),
+                                                       kUniformDimO, kUniformDimI, ((kUniformDimO + 63) / 64) * 64,
+                                                       ((kUniformDimI + 63) / 64) * 64)) {
                 MNN_ERROR("SGFP4MultiTensorTest: oracle decode of uniform container failed\n");
                 break;
             }
@@ -536,14 +541,18 @@ public:
             return false;
         }
         std::vector<float> w2(static_cast<size_t>(kUniformDimO) * kUniformDimI, 0.0f);
-        if (!MNN::dequant_sgfp4_container_cpu(pristine.data(), pristine.size(), w2.data(), w2.size())) {
+        if (!MNN::dequant_sgfp4_container_cpu_crop(pristine.data(), pristine.size(), w2.data(), kUniformDimO,
+                                                   kUniformDimI, ((kUniformDimO + 63) / 64) * 64,
+                                                   ((kUniformDimI + 63) / 64) * 64)) {
             MNN_ERROR("SGFP4MalformedInputsTest: oracle decode of pristine container failed\n");
             return false;
         }
         // Structured fixture decode for the base model's w1 (and the probe-7
         // second weight source is a second structured-like decode reuse).
         std::vector<float> w1(static_cast<size_t>(kStructDimO) * kStructDimI, 0.0f);
-        if (!MNN::dequant_sgfp4_container_cpu(kStructuredMixedData, kStructuredSize, w1.data(), w1.size())) {
+        if (!MNN::dequant_sgfp4_container_cpu_crop(kStructuredMixedData, kStructuredSize, w1.data(), kStructDimO,
+                                                   kStructDimI, ((kStructDimO + 63) / 64) * 64,
+                                                   ((kStructDimI + 63) / 64) * 64)) {
             MNN_ERROR("SGFP4MalformedInputsTest: oracle decode of structured fixture failed\n");
             return false;
         }
