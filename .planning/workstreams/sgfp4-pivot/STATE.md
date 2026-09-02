@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: SGFP4 v2 Converter Integration
 current_phase: 12
-current_phase_name: End-to-End Validation
-status: executing
-stopped_at: "Phase 12 context gathered (12-CONTEXT.md committed d8e11326 — 12 decisions: numeric FP32-baseline gate, Phase 10-anchored tolerances, deterministic synthetic input, classic-API Vulkan hard requirement, committed E2E script, SGFP4-scoped RunNetPass escalation fix)"
-last_updated: "2026-09-01T23:50:17.008Z"
-last_activity: 2026-09-01
-last_activity_desc: Phase 11 complete, transitioned to Phase 12
+current_phase_name: end-to-end-validation
+status: verifying
+stopped_at: "Phase 12 COMPLETE: both plans executed (12-01 RunNetPass D-11 chain; 12-02 E2E gate + 2 codec fixes: spatial decode convention + encoder split-map bugs). Full gate PASS cpu+vulkan+D-11, 13/13 suites. Commits: c6d6906e a0728c4c 54bbeaf8 6292e25f 7f5ed0e0"
+last_updated: "2026-09-02T01:51:47.552Z"
+last_activity: 2026-09-02
+last_activity_desc: Phase 12 execution started
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 19
-  completed_plans: 19
-  percent: 80
+  completed_phases: 5
+  total_plans: 21
+  completed_plans: 21
+  percent: 100
 current_plan: none
 ---
 
@@ -29,12 +29,12 @@ See also: `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/S
 
 ## Current Position
 
-Phase: 12 — End-to-End Validation
-Plan: Not started
-Status: Ready to execute
+Phase: 12 (end-to-end-validation) — EXECUTING
+Plan: 2 of 2
+Status: Phase complete — ready for verification
 Corpus approved (D-01/D-02): `W:\gnus\models\alexnet_Opset16.onnx` ONLY — 16 FP32 tensors / 61.1M elems, two real non-64-aligned tensors (D-04 synthetic fallback moot)
 Tiny-tensor floor approved (D-03): light tier iff `elements < 4096` OR `dimI == 1`
-Last activity: 2026-09-01 — Phase 11 complete, transitioned to Phase 12
+Last activity: 2026-09-02 — Phase 12 execution started
 
 ## Progress
 
@@ -69,10 +69,10 @@ Progress: [██████████] 100%
 
 ## Session Continuity
 
-**Last session:** 2026-09-01T23:16:58.124Z
+**Last session:** 2026-09-02T01:51:47.546Z
 
-**Stopped At:** Phase 12 context gathered (12-CONTEXT.md committed d8e11326 — 12 decisions: numeric FP32-baseline gate, Phase 10-anchored tolerances, deterministic synthetic input, classic-API Vulkan hard requirement, committed E2E script, SGFP4-scoped RunNetPass escalation fix)
-**Resume File:** .planning/workstreams/sgfp4-pivot/phases/12-end-to-end-validation/12-CONTEXT.md
+**Stopped At:** Phase 12 COMPLETE: both plans executed (12-01 RunNetPass D-11 chain; 12-02 E2E gate + 2 codec fixes: spatial decode convention + encoder split-map bugs). Full gate PASS cpu+vulkan+D-11, 13/13 suites. Commits: c6d6906e a0728c4c 54bbeaf8 6292e25f 7f5ed0e0
+**Resume File:** .planning/workstreams/sgfp4-pivot/phases/12-end-to-end-validation/12-02-SUMMARY.md
 
 ## Performance Metrics
 
