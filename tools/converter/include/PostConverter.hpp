@@ -32,8 +32,10 @@ namespace Express {
  *@brief run named PostConverter passes against originNet (definition in
  * PostConverter.cpp; declared here so standalone tests can drive passes
  * directly -- Phase 11, Plan 11-01 / consumed by Plan 11-04).
+ *@return false when a pass is missing from the registry or its onExecute
+ * reported failure; true otherwise (Phase 12, Plan 12-01 D-11).
  */
-void RunNetPass(const std::vector<std::string>& passes, std::unique_ptr<MNN::NetT>& originNet);
+bool RunNetPass(const std::vector<std::string>& passes, std::unique_ptr<MNN::NetT>& originNet);
 } // namespace Express
 } // namespace MNN
 

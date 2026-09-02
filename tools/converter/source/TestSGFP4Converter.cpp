@@ -275,8 +275,9 @@ int main(int argc, const char* argv[]) {
             return true;
         };
 
-        // Registration canary (RunNetPass only LOGs a missing pass; this
-        // fails loudly instead). PostConverter is global-scope
+        // Registration canary (RunNetPass now returns false for a missing
+        // pass -- Phase 12 D-11 -- but this still fails loudly with a
+        // pinpoint message). PostConverter is global-scope
         // (PostTreatUtils.hpp), not inside namespace MNN.
         CHECK(nullptr != PostConverter::get("InsertSGFP4Dequant"),
               "PHASE C: InsertSGFP4Dequant pass registered");
@@ -559,8 +560,7 @@ int main(int argc, const char* argv[]) {
                 const std::vector<float> saved = w10;
                 net10->oplists.push_back(makeConvOp(64, 128, w10, 0));
                 Global<modelConfig>::Reset(&config); // useSGFP4 == true
-                // Direct onExecute for the failure-report leg (RunNetPass
-                // only LOGs a false return).
+                // Direct onExecute for the failure-report leg.
                 auto* pass10 = PostConverter::get("InsertSGFP4Dequant");
                 CHECK(nullptr != pass10, "T10: pass lookup");
                 CHECK(!pass10->onExecute(net10), "T10: pass reports failure (variant)");
@@ -570,6 +570,16 @@ int main(int argc, const char* argv[]) {
                 CHECK(0 == std::memcmp(cp10->weight.data(), saved.data(), saved.size() * sizeof(float)),
                       "T10: weight intact (bytes; NaN-safe compare)");
                 CHECK(net10->oplists[0]->inputIndexes.size() == 1, "T10: inputs untouched (variant)");
+
+                // Sibling net (fresh, not the already-consumed net10): the
+                // Phase 12 D-11 contract -- RunNetPass itself must return
+                // false when the pass reports failure.
+                std::unique_ptr<MNN::NetT> net10x(new MNN::NetT);
+                net10x->tensorName = {"x", "y"};
+                net10x->oplists.push_back(makeConvOp(64, 128, saved, 0));
+                CHECK(!RunNetPass({"InsertSGFP4Dequant"}, net10x),
+                      "T10: RunNetPass returns false on encode failure (variant)");
+                CHECK(0 == countSgfp4Ops(net10x.get()), "T10: sibling net untouched (variant)");
             }
         }
 
