@@ -784,6 +784,13 @@ bool Cli::convertModel(modelConfig& modelPath) {
     if (needOptimize) {
         std::cout << "Start to Optimize the MNN Net..." << std::endl;
         std::unique_ptr<MNN::NetT> newNet = optimizeNet(netT, modelPath.forTraining, modelPath, expectedPass);
+        if (newNet == nullptr) {
+            // Phase 12 D-11: optimizeNet reports failure via nullptr (e.g.
+            // --sgfp4 with a failed InsertSGFP4Dequant pass). Without this
+            // guard the code below would dereference nullptr and crash.
+            MNN_ERROR("[ERROR] Optimize the MNN Net failed, cancel convert.\n");
+            return false;
+        }
         if (newNet->extraTensorDescribe.size()>0 && expectedPass.empty()) {
             MNN_PRINT("MNN net has tensor quant info\n");
             computeUnaryBuffer(newNet.get());

@@ -20,6 +20,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     // Convert
-    MNN::Cli::convertModel(modelPath);
+    bool convertOk = MNN::Cli::convertModel(modelPath);
+    // Phase 12 D-11/D-12 (OQ1: strictest D-12 reading): a failed conversion
+    // exits non-zero ONLY when --sgfp4 was requested, so flag-off exit codes
+    // and behavior stay byte-identical to pre-change. Unconditional
+    // non-zero propagation is a deliberate follow-up, intentionally not in
+    // this phase.
+    if (modelPath.useSGFP4 && !convertOk) {
+        return 1;
+    }
     return 0;
 }
