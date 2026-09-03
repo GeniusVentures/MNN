@@ -1,0 +1,352 @@
+// SGFP4 v2 dequant GLSL compute shader
+// Decodes SGFP4 v2 containers (uniform layouts 0/1/2/3/5 and the
+// LAYOUT_MIXED adaptive quadtree, enum 4) via shift-mask-FMA affine
+// reconstruction: w = S * c + bias.
+// All framing constants are ported 1:1 from include/MNN/SGFP4DequantUtils.hpp.
+// FLOAT macro is provided by makeshader.py (float for FP32, float16_t for FP16).
+// Do NOT redefine FLOAT/FLOAT2/FLOAT4 — makeshader.py prepends the header.
+
+layout(binding = 0) readonly buffer ContainerBuffer {
+    uint Container[]; // raw container bytes as little-endian u32 words
+};
+
+layout(binding = 1) writeonly buffer DstBuffer {
+    FLOAT Dst[]; // output FP32 or FP16 values
+};
+
+layout(binding = 2) uniform ConstBuffer {
+    // 5-field layout (Plan 09-02, D-11a) -- must match SGFP4DequantConst in
+    // VulkanSGFP4Dequant.cpp exactly. The dispatch bound covers the FULL
+    // padded plane; writes are cropped to the true region.
+    uint paddedOutElementCount; // paddedDimO * paddedDimI (dispatch guard)
+    uint containerBytes;        // container size in bytes (host-validated geometry)
+    uint outDimO;               // true output rows
+    uint outDimI;               // true output cols
+    uint paddedDimI;            // padded col stride (ceil(dimI/64)*64)
+} uConst;
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// --- Framing constants (SGFP4DequantUtils.hpp, sgfp4-arxiv-v2 sections 3.2/6.1/6.2) ---
+
+// v2 magic 'SGF4' = 0x34464753u, the little-endian assembly of the ASCII
+// bytes 'S'(0x53),'G'(0x47),'F'(0x46),'4'(0x34). GLSL has no character
+// literals, so the assembled value is used; the hex bytes document the ASCII
+// (host side validates the magic; kept here as the spec's canonical form).
+const uint kMagic = 0x34464753u; // 'S' | 'G'<<8 | 'F'<<16 | '4'<<24
+const uint kVersion = 2u;
+const uint kVersionByteOffset = 4u;  // right after magic
+const uint kRecordCountOffset = 5u;  // B straddles u32 words — use read_u32_le
+const uint kOffsetTableStart = 16u;  // fixed header: magic4 + version1 + B4 + pad7
+const uint kAlign16 = 16u;           // 16-byte alignment throughout
+const uint kLayoutEnumMask = 0x7u;   // sb_header layout enum bits 0-2
+
+// LAYOUT_MIXED (enum 4) quadtree split-map framing (spec section 6.2;
+// mirrors kSGFP4SplitMapBytes/kSGFP4QuadTreeMinSplitSize/kSGFP4MaxQuadTreeBits
+// in SGFP4DequantUtils.hpp).
+const uint kSplitMapBytes = 12u;          // 3 x u32 words between sb_header and block headers
+const uint kQuadTreeMinSplitSize = 8u;    // nodes of edge < 8u are always leaves, read no split bit
+const uint kMaxQuadTreeStackDepth = 16u;  // compile-time-fixed pending-sibling slots (true worst case 13)
+const uint kMaxQuadTreeNodeVisits = 341u; // compile-time loop cap: 85 max bit-reads + 256 max leaves
+const uint kMacroblockElems = 4096u;      // 64u * 64u -- a MIXED record always fully tiles the macroblock
+
+// Per-leaf FP16 header (spec section 6.2, Eq. 6):
+// S = half(h >> 16); bias = half(h & 0xFFF0); mode = h & 0x1.
+const uint kLeafBiasMask = 0xFFF0u;
+const uint kLeafModeBit = 0x1u;
+
+// Dual-mode payload packing (spec section 4.3).
+const uint kNibblesPerWord = 8u;  // mode 0: 8 x 4-bit codes per u32 word
+const uint kSymbolsPerWord = 16u; // mode 1: 16 x 2-bit ternary codes per u32 word
+const uint kNibbleMask = 0xFu;
+const uint kSymbolMask = 0x3u;
+const uint kTwosComplementSignBias = 0x8u; // sign-extend a 4-bit two's complement value
+
+// --- Container reads ---
+
+// Little-endian u32 at an arbitrary byte address, composed from at most two
+// aligned container words. MANDATORY for ALL framing reads: B sits at byte 5
+// and straddles words. Fast path when the address is word-aligned.
+uint read_u32_le(uint byteAddr) {
+    uint wordIndex = byteAddr >> 2u;
+    uint off = byteAddr & 3u;
+    uint lo = Container[wordIndex];
+    if (off == 0u) {
+        return lo;
+    }
+    uint hi = Container[wordIndex + 1u];
+    return (lo >> (8u * off)) | (hi << (32u - 8u * off));
+}
+
+// --- Leaf header unpack (spec section 6.2, Eq. 6) ---
+
+// S from the high 16 bits, bias from the top 12 bits of the low half,
+// mode from bit 0. Never hand-roll FP16 bit math — unpackHalf2x16 is exact.
+void unpackLeafHeader(uint h, out float S, out float bias, out uint mode) {
+    S = unpackHalf2x16(h).y;              // high 16 bits
+    bias = unpackHalf2x16(h & kLeafBiasMask).x; // low half, flag bits masked off
+    mode = h & kLeafModeBit;
+}
+
+// --- Dual-mode code decode (spec section 4.3) ---
+
+// Mode 0 (FP4_AFFINE): 4-bit two's-complement codes in [-8, 7]. NOT E2M1.
+float codeMode0(uint nib) {
+    return float((nib ^ kTwosComplementSignBias) - kTwosComplementSignBias);
+}
+
+// Mode 1 (T158_AFFINE): 2-bit ternary codes — 00->0, 01->+1, 10->-1,
+// 11 reserved (decoded as 0).
+float codeMode1(uint sym) {
+    return (1u == sym) ? +1.0 : (2u == sym) ? -1.0 : 0.0;
+}
+
+// --- LAYOUT_MIXED (enum 4) quadtree split-map walk ---
+
+// Bounded, stateless, per-thread pre-order-DFS walk of a MIXED record's
+// 3-word/12-byte split map (bit-for-bit mirror of SGFP4SplitMapReader /
+// sgfp4_walk_quadtree, include/MNN/SGFP4DequantUtils.hpp:148-222). Locates
+// the leaf owning within-record flat index `local`, plus the payload-cursor
+// byte offset of every leaf strictly before it in traversal order -- the
+// walk determines the target leaf and accumulates its payload offset in a
+// single pass (Pattern 2, 04-RESEARCH.md).
+//
+// The stack only ever holds pending nodes' edge size `n`:
+// dequant_sgfp4_container_cpu never reads QuadNode.x/.y
+// (SGFP4DequantUtils.hpp:403,435), and all 4 children pushed by a split
+// share edge n/2u, so pushing 4 identical values and popping LIFO
+// reproduces the CPU's TL,TR,BL,BR pre-order-DFS bit-consumption sequence
+// exactly, without ever needing (x,y) coordinates.
+bool locateMixedLeaf(uint recStart, uint local, out uint leafOrdinal, out uint leafN,
+                      out uint inLeaf, out uint blockHeadersStart, out uint payloadCursor) {
+    blockHeadersStart = recStart + 4u + kSplitMapBytes;
+
+    uint stack[kMaxQuadTreeStackDepth];
+    stack[0] = 64u;
+    uint top = 1u;
+
+    uint bitCursor = 0u;
+    leafOrdinal = 0u; // doubles as the running node-ordinal counter during the walk
+    uint elemsConsumed = 0u;
+    uint payloadCursorRel = 0u;
+    bool found = false;
+    uint targetLeafOrdinal = 0u;
+    uint targetN = 0u;
+    uint targetInLeaf = 0u;
+    uint targetPayloadCursorRel = 0u;
+
+    for (uint visit = 0u; visit < kMaxQuadTreeNodeVisits; ++visit) {
+        if (top == 0u) {
+            break;
+        }
+        top -= 1u;
+        uint n = stack[top];
+
+        if (n >= kQuadTreeMinSplitSize) {
+            uint splitBit = (read_u32_le(recStart + 4u + 4u * (bitCursor >> 5u)) >> (bitCursor & 31u)) & 1u;
+            bitCursor += 1u;
+            if (splitBit == 1u) {
+                uint childN = n / 2u;
+                stack[top] = childN;
+                stack[top + 1u] = childN;
+                stack[top + 2u] = childN;
+                stack[top + 3u] = childN;
+                top += 4u;
+                continue;
+            }
+        }
+
+        // Leaf of edge n (either a forced 4x4 leaf or an unsplit node).
+        if (!found && local < elemsConsumed + n * n) {
+            found = true;
+            targetLeafOrdinal = leafOrdinal;
+            targetN = n;
+            targetInLeaf = local - elemsConsumed;
+            targetPayloadCursorRel = payloadCursorRel;
+        } else if (!found) {
+            uint header = read_u32_le(blockHeadersStart + 4u * leafOrdinal);
+            uint mode = header & kLeafModeBit;
+            uint elems = n * n;
+            uint words = (mode == 0u) ? (elems / kNibblesPerWord) : (elems / kSymbolsPerWord);
+            payloadCursorRel += (4u * words + kAlign16 - 1u) & ~(kAlign16 - 1u);
+        }
+        elemsConsumed += n * n;
+        leafOrdinal += 1u;
+    }
+
+    // leafOrdinal is now the TOTAL leaf count (the walk visited every node).
+    uint blockHeadersBytes = 4u * leafOrdinal;
+    uint payloadsStart = (blockHeadersStart + blockHeadersBytes + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+    leafOrdinal = targetLeafOrdinal;
+    leafN = targetN;
+    inLeaf = targetInLeaf;
+    payloadCursor = payloadsStart + targetPayloadCursorRel;
+    return found;
+}
+
+// --- Framing walk (per-thread re-walk, D-04) ---
+
+// Locate the source payload word + intra-word lane and leaf header for
+// padded-plane element `idx` (= row * paddedDimI + col, the padded row-
+// major plane, matching the spatial decode convention of the CPU
+// dequant_sgfp4_container_cpu_plane / gnus-poc decode_v2). The element's
+// superblock is derived SPATIALLY: sbCol = col/64, sbRow = row/64, record
+// b = sbRow * tilesX + sbCol -- NOT the leaf-major stream order (which
+// only coincides with the plane for one-superblock-wide grids; Plan 09-04
+// deviation fix, diagnosed via the 128x64 fixture).
+// Returns false when the element does not decode against this container's
+// geometry (host pre-validation guarantees well-formed containers; this
+// stays defensive for enum >= 6).
+bool locateElement(uint idx, out uint payloadWordByte, out uint inWordLane,
+                   out uint laneBitWidth, out float S, out float bias) {
+    uint B = read_u32_le(kRecordCountOffset);
+    uint offsetTableEnd = kOffsetTableStart + 4u * B;
+    uint regionStart = (offsetTableEnd + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+    if (uConst.paddedDimI == 0u || B == 0u) {
+        return false;
+    }
+    uint tilesX = uConst.paddedDimI / 64u;
+    if (tilesX == 0u || B % tilesX != 0u) {
+        return false;
+    }
+    uint row  = idx / uConst.paddedDimI;
+    uint col  = idx % uConst.paddedDimI;
+    uint sbRow = row / 64u;
+    uint sbCol = col / 64u;
+    uint b = sbRow * tilesX + sbCol;
+    if (b >= B) {
+        return false;
+    }
+
+    // Within-superblock coordinates (0..63 each).
+    uint localRow = row % 64u;
+    uint localCol = col % 64u;
+
+    uint recStart = regionStart + read_u32_le(kOffsetTableStart + 4u * b);
+    uint layoutEnum = read_u32_le(recStart) & kLayoutEnumMask;
+
+    // Table 3 uniform geometry: layout enum -> { leaf count N, leaf edge n }.
+    uint N;
+    uint n;
+    if (layoutEnum == 0u) {
+        N = 1u; n = 64u;
+    } else if (layoutEnum == 1u) {
+        N = 4u; n = 32u;
+    } else if (layoutEnum == 2u) {
+        N = 16u; n = 16u;
+    } else if (layoutEnum == 3u) {
+        N = 64u; n = 8u;
+    } else if (layoutEnum == 5u) {
+        N = 256u; n = 4u;
+    } else if (layoutEnum == 4u) {
+        // LAYOUT_MIXED: the quadtree walk consumes the within-record flat
+        // (row-major) index directly -- leaves tile the 64x64 macroblock.
+        uint local = localRow * 64u + localCol;
+        uint leaf;
+        uint leafN;
+        uint inLeaf;
+        uint mixedBlockHeadersStart;
+        uint payloadCursor;
+        locateMixedLeaf(recStart, local, leaf, leafN, inLeaf, mixedBlockHeadersStart, payloadCursor);
+
+        uint headerWord = read_u32_le(mixedBlockHeadersStart + 4u * leaf);
+        uint mode;
+        unpackLeafHeader(headerWord, S, bias, mode);
+
+        if (mode == 0u) {
+            payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
+            inWordLane = inLeaf % kNibblesPerWord;
+            laneBitWidth = 4u;
+        } else {
+            payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
+            inWordLane = inLeaf % kSymbolsPerWord;
+            laneBitWidth = 2u;
+        }
+        return true;
+    } else {
+        // enum >= 6 is invalid; host pre-validation rejects it before
+        // dispatch.
+        return false;
+    }
+
+    // Uniform layout: leaf = raster tile index within the superblock;
+    // within-leaf flat index = (rowInTile * n + colInTile), row-major.
+    uint perRow = 64u / n;
+    uint tileRow = localRow / n;
+    uint tileCol = localCol / n;
+    uint leaf = tileRow * perRow + tileCol;
+    uint inLeaf = (localRow % n) * n + (localCol % n);
+
+    // Block headers follow sb_header; payloads follow, 16-byte aligned.
+    uint blockHeadersStart = recStart + 4u;
+    uint payloadsStart = (blockHeadersStart + 4u * N + kAlign16 - 1u) & ~(kAlign16 - 1u);
+
+    uint headerWord = read_u32_le(blockHeadersStart + 4u * leaf);
+    uint mode;
+    unpackLeafHeader(headerWord, S, bias, mode);
+
+    // Walk the payload cursor sequentially to this leaf (D-04 leaf
+    // stream): every leaf's payload is padded to a 16-byte multiple.
+    uint payloadCursor = payloadsStart;
+    for (uint l = 0u; l < leaf; ++l) {
+        uint prevHeader = read_u32_le(blockHeadersStart + 4u * l);
+        float prevS, prevBias;
+        uint prevMode;
+        unpackLeafHeader(prevHeader, prevS, prevBias, prevMode);
+        uint elems = n * n;
+        uint words = (prevMode == 0u) ? (elems / kNibblesPerWord) : (elems / kSymbolsPerWord);
+        payloadCursor += (4u * words + kAlign16 - 1u) & ~(kAlign16 - 1u);
+    }
+
+    if (mode == 0u) {
+        payloadWordByte = payloadCursor + 4u * (inLeaf / kNibblesPerWord);
+        inWordLane = inLeaf % kNibblesPerWord;
+        laneBitWidth = 4u;
+    } else {
+        payloadWordByte = payloadCursor + 4u * (inLeaf / kSymbolsPerWord);
+        inWordLane = inLeaf % kSymbolsPerWord;
+        laneBitWidth = 2u;
+    }
+    return true;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    // Sole in-shader guard: host pre-validates the container (D-05); the
+    // shader body stays a pure locate+decode. The dispatch bound covers the
+    // FULL padded plane (D-11a): pad-region invocations locate their element
+    // then early-return before the cropped write.
+    if (idx >= uConst.paddedOutElementCount) {
+        return;
+    }
+
+    uint payloadWordByte;
+    uint lane;
+    uint laneBits;
+    float S;
+    float bias;
+    if (!locateElement(idx, payloadWordByte, lane, laneBits, S, bias)) {
+        return;
+    }
+
+    uint code = (read_u32_le(payloadWordByte) >> (laneBits * lane)) &
+                (4u == laneBits ? kNibbleMask : kSymbolMask);
+
+    // Affine reconstruction in FP32 math; FLOAT cast only at the store.
+    float c = (laneBits == 4u) ? codeMode0(code) : codeMode1(code);
+    float decoded = S * c + bias;
+
+    // Row-major stride crop (Plan 09-02): out[r*outDimI + c] for the true
+    // region only; pad rows/cols are discarded. For 64-aligned dims
+    // paddedDimI == outDimI and r == idx / outDimI, c == idx % outDimI, so
+    // the write index collapses to idx -- byte-identical to the old path.
+    uint row = idx / uConst.paddedDimI;
+    uint col = idx % uConst.paddedDimI;
+    if (row >= uConst.outDimO || col >= uConst.outDimI) {
+        return; // pad region
+    }
+    Dst[row * uConst.outDimI + col] = FLOAT(decoded);
+}

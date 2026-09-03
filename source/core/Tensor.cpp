@@ -106,10 +106,10 @@ Tensor::Tensor(const Tensor* tensor, DimensionType type, bool allocMemory) {
     }
 
     if (allocMemory) {
-        auto memorySize = size();
+        auto memorySize = usize();
         if (memorySize > 0) {
             nativeDescribe->memoryType = Tensor::InsideDescribe::MEMORY_HOST;
-            mBuffer.host          = (uint8_t*)MNNMemoryAllocAlign(size(), MNN_MEMORY_ALIGN_DEFAULT);
+            mBuffer.host          = (uint8_t*)MNNMemoryAllocAlign(memorySize, MNN_MEMORY_ALIGN_DEFAULT);
             MNN_ASSERT(mBuffer.host != nullptr);
         }
     }
@@ -418,8 +418,7 @@ size_t Tensor::usize() const {
     }
     return dataSize;
 }
-
-int Tensor::size() const {
+    int Tensor::size() const {
     return static_cast<int>(usize());
 }
 
@@ -445,7 +444,7 @@ void* Tensor::map(MapType mtype, DimensionType dtype) {
     }
 
     /* Common backend */
-    auto needSize = this->size();
+    const size_t needSize = this->usize();
     void* hostPtr = malloc(needSize);
 
     if(mtype == Tensor::MAP_TENSOR_READ) {

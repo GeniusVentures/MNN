@@ -208,6 +208,7 @@ enum OpType : int {
     If    = 601,
     LayerNorm = 603,
     GridSample = 604,
+    SGFP4Dequant = 605,
 }
 
 table Plugin {
@@ -440,7 +441,8 @@ union OpParameter {
     AttentionParam,
     StftParam,
     LinearAttentionParam,
-    ShapeParam
+    ShapeParam,
+    SGFP4DequantParam
 }
 
 table Op {

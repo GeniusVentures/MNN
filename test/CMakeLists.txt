@@ -42,6 +42,11 @@ else()
   target_link_libraries(run_test.out ${TEST_DEPS})
 endif()
 target_include_directories(run_test.out PRIVATE ${CMAKE_CURRENT_LIST_DIR}/)
+# Phase 9 (Plan 09-01): link the SGFP4 v2 C++ encoder into the parity test
+# suites when the tool target exists (MNN_BUILD_SGFP4_TOOLS=ON).
+if(TARGET sgfp4_encode)
+  target_link_libraries(run_test.out sgfp4_encode)
+endif()
 if (APPLE)
   find_library(FOUNDATION Foundation REQUIRED)
   target_link_libraries(run_test.out ${FOUNDATION})

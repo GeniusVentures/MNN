@@ -43,6 +43,9 @@ public:
     bool weightQuantAsymmetric = true;
     int weightQuantBlock = -1;
     bool useHQQ = false;
+    // SGFP4 v2 graph-rewrite trigger (Phase 11, D-04): InsertSGFP4Dequant
+    // pass is dead code when false (the default) -- D-14 flag-off invariance.
+    bool useSGFP4 = false;
     // The path of the model compression file that stores the int8 calibration table
     // or sparse parameters.
     std::string compressionParamsFile = "";

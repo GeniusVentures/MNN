@@ -109,6 +109,26 @@ table Convolution2D {
     external:[int64]; // [offset, weight_bytes_size, bias_bytes_size]
 }
 
+// SGFP4 v2 container descriptor: the container's internal byte layout (magic
+// framing, macroblock records, leaf headers/payloads) is parsed entirely by
+// the CPUSGFP4Dequant Execution from the external sidecar bytes; this table
+// carries ONLY the minimal locked {magic, offset, size} descriptor plus the
+// output tensor geometry (manifest-resident per spec section 6.1). No
+// macroblock/quadtree/leaf/split-map fields belong here.
+// D-11 buffer-staging contract: a Phase 11 PostConverter pass writes
+// buffer = [container bytes], external = {} and NO externalPath (zero byte
+// I/O); externalization then happens via saveExternalData/postTreat flag
+// machinery, which rewrites buffer -> external {offset, padded-size} in the
+// sidecar. D-12 non-interception note: OpType_SGFP4Dequant is NOT one of
+// createExecutionWithExternal's auto-rewritten types (Convolution2D/Scale/
+// LayerNorm); the decoder owns buffer-vs-sidecar dispatch.
+table SGFP4DequantParam {
+    magic:uint32;     // 'SGF4' little-endian sanity value
+    external:[int64]; // [offset, size] into the .mnn.weight sidecar
+    dims:[int];        // output tensor geometry, e.g. [O, I]
+    buffer:[byte];    // D-01: live serialized decode source; empty => sidecar path
+}
+
 table Convolution3D {
     common:Convolution3DCommon;
     weight:[float];

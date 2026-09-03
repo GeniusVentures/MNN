@@ -1,0 +1,93 @@
+// FP4 Dequantization (E2M1) GLSL compute shader
+// Unpacks 2 FP4 nibbles per byte with GPU-optimized swizzling.
+// FLOAT macro is provided by makeshader.py (float for FP32, float16_t for FP16).
+// Do NOT redefine FLOAT/FLOAT2/FLOAT4 — makeshader.py prepends the header.
+
+layout(binding = 0) readonly buffer SrcBuffer {
+    uint SrcRaw[]; // packed FP4 source data (2 values per byte)
+};
+
+layout(binding = 1) writeonly buffer DstBuffer {
+    FLOAT Dst[]; // output FP16 or FP32 values
+};
+
+layout(binding = 2) uniform ConstBuffer {
+    uint elementCount;
+    uint srcBytes;
+};
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// E2M1 decode: 1 sign bit, 2 exponent bits, 1 mantissa bit (bias=1)
+// s = (nibble >> 3) & 1, e = (nibble >> 1) & 3, m = nibble & 1
+// Subnormal (e==0): sign * m * 0.5
+// Normal (e==1,2): sign * 2^(e-1) * (1 + m/2)
+// Special (e==3): m=0 -> Inf, m=1 -> NaN (returned as infinity)
+FLOAT dequant_e2m1(uint nibble) {
+    uint s = (nibble >> 3u) & 1u;
+    uint e = (nibble >> 1u) & 3u;
+    uint m = nibble & 1u;
+
+    FLOAT sign = (s == 1u) ? FLOAT(-1.0) : FLOAT(1.0);
+
+    // Subnormal case: e=0, bias=1 -> exponent is -1, no implicit 1
+    // value = sign * 2^(-1) * m/2 = sign * m * 0.5
+    if (e == 0u) {
+        return sign * FLOAT(m) * FLOAT(0.5);
+    }
+
+    // Special case: e=3
+    // m=0 -> Infinity (with sign), m=1 -> NaN (0/0)
+    if (e == 3u) {
+        if (m == 1u) {
+            return FLOAT(0.0) / FLOAT(0.0); // NaN
+        }
+        return sign * FLOAT(1.0) / FLOAT(0.0);
+    }
+
+    // Normal case: e=1,2
+    // value = sign * 2^(e-1) * (1 + m/2)
+    FLOAT expVal;
+    if (e == 1u) {
+        expVal = FLOAT(1.0);       // 2^0 = 1
+    } else {
+        expVal = FLOAT(2.0);       // e=2: 2^1 = 2
+    }
+    FLOAT mantissa = FLOAT(1.0) + FLOAT(m) * FLOAT(0.5);
+    return sign * expVal * mantissa;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    // Bounds check: beyond element count, write zero and return
+    if (idx >= elementCount) {
+        return;
+    }
+
+    // Compute byte index and nibble offset (2 values per byte, D-03)
+    uint byteIndex = idx >> 1u;      // idx / 2
+    uint nibbleOffset = idx & 1u;    // idx % 2
+
+    // Guard: if byte index exceeds packed source, write zero
+    if (byteIndex >= srcBytes) {
+        Dst[idx] = FLOAT(0.0);
+        return;
+    }
+
+    // Extract the source BYTE containing our nibble. SrcRaw[] is a u32 word
+    // array: select the word via byteIndex/4, then the byte via bits 0-7/8-15/
+    // 16-23/24-31 (little-endian byte order within the word).
+    uint byte = (SrcRaw[byteIndex >> 2u] >> ((byteIndex & 3u) * 8u)) & 0xFFu;
+
+    // Swizzle: low nibble (bits 0-3) first, high nibble (bits 4-7) second
+    // This is the little-endian nibble order — GPU-optimized for contiguous reads
+    uint nibble;
+    if (nibbleOffset == 0u) {
+        nibble = byte & 0x0Fu;
+    } else {
+        nibble = (byte >> 4u) & 0x0Fu;
+    }
+
+    Dst[idx] = dequant_e2m1(nibble);
+}

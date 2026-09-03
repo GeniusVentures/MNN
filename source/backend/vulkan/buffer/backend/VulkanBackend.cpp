@@ -209,10 +209,29 @@ std::pair<const VulkanBuffer*, size_t> VulkanBackend::getTensorBuffer(const Tens
 }
 
 size_t VulkanBackend::getTensorSize(const Tensor* tensor) const {
-    size_t alignElementSize = (size_t) UP_DIV(tensor->elementSize(), 4) * 4;
+    auto des = TensorUtils::getDescribe(tensor);
+    size_t alignElementSize = 1;
+    for (int i = 0; i < tensor->dimensions(); ++i) {
+        size_t currentDimSize = (size_t)tensor->length(i);
+        if (des->dimensionFormat == MNN_DATA_FORMAT_NC4HW4 && 1 == i) {
+            currentDimSize = (size_t)ALIGN_UP4((int)currentDimSize);
+        }
+        if (currentDimSize == 0) {
+            return 0;
+        }
+        if (alignElementSize > SIZE_MAX / currentDimSize) {
+            MNN_ERROR("VulkanBackend getTensorSize overflow: dims=%d\n", tensor->dimensions());
+            return 0;
+        }
+        alignElementSize *= currentDimSize;
+    }
+    alignElementSize = (size_t)UP_DIV(alignElementSize, 4) * 4;
     size_t bytes = ((tensor->getType().code == halide_type_float) && mUseFP16) ? sizeof(uint16_t) : sizeof(float);
-    size_t size = alignElementSize * bytes;
-    return size;
+    if (alignElementSize > SIZE_MAX / bytes) {
+        MNN_ERROR("VulkanBackend getTensorSize bytes overflow: dims=%d\n", tensor->dimensions());
+        return 0;
+    }
+    return alignElementSize * bytes;
 }
 
 Backend::MemObj* VulkanBackend::onAcquire(const Tensor* tensor, StorageType storageType) {

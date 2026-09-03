@@ -9,6 +9,8 @@
 #include "CommonUtils.hpp"
 #include <fstream>
 
+#include "MNN/SGFP4DequantUtils.hpp"
+
 
 template <typename T>
 static void storeWeight(std::ofstream* fs, std::vector<T>& weight, std::vector<int64_t>& external, int64_t& offset, bool check = true) {
@@ -25,6 +27,38 @@ static void storeWeight(std::ofstream* fs, std::vector<T>& weight, std::vector<i
     weight.swap(empty);
     external.push_back(size);
     offset += size;
+}
+
+// Aligned SGFP4 container store (Plan 08-04, SGV2-23): unlike storeWeight,
+// the sidecar region is padded to a 16-byte multiple (zero-filled) before
+// the shared offset advances, while `external` records the TRUE size so
+// the pad stays inert to readers. Matches sgfp4_inject_core.hpp:377-389
+// (the injection tool's sidecar emission convention) exactly. NOTE:
+// SGFP4DequantParamT::buffer is std::vector<int8_t> per the generated
+// schema (flatc [byte] -> int8_t).
+static void storeSGFP4Container(std::ofstream* fs, std::vector<int8_t>& buffer, std::vector<int64_t>& external,
+                                int64_t& offset) {
+    if (buffer.empty()) {
+        return;
+    }
+    if (external.empty()) {
+        external.push_back(offset);
+    }
+    const size_t trueSize = buffer.size();
+    fs->write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(trueSize));
+    const size_t aligned = MNN::sgfp4_align16(trueSize);
+    const size_t pad     = aligned - trueSize;
+    static const char kZero = '\0';
+    for (size_t i = 0; i < pad; ++i) {
+        fs->put(kZero);
+    }
+    external.push_back(static_cast<int64_t>(trueSize));
+    // No dual-source ambiguity (D-06): after externalization, external
+    // {offset, true-size} is the sole source.
+    buffer.clear();
+    std::vector<int8_t> empty;
+    buffer.swap(empty);
+    offset += static_cast<int64_t>(aligned);
 }
 
 void RemoveAndStoreParam(std::unique_ptr<MNN::OpT>& op, std::ofstream* fs, int64_t& offset) {
@@ -94,6 +128,11 @@ void RemoveAndStoreParam(std::unique_ptr<MNN::OpT>& op, std::ofstream* fs, int64
                 default:
                     break;
             }
+            break;
+        }
+        case MNN::OpParameter_SGFP4DequantParam: {
+            auto param = op->main.AsSGFP4DequantParam();
+            storeSGFP4Container(fs, param->buffer, param->external, offset);
             break;
         }
         default:
@@ -196,6 +235,19 @@ void loadExternalParam(std::unique_ptr<MNN::OpT>& op, MNN::FileLoader* fl) {
                 default:
                     break;
             }
+            param->external.clear();
+            break;
+        }
+        case MNN::OpType_SGFP4Dequant: {
+            // Q3 symmetry: _postTreatOp calls loadExternalParam BEFORE
+            // RemoveAndStoreParam, so re-convert/reload paths need this
+            // read-back to repopulate `buffer` from the sidecar.
+            auto param = op->main.AsSGFP4DequantParam();
+            if (param->external.size() != 2) {
+                return;
+            }
+            fl->offset(param->external[0]);
+            loadExternalData<int8_t>(fl, param->buffer, param->external[1]);
             param->external.clear();
             break;
         }

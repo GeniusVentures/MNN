@@ -227,6 +227,10 @@ bool Cli::initializeMNNConvertArgs(modelConfig &modelPath, int argc, char **argv
      "using hqq quant method to improve accuracy, default: false, if use hqq, weightQuantAsymmetric is set as true"
      )
     (
+     "sgfp4",
+     "save conv-family weights as SGFP4 v2 (quadtree-adaptive FP4) via inserted SGFP4Dequant nodes"
+     )
+    (
      "compressionParamsFile",
      "The path of the compression parameters that stores activation, "
      "weight scales and zero points for quantization or information "
@@ -484,6 +488,11 @@ bool Cli::initializeMNNConvertArgs(modelConfig &modelPath, int argc, char **argv
             std::cout << "Warning, MNN Convert only support Hqq with weight asymmetric quant! Disable Hqq currently" <<  std::endl;
         }
     }
+    // SGFP4 v2 graph-rewrite trigger (Phase 11, D-04). Unlike hqq there is
+    // no prerequisite flag and no conditional downgrade -- a plain boolean.
+    if (result.count("sgfp4")) {
+        modelPath.useSGFP4 = true;
+    }
     if (result.count("forTraining")) {
         modelPath.forTraining = true;
     }
@@ -560,6 +569,14 @@ bool Cli::initializeMNNConvertArgs(modelConfig &modelPath, int argc, char **argv
     }
     if (result.count("dumpPass")) {
         modelPath.dumpPass = true;
+    }
+    // D-05 (Phase 11): hard mutex -- SGFP4 rewrites the same conv weights
+    // these flags transform, so the combination is nonsensical. Checked at
+    // the END of arg resolution (every conflicting flag is final by now).
+    // weightQuantBits defaults to 0 = unset.
+    if (modelPath.useSGFP4 && (modelPath.weightQuantBits != 0 || modelPath.useHQQ || modelPath.saveHalfFloat)) {
+        MNN_ERROR("--sgfp4 cannot be combined with --weightQuantBits, --hqq, or --fp16 (conflicting weight transforms on the same tensors)\n");
+        return false;
     }
     return true;
 }
@@ -767,6 +784,13 @@ bool Cli::convertModel(modelConfig& modelPath) {
     if (needOptimize) {
         std::cout << "Start to Optimize the MNN Net..." << std::endl;
         std::unique_ptr<MNN::NetT> newNet = optimizeNet(netT, modelPath.forTraining, modelPath, expectedPass);
+        if (newNet == nullptr) {
+            // Phase 12 D-11: optimizeNet reports failure via nullptr (e.g.
+            // --sgfp4 with a failed InsertSGFP4Dequant pass). Without this
+            // guard the code below would dereference nullptr and crash.
+            MNN_ERROR("[ERROR] Optimize the MNN Net failed, cancel convert.\n");
+            return false;
+        }
         if (newNet->extraTensorDescribe.size()>0 && expectedPass.empty()) {
             MNN_PRINT("MNN net has tensor quant info\n");
             computeUnaryBuffer(newNet.get());

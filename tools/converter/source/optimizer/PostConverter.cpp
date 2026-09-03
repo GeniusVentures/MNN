@@ -141,14 +141,15 @@ static bool _hasDupName(std::unique_ptr<MNN::NetT>& originNet) {
     }
     return false;
 }
-void RunNetPass(const std::vector<std::string>& passes, std::unique_ptr<MNN::NetT>& originNet) {
+bool RunNetPass(const std::vector<std::string>& passes, std::unique_ptr<MNN::NetT>& originNet) {
     auto config = Global<modelConfig>::Get();
     bool dumpPass = config != nullptr && config->dumpPass;
+    bool allPassed = true;
     for (auto pass : passes) {
         auto convert = PostConverter::get(pass);
         if (nullptr == convert) {
             LOG(INFO) << "Can't find pass of " << pass << "\n";
-            continue;
+            return false;
         }
         auto originSize = originNet->oplists.size();
         auto originDesSize = originNet->extraTensorDescribe.size();
@@ -165,8 +166,10 @@ void RunNetPass(const std::vector<std::string>& passes, std::unique_ptr<MNN::Net
         }
         if (!valid) {
             LOG(INFO) << "Run " << pass << "Error\n";
+            allPassed = false;
         }
     }
+    return allPassed;
 }
 
 std::unique_ptr<MNN::NetT> RunExtraPass(std::unique_ptr<MNN::NetT>& originNet,
@@ -390,7 +393,18 @@ std::unique_ptr<MNN::NetT> optimizeNetImpl(std::unique_ptr<MNN::NetT>& originNet
     newNet = std::move(RunMergePass(newNet, inputs, PASS_PRIORITY_LOW));
     newNet = std::move(RunMergePass(newNet, inputs, PASS_PRIORITY_FINAL));
 
-    RunNetPass({"ReIndexTensor"}, newNet);
+    bool sgfp4PassOk = RunNetPass({"InsertSGFP4Dequant", "ReIndexTensor"}, newNet);
+    {
+        // Phase 12 D-11: a failed (or transactionally skipped) SGFP4 pass must
+        // abort the conversion -- never emit a silently-FP32 artifact under
+        // --sgfp4. Strictly gated on useSGFP4 so flag-off behavior is
+        // byte-identical (D-12).
+        auto config = Global<modelConfig>::Get();
+        if (config != nullptr && config->useSGFP4 && !sgfp4PassOk) {
+            MNN_ERROR("[ERROR] --sgfp4 conversion failed: InsertSGFP4Dequant pass did not succeed.\n");
+            return nullptr;
+        }
+    }
     RunNetPass({"ReIndexOnnxIfAlias"}, newNet);
 
     return std::move(newNet);

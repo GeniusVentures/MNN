@@ -87,6 +87,14 @@ void WeightQuantAndCoding(std::unique_ptr<MNN::OpT>& op, const modelConfig& conf
     if (param->quanParameter.get() != nullptr) {
         return;
     }
+    // D-02 (Phase 11, SGV2-30): SGFP4-rewritten convs carry their weight
+    // as a second input tensor (the SGFP4Dequant producer's output); an
+    // original converter conv has only its activation index. Must fire
+    // BEFORE the weightQuantBits == 0 sparse path below, which would
+    // otherwise run on a cleared-weight rewritten conv.
+    if (op->inputIndexes.size() > 1) {
+        return;
+    }
     bool useHqq = config.useHQQ;
     auto weightQuantBits = config.weightQuantBits;
     bool asymmetricQuantFlag = config.weightQuantAsymmetric;

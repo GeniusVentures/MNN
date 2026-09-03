@@ -34,6 +34,7 @@ struct PostTreatContext {
 
 void converToStaticModel(const MNN::Net* net, std::map<std::string,std::vector<int>>& inputConfig, std::string mnnFile);
 void RemoveAndStoreParam(std::unique_ptr<MNN::OpT>& op, std::ofstream* fs, int64_t& offset);
+bool saveExternalData(std::unique_ptr<MNN::NetT>& netT, const std::string& extraFileName);
 void loadExternalParam(std::unique_ptr<MNN::OpT>& op, MNN::FileLoader* fl);
 void CastParamsToHalf(std::unique_ptr<MNN::OpT>& op);
 void AlignDenormalizedValue(std::unique_ptr<MNN::OpT>& op);

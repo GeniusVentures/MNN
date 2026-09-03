@@ -1,0 +1,113 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: Vulkan Backend LLM Enablement
+current_phase: 4
+current_phase_name: in progress — plan 04-01 done
+status: milestone_in_progress
+stopped_at: "Phase 4 plan 04-01 complete — TurboQuant-V + mask gen shader implemented, next: 04-02 (E2E model test)"
+last_updated: "2026-08-22T00:10:50.697Z"
+last_activity: 2026-08-21
+last_activity_desc: "Completed quick task 260821-rql: fixed MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py"
+progress:
+  total_phases: 5
+  completed_phases: 3
+  total_plans: 8
+  completed_plans: 7
+  percent: 87
+---
+
+# Project State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-05-27)
+
+**Core value:** A complete Vulkan LLM inference pipeline with Ultra FP4 quantization
+**Current focus:** Phase 4 in progress — plan 04-01 complete, 04-02 (E2E model test) next
+
+## Current Position
+
+Phase: 4 (in progress — plan 04-01 done)
+Plans: 7/8 complete (Phase 1: 3/3, Phase 2: 2/2, Phase 3: 1/1, Phase 4: 1/2, Phase 5: 0/0)
+Status: Plan 04-01 delivered (FP4 quant tool + CPU dequant), 04-02 next
+Last activity: 2026-08-21 - Completed quick task 260821-rql: fixed MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py
+
+Progress: [████████░░] 87%
+
+## Performance Metrics
+
+**Velocity:**
+
+- Total plans completed: 7
+- Total execution time: ~0.5 hours
+
+**By Phase:**
+
+| Phase | Plans | Status |
+|-------|-------|--------|
+| 1. Vulkan Attention Correctness & LLM E2E | 3/3 | Complete |
+| 2. Ultra FP4 Quantization | 2/2 | Complete |
+| 3. TurboQuant Documentation | 1/1 | Complete |
+| 4. FP4 Model Conversion Pipeline | 1/2 | In Progress |
+| 5. Model-Level Regression Tests | 0/0 | Pending |
+
+**Recent Trend:**
+
+- Phase 1: Attention sync + GPU mask (01-01), test suite (01-02), LLM E2E validation (01-03) — all verified
+- Phase 3: TURBOQUANT.md delivered — 6 config keys documented, CPU fallback contract specified, issues #8, #9 closed
+- Phase 4 (04-01): FP4 quant tool + CPU FP4 dequant runtime completed; TurboQuant-V support + attention mask gen shader + buffer barrier fix in VulkanAttention; issue #5 closed
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 3 added (original): Complete TurboQuant documentation and model-level regression tests (issues #7-9) (2026-05-28)
+- Phase 4 added: Convert test models (.mnn or ONNX) into Ultra FP4 quantization formats using the MNN converter (2026-05-28)
+- Phase 3 split: Renamed to TurboQuant Documentation only (issues #8, #9); model-level tests moved to Phase 5 (2026-05-28)
+- Phase 5 added: Model-level regression tests for Vulkan TurboQuant and sparse-V (issue #7), depends on Phase 4 (2026-05-28)
+- Phase 3 completed: TURBOQUANT.md delivered — config contract + CPU fallback docs, issues #8, #9 closed (2026-05-28)
+- Phase 4 plan 04-01 completed: FP4 quant tool (tools/fp4/quantize_fp4.py) + CPU FP4 dequant runtime; TurboQuant-V support + attention mask gen shader + buffer barrier fix in VulkanAttention; issue #5 closed (2026-05-28)
+- SGFP4 pivot analysis completed (quick task 260821-p1q): evaluated current Ultra FP4 (E2M1 microformat, Phases 2+4) against the new SGFP4 spec (affine dual-mode, macroblock-addressed container) — full findings and a verified MAX_E2M1_VALUE scale-calibration defect documented in `.planning/quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/SGFP4-PIVOT-ANALYSIS.md`; recommends treating SGFP4 as new additive roadmap work (candidate Phase 6+) rather than retrofitting current Ultra FP4; v1-vs-v2 target, container adoption depth, and verifiability scope left as open questions for the user (2026-08-21)
+- SGFP4-PIVOT-ANALYSIS.md amended (Section 6): confirmed `FP4DequantUtils.hpp`'s `dequant_fp4_packed_cpu()` is a live cross-repo API contract already consumed by `SuperGenius/SGProcessingManager` (submodule commit `e1f28d73`, `processing_processor_mnn_tensor.cpp:274-279`) — the MAX_E2M1_VALUE bug therefore corrupts live downstream processing, not just MNN's own tests, and any SGFP4 container-format change is a cross-repo breaking change requiring coordinated landing; also found a stale test in `SGProcessingManager` (`Fp4UltraRecognizedButDecodeUnavailable`) asserting pre-wiring stub behavior, and no committed design docs anywhere for decisions D-04/D-09/D-13 (2026-08-21)
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- Focus on Vulkan buffer backend first, image backend second (Phase 1)
+- Start with Vulkan Attention correctness (tests) before performance optimization
+- Ultra FP4 as new Vulkan shader op rather than modifying existing quantization (Phase 2)
+- Codebase map committed before starting (completed)
+- Plan 01 kept as-is — VULK-06/VULK-07 confirmed implemented in source (2026-05-27 research)
+- Quick task 260821-rql: Fixed MAX_E2M1_VALUE from 6.0 to 3.0 in tools/fp4/quantize_fp4.py; added regression test tools/fp4/test_quantize_fp4.py
+
+### Pending Todos
+
+- Execute Phase 4 plan 04-02: E2E FP4 model test (FP4ModelTest.cpp stubbed)
+- Plan and execute Phase 5: Model-level regression tests (issue #7)
+- Review SGFP4-PIVOT-ANALYSIS.md and decide v1-vs-v2 target + container adoption depth + verifiability scope before scoping a Phase 6
+
+### Blockers/Concerns
+
+- Phase 5 depends on Phase 4 completion (needs FP4 quantized models to test against)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260821-p1q | Evaluate current FP4/Ultra-FP4 implementation status against the new SGFP4 (sgfp4-arxiv-v2.pdf) spec and determine pivots for future roadmap planning | 2026-08-21 | d6e3b70 | [260821-p1q-evaluate-current-fp4-ultra-fp4-implement](../../quick/260821-p1q-evaluate-current-fp4-ultra-fp4-implement/) |
+| 260821-rql | Fix MAX_E2M1_VALUE scale-calibration bug in tools/fp4/quantize_fp4.py (6.0 -> 3.0) and add stdlib-only regression test | 2026-08-21 | ee8d54b7 | [260821-rql-fix-max-e2m1-value-scale-calibration-bug](../../quick/260821-rql-fix-max-e2m1-value-scale-calibration-bug/) |
+
+## Deferred Items
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| *(none)* | | | |
+
+## Session Continuity
+
+Last session: 2026-08-21
+Stopped at: Completed quick task 260821-rql: fixed MAX_E2M1_VALUE scale-calibration bug (6.0 -> 3.0) in tools/fp4/quantize_fp4.py + added regression test; Phase 4 plan 04-01 still complete, 04-02 (E2E model test) next
+Resume file: None

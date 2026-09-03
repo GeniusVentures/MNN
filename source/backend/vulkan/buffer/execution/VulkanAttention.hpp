@@ -23,7 +23,11 @@ private:
         ivec4 s0; // qLen, kLen, headNum, kvHeadNum
         ivec4 s1; // headDim, group, pastLen, totalLen
         ivec4 s2; // maskQlen, maskKvlen, hasMask, cacheMaxLen
-        vec4 f0;  // scale, 0, 0, 0
+        vec4 f0;  // scale, sparseVTau, lowerTriangularMask, turboQuantKBlockSize
+    };
+
+    struct TurboQuantVParam {
+        vec4 f0; // vEnable, blockSize, 0, 0
     };
 
     struct KVCache {
@@ -33,14 +37,20 @@ private:
         int expandChunk = 64;
         bool fp16 = false;
         std::shared_ptr<VulkanBuffer> key;
+        std::shared_ptr<VulkanBuffer> packedKey;
         std::shared_ptr<VulkanBuffer> value;
+        std::shared_ptr<VulkanBuffer> packedValue;
+        int turboQuantKBlockSize = 0;
+        int turboQuantVBlockSize = 0;
 
         void reset();
-        void ensureCapacity(VulkanBackend* vkBn, int requiredLen, int kvH, int d, bool useFP16);
+        void ensureCapacity(VulkanBackend* vkBn, int requiredLen, int kvH, int d, bool useFP16, bool useTurboQuantK,
+                            bool useTurboQuantV, int turboQuantBlockSize);
     };
 
     const Op* mOp = nullptr;
     bool mNeedKvCache = false;
+    bool mHasAttentionMask = false;
     bool mUseFP16 = false;
     KVMeta* mMeta = nullptr;
 
@@ -53,6 +63,8 @@ private:
     std::shared_ptr<KVCache> mKVCache;
 
     std::shared_ptr<VulkanBuffer> mParam;
+    std::shared_ptr<VulkanBuffer> mTurboQuantVParam;
+    std::shared_ptr<VulkanBuffer> mMaskGenUniform;
     const VulkanPipeline* mAttentionPipeline = nullptr;
     const VulkanPipeline* mAttentionLegacyPipeline = nullptr;
     const VulkanPipeline* mDecodeQ1SubgroupPipeline = nullptr;
@@ -68,6 +80,7 @@ private:
     int mPrefillTotalLen = 0; // encoded totalLen for prefill multi-pass
     int mQueryLen4 = 0; // padded qLen for rearranged Qtmp (multiple of 4)
     std::shared_ptr<Tensor> mTempQuery;
+    std::shared_ptr<Tensor> mSyntheticMask;
 
     // Prefill K-block mode temporaries (avoid O(qLen*totalLen) intermediates).
     std::shared_ptr<Tensor> mTempQKBlock;
@@ -76,6 +89,9 @@ private:
     std::shared_ptr<Tensor> mTempL;
     std::shared_ptr<Tensor> mTempAlpha;
     std::shared_ptr<Tensor> mTempOAcc;
+
+    const VulkanPipeline* mMaskGenPipeline = nullptr;
+    std::shared_ptr<VulkanLayout::DescriptorSet> mMaskGenSet;
 
     const VulkanPipeline* mRearrangeQPipeline = nullptr;
     std::shared_ptr<VulkanLayout::DescriptorSet> mRearrangeQSet;

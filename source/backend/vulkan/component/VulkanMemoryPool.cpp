@@ -77,16 +77,24 @@ void VulkanMemoryPool::returnBuffer(VkBuffer buffer, size_t size, VkBufferUsageF
 MemChunk VulkanMemoryPool::allocMemory(const VkMemoryRequirements& requirements, VkFlags extraMask,
                                                   bool separate) {
     uint32_t index = 0;
+    bool foundType = false;
     auto typeBits  = requirements.memoryTypeBits;
     for (uint32_t i = 0; i < mDevice.memProty().memoryTypeCount; i++) {
         if ((typeBits & 1) == 1) {
             // Type is available, does it match user properties?
             if ((mDevice.memProty().memoryTypes[i].propertyFlags & extraMask) == extraMask) {
                 index = i;
+                foundType = true;
                 break;
             }
         }
         typeBits >>= 1;
+    }
+    if (!foundType) {
+        MNN_ERROR("Vulkan allocMemory cannot find memory type: typeBits=0x%x, extraMask=0x%x, memTypeCount=%u\n",
+                  requirements.memoryTypeBits, (uint32_t)extraMask, mDevice.memProty().memoryTypeCount);
+        MNN_ASSERT(false);
+        return MemChunk(nullptr, 0);
     }
     MNN_ASSERT(index >= 0);
     MNN_ASSERT(index < mAllocators.size());

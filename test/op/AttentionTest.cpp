@@ -15,14 +15,13 @@
 #include <stdlib.h>
 #include <vector>
 #include <MNN/AutoTime.hpp>
+#include <stdio.h>
 
 using namespace MNN::Express;
 
 int NumHead   = 16;
 int KvNumHead = 2;
 int HeadDim   = 128;
-const float diff_threshold = 0.001;
-const float diff_percent_threshold = 0.1;
 const int pastLength = 101;
 #define GENERATE_TOKENS 128
 struct KVMeta {
@@ -42,6 +41,12 @@ struct KVMeta {
     int seqlen_in_disk = 0;
     int layer_index = 0;
     int layer_nums = 0;
+    bool sparse_v_enable = false;
+    float sparse_v_tau = 1.0e-6f;
+    bool turboquant_k_enable = false;
+    bool turboquant_v_enable = false;
+    int turboquant_block_size = 32;
+    int turboquant_format = 0;
     std::vector<int> reserveHost;
     void sync() {
         int revertNumber = 0;
@@ -312,13 +317,82 @@ protected:
     std::vector< std::vector< std::vector<float> > > query;
     std::vector< std::vector< std::vector<float> > > key;
     std::vector< std::vector< std::vector<float> > > value;
+    std::vector< std::vector< std::vector<float> > > queryDecode;
+    std::vector< std::vector< std::vector<float> > > keyDecode;
+    std::vector< std::vector< std::vector<float> > > valueDecode;
     std::vector< std::vector<int> > mask;
     std::vector< std::vector< std::vector<float> > > expected_result;
     VARP Query, Key, Value, Mask, Output;
     VARP Query1, Key1, Value1, Mask1;
+    virtual void prepareRuntimeMeta() {
+        gMeta = KVMeta();
+        gMeta.sparse_v_enable = false;
+        gMeta.sparse_v_tau = 1.0e-6f;
+        gMeta.turboquant_k_enable = false;
+        gMeta.turboquant_v_enable = false;
+        gMeta.turboquant_block_size = 32;
+        gMeta.turboquant_format = 0;
+    }
+    virtual void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const {
+        diffThreshold = 0.001f;
+        diffPercentThreshold = 0.1f;
+    }
+    bool runSingleCase(int seq_len, int precision, bool useChunkMask, int chunkSize = 2) {
+        std::shared_ptr<NaiveAttention> naiveAttention(new NaiveAttention);
+        generateInput(seq_len, precision);
+        if (useChunkMask) {
+            generateChunkMask(seq_len, seq_len, chunkSize);
+        } else {
+            generateMask(seq_len, seq_len);
+        }
+        prepareRuntimeMeta();
+        expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
+        auto attn = _makeAttentionModule();
+        gMeta.previous = 0;
+        gMeta.add = seq_len;
+        Output = attn->onForward({Query, Key, Value, Mask})[0];
+        gMeta.sync();
+        return compareResult(seq_len);
+    }
+    bool runPrefillDecodeTransitionCase(int seq_len, int precision, bool useChunkMask, int chunkSize = 2) {
+        std::shared_ptr<NaiveAttention> naiveAttention(new NaiveAttention);
+        generateInput(seq_len, precision, true);
+        if (useChunkMask) {
+            gMeta.previous = seq_len;
+            generateChunkMask(seq_len, seq_len, chunkSize, true);
+        } else {
+            generateMask(seq_len, seq_len, true);
+        }
+        prepareRuntimeMeta();
+        auto attn = _makeAttentionModule();
+        expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
+        gMeta.previous = 0;
+        gMeta.add = seq_len;
+        Output = attn->onForward({Query, Key, Value, Mask})[0];
+        gMeta.sync();
+        if (!compareResult(seq_len)) {
+            return false;
+        }
+        std::vector< std::vector<int> > decodeMask(1);
+        decodeMask[0].resize(seq_len + 1, 1);
+        expected_result = naiveAttention->onExecute(queryDecode, keyDecode, valueDecode, decodeMask, 1);
+        gMeta.add = 1;
+        Output = attn->onForward({Query1, Key1, Value1, Mask1})[0];
+        gMeta.sync();
+        return compareResult(1);
+    }
 public:
     AttentionTest() = default;
     virtual ~AttentionTest() = default;
+    virtual bool useExprOracle() const {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                return false;
+            }
+        }
+        return true;
+    }
     void generateInput(int seq_len, int precision, bool genDecodeInput = false) {
         query = generateRandTensor(seq_len, NumHead, HeadDim, precision);
         key   = generateRandTensor(seq_len, KvNumHead, HeadDim, precision);
@@ -327,12 +401,12 @@ public:
         Key   = vector_to_var(key);
         Value = vector_to_var(value);
         if (genDecodeInput) {
-            auto vecquery = generateRandTensor(1, NumHead, HeadDim, precision);
-            auto veckey   = generateRandTensor(1, KvNumHead, HeadDim, precision);
-            auto vecvalue = generateRandTensor(1, KvNumHead, HeadDim, precision);
-            Query1 = vector_to_var(vecquery);
-            Key1   = vector_to_var(veckey);
-            Value1 = vector_to_var(vecvalue);
+            queryDecode = generateRandTensor(1, NumHead, HeadDim, precision);
+            keyDecode   = generateRandTensor(1, KvNumHead, HeadDim, precision);
+            valueDecode = generateRandTensor(1, KvNumHead, HeadDim, precision);
+            Query1 = vector_to_var(queryDecode);
+            Key1   = vector_to_var(keyDecode);
+            Value1 = vector_to_var(valueDecode);
         }
     }
     void generateChunkMask(int seq_len, int kv_seq_len, int chunk_size, bool genDecodeInput = false) {
@@ -410,13 +484,16 @@ public:
     }
 
     bool compareResult(int seq_len) {
+        float diffThreshold = 0.0f;
+        float diffPercentThreshold = 0.0f;
+        getDiffTolerance(diffThreshold, diffPercentThreshold);
         const float * resultPtr = Output->readMap<float>();
         for (int i = 0; i < seq_len; i++) {
             for (int j = 0; j < NumHead; j++) {
                 for (int k = 0; k < HeadDim; k++) {
                     float diff = fabs(resultPtr[i * NumHead * HeadDim + j * HeadDim + k] - expected_result[i][j][k]);
                     float diff_percent = fabs(diff / expected_result[i][j][k]);
-                    if (diff > diff_threshold && diff_percent > diff_percent_threshold) {
+                    if (diff > diffThreshold && diff_percent > diffPercentThreshold) {
                         printf("Result Mismatch: expected %lf but got %lf in CPU Attention Test\n", expected_result[i][j][k], resultPtr[i * NumHead * HeadDim + j * HeadDim + k]);
                         printf("Error Position: Output[%d][%d][%d]\n", i, j, k);
                         return false;
@@ -441,6 +518,7 @@ public:
             int seq_len = 10;
             generateInput(seq_len, precision);
             generateMask(seq_len, seq_len);
+            prepareRuntimeMeta();
             expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
             auto attn = _makeAttentionModule();
             gMeta.add = seq_len;
@@ -453,24 +531,26 @@ public:
                 return false;
             }
 
-            /* generate mask expr */
-            /* generate mask expr */
-            auto MaskExpr = vector_to_var(mask);
-            MaskExpr = (_Scalar<float>(1.0) - _Cast<float>(MaskExpr)) * _Scalar<float>(std::numeric_limits<float>::lowest());
-            Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
-            pass = compareResult(seq_len);
-            if (!pass) {
-                FUNC_PRINT(1);
-                return false;
-            }
-            // naiveAttention with history is error, use expr to test
-            Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
-            gMeta.add = seq_len;
-            auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
-            gMeta.sync();
-            auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
-            if (diff >= 0.01f) {                 FUNC_PRINT_ALL(diff, f);
-                return false;
+            if (useExprOracle()) {
+                /* generate mask expr */
+                /* generate mask expr */
+                auto MaskExpr = vector_to_var(mask);
+                MaskExpr = (_Scalar<float>(1.0) - _Cast<float>(MaskExpr)) * _Scalar<float>(std::numeric_limits<float>::lowest());
+                Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
+                pass = compareResult(seq_len);
+                if (!pass) {
+                    FUNC_PRINT(1);
+                    return false;
+                }
+                // naiveAttention with history is error, use expr to test
+                Output = _computeAttentionExpr(Query, Key, Value, MaskExpr, kvCache);
+                gMeta.add = seq_len;
+                auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
+                gMeta.sync();
+                auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
+                if (diff >= 0.01f) {                 FUNC_PRINT_ALL(diff, f);
+                    return false;
+                }
             }
         }
         // test2
@@ -484,6 +564,7 @@ public:
             int seq_len = 10;
             generateInput(seq_len, precision);
             generateChunkMask(seq_len, seq_len, 2);
+            prepareRuntimeMeta();
             expected_result = naiveAttention->onExecute(query, key, value, mask, seq_len);
             auto attn = _makeAttentionModule();
             gMeta.previous = 0;
@@ -496,21 +577,23 @@ public:
                 printf("Error: Not LowerTriangular Attention with kv_cache unit test failed!\n");
                 return false;
             }
-            Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
-            pass = compareResult(seq_len);
-            if (!pass) {
-                FUNC_PRINT(1);
-                return false;
-            }
-            // naiveAttention with history is error, use expr to test
-            Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
-            gMeta.add = seq_len;
-            auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
-            gMeta.sync();
-            auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
-            if (diff >= 0.01f) {
-                FUNC_PRINT_ALL(diff, f);
-                return false;
+            if (useExprOracle()) {
+                Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
+                pass = compareResult(seq_len);
+                if (!pass) {
+                    FUNC_PRINT(1);
+                    return false;
+                }
+                // naiveAttention with history is error, use expr to test
+                Output = _computeAttentionExpr(Query, Key, Value, Mask, kvCache);
+                gMeta.add = seq_len;
+                auto output2 = attn->onForward({Query, Key, Value, Mask})[0];
+                gMeta.sync();
+                auto diff = _ReduceMax(output2 - Output)->readMap<float>()[0];
+                if (diff >= 0.01f) {
+                    FUNC_PRINT_ALL(diff, f);
+                    return false;
+                }
             }
         }
         // unit test 3
@@ -559,9 +642,19 @@ class SpeedAttentionTest : public AttentionTest {
 public:
 SpeedAttentionTest() = default;
     virtual ~SpeedAttentionTest() = default;
+    virtual bool turboQuantKEnabled() const {
+        return false;
+    }
+    virtual std::vector<int> speedSeqs() const {
+        return {4096};
+    }
+    virtual std::vector<int> sparseModes() const {
+        return {0, 1};
+    }
 
     virtual bool run(int precision) {
-        std::vector<int> seqs = {4096};
+        const std::vector<int> seqs = speedSeqs();
+        const int64_t kProgressIntervalUs = 10LL * 1000LL * 1000LL;
         std::shared_ptr<NaiveAttention> naiveAttention(new NaiveAttention);
         std::shared_ptr<MNN::OpT> attention(new MNN::OpT);
         attention->type = MNN::OpType_Attention;
@@ -571,36 +664,378 @@ SpeedAttentionTest() = default;
         /* 3 attention module */
         std::vector<int> quantQKV = {8, 9, 10};
         std::vector<std::string> testNames = {"float qkv", "quant qk", "quant qkv"};
+        const std::vector<int> sparseModes = this->sparseModes();
         for (int n = 0; n < seqs.size(); ++n) {
             int seq_len = seqs[n];
             MNN_PRINT(">>> seq_len=%d, decode_len=%d\n", seq_len, GENERATE_TOKENS);
             generateInput(seqs[n], precision, true);
             generateMask(seqs[n], seq_len, true);
             for (int m = 0; m < testNames.size(); ++m) {
-                gMeta.previous = 0;
-                gMeta.add = seq_len;
-                auto _module = _makeAttentionModule(quantQKV[m]);
-                MNN::Timer t1;
-                for (int x = 0; x < 5; ++x) {
-                    Output = _module->onForward({Query, Key, Value, Mask})[0];
-                }
-                auto time = (float)t1.durationInUs() / 1000.0f / 5.f;
-                MNN_PRINT("%s: prefill cost = %.2f\n", testNames[m].c_str(), time);
-                gMeta.sync();
-                MNN::Timer t2;
-                for (int x = 0; x < GENERATE_TOKENS; ++x) {
-                    gMeta.add = 1;
-                    auto output2 = _module->onForward({Query1, Key1, Value1, Mask1})[0];
+                for (int s = 0; s < sparseModes.size(); ++s) {
+                    const bool sparseEnable = sparseModes[s] != 0;
+                    const char* sparseTag = sparseEnable ? " + sparse_v" : " + dense_v";
+                    gMeta.previous = 0;
+                    gMeta.add = seq_len;
+                    gMeta.sparse_v_enable = sparseEnable;
+                    gMeta.sparse_v_tau = 1.0e-6f;
+                    gMeta.turboquant_k_enable = turboQuantKEnabled();
+                    gMeta.turboquant_v_enable = false;
+                    gMeta.turboquant_block_size = 32;
+                    gMeta.turboquant_format = 0;
+                    const char* turboTag = gMeta.turboquant_k_enable ? " + turboquant_k" : " + dense_k";
+                    auto _module = _makeAttentionModule(quantQKV[m]);
+                    MNN::Timer t1;
+                    MNN_PRINT("%s%s%s: prefill progress 0/5\r", testNames[m].c_str(), sparseTag, turboTag);
+                    fflush(stdout);
+                    for (int x = 0; x < 5; ++x) {
+                        Output = _module->onForward({Query, Key, Value, Mask})[0];
+                        MNN_PRINT("%s%s%s: prefill progress %d/5\r", testNames[m].c_str(), sparseTag, turboTag, x + 1);
+                        fflush(stdout);
+                    }
+                    auto time = (float)t1.durationInUs() / 1000.0f / 5.f;
+                    MNN_PRINT("\n%s%s%s: prefill cost = %.2f\n", testNames[m].c_str(), sparseTag, turboTag, time);
+                    fflush(stdout);
                     gMeta.sync();
+                    MNN::Timer t2;
+                    int64_t lastProgressUs = 0;
+                    MNN_PRINT("%s%s%s: decode progress 0/%d (0.0%%)\r", testNames[m].c_str(), sparseTag, turboTag, GENERATE_TOKENS);
+                    fflush(stdout);
+                    for (int x = 0; x < GENERATE_TOKENS; ++x) {
+                        gMeta.add = 1;
+                        auto output2 = _module->onForward({Query1, Key1, Value1, Mask1})[0];
+                        gMeta.sync();
+                        const int64_t elapsedUs = t2.durationInUs();
+                        if (x + 1 == GENERATE_TOKENS || elapsedUs - lastProgressUs >= kProgressIntervalUs) {
+                            const float percent = (float)(x + 1) * 100.0f / (float)GENERATE_TOKENS;
+                            const float elapsedSec = (float)elapsedUs / 1000000.0f;
+                            MNN_PRINT("%s%s%s: decode progress %d/%d (%.1f%%, %.1fs)\r", testNames[m].c_str(), sparseTag, turboTag, x + 1, GENERATE_TOKENS, percent, elapsedSec);
+                            fflush(stdout);
+                            lastProgressUs = elapsedUs;
+                        }
+                     }
+                     time = (float)t2.durationInUs() / 1000.0f;
+                     MNN_PRINT("\n%s%s%s: decode cost = %f\n", testNames[m].c_str(), sparseTag, turboTag, time);
+                    fflush(stdout);
                 }
-                time = (float)t2.durationInUs() / 1000.0f;
-                MNN_PRINT("%s: decode cost = %f\n", testNames[m].c_str(), time);
+                gMeta.sparse_v_enable = false;
+                gMeta.turboquant_k_enable = false;
             }
         }
         return true;
     }
 };
 
+class AttentionVulkanTest : public AttentionTest {
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+};
+
+class AttentionVulkanSparseVTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.sparse_v_enable = true;
+        gMeta.sparse_v_tau = 1.0e-6f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+};
+
+class AttentionVulkanTurboQuantTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_k_enable = true;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        return AttentionTest::run(precision);
+    }
+};
+
+class AttentionVulkanTurboQuantVTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_v_enable = true;
+    }
+    void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const override {
+        // TurboQuant-V is intentionally lossy; keep wider tolerances scoped to this test only.
+        diffThreshold = 3.0f;
+        diffPercentThreshold = 0.7f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        if (!AttentionTest::run(precision)) {
+            return false;
+        }
+        if (!runSingleCase(1, precision, false)) {
+            printf("Error: TurboQuant-V qLen=1 scalar-mask corner case failed!\n");
+            return false;
+        }
+        if (!runSingleCase(1, precision, true)) {
+            printf("Error: TurboQuant-V qLen=1 explicit-mask corner case failed!\n");
+            return false;
+        }
+        const int originalHeadDim = HeadDim;
+        HeadDim = 64;
+        const bool headDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!headDimPass) {
+            printf("Error: TurboQuant-V headDim=64 corner case failed!\n");
+            return false;
+        }
+        HeadDim = 80;
+        const bool fallbackHeadDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!fallbackHeadDimPass) {
+            printf("Error: TurboQuant-V headDim=80 non-block-aligned fallback case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, false)) {
+            printf("Error: TurboQuant-V prefill/decode transition corner case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, true)) {
+            printf("Error: TurboQuant-V prefill/decode explicit-mask transition corner case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(2, precision, false)) {
+            printf("Error: TurboQuant-V qLen=2 prefill/decode transition corner case failed!\n");
+            return false;
+        }
+        return true;
+    }
+};
+
+class AttentionVulkanTurboQuantKVTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_k_enable = true;
+        gMeta.turboquant_v_enable = true;
+    }
+    void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const override {
+        // TurboQuant K+V is intentionally lossy; keep wider tolerances scoped to this test only.
+        diffThreshold = 3.0f;
+        diffPercentThreshold = 0.7f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        if (!AttentionTest::run(precision)) {
+            return false;
+        }
+        if (!runSingleCase(1, precision, false)) {
+            printf("Error: TurboQuant-KV qLen=1 scalar-mask corner case failed!\n");
+            return false;
+        }
+        if (!runSingleCase(1, precision, true)) {
+            printf("Error: TurboQuant-KV qLen=1 explicit-mask corner case failed!\n");
+            return false;
+        }
+        const int originalHeadDim = HeadDim;
+        HeadDim = 64;
+        const bool headDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!headDimPass) {
+            printf("Error: TurboQuant-KV headDim=64 corner case failed!\n");
+            return false;
+        }
+        HeadDim = 80;
+        const bool fallbackHeadDimPass = runSingleCase(1, precision, false) && runSingleCase(1, precision, true);
+        HeadDim = originalHeadDim;
+        if (!fallbackHeadDimPass) {
+            printf("Error: TurboQuant-KV headDim=80 non-block-aligned fallback case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, false)) {
+            printf("Error: TurboQuant-KV prefill/decode transition corner case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(1, precision, true)) {
+            printf("Error: TurboQuant-KV prefill/decode explicit-mask transition corner case failed!\n");
+            return false;
+        }
+        return true;
+    }
+};
+
+class AttentionVulkanTurboQuantKVTransitionTest : public AttentionTest {
+protected:
+    void prepareRuntimeMeta() override {
+        AttentionTest::prepareRuntimeMeta();
+        gMeta.turboquant_k_enable = true;
+        gMeta.turboquant_v_enable = true;
+    }
+    void getDiffTolerance(float& diffThreshold, float& diffPercentThreshold) const override {
+        diffThreshold = 3.0f;
+        diffPercentThreshold = 0.7f;
+    }
+public:
+    bool useExprOracle() const override {
+        return false;
+    }
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        if (!runPrefillDecodeTransitionCase(2, precision, false)) {
+            printf("Error: TurboQuant-KV qLen=2 prefill/decode transition dedicated case failed!\n");
+            return false;
+        }
+        if (!runPrefillDecodeTransitionCase(2, precision, true)) {
+            printf("Error: TurboQuant-KV qLen=2 explicit-mask prefill/decode transition dedicated case failed!\n");
+            return false;
+        }
+        return true;
+    }
+};
+
+class SpeedAttentionVulkanTest : public SpeedAttentionTest {
+protected:
+    bool turboQuantKEnabled() const override {
+        return false;
+    }
+public:
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        return SpeedAttentionTest::run(precision);
+    }
+};
+
+class SpeedAttentionVulkanTurboQuantTest : public SpeedAttentionTest {
+protected:
+    bool turboQuantKEnabled() const override {
+        return true;
+    }
+public:
+    bool run(int precision) override {
+        auto rtInfo = ExecutorScope::Current()->getRuntime().first;
+        bool cpuInfer = true;
+        for (auto& rt : rtInfo) {
+            if (rt.first != MNN_FORWARD_CPU) {
+                cpuInfer = false;
+                break;
+            }
+        }
+        if (cpuInfer) {
+            return true;
+        }
+        return SpeedAttentionTest::run(precision);
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant8KTest : public SpeedAttentionVulkanTurboQuantTest {
+public:
+    std::vector<int> speedSeqs() const override {
+        return {8192};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant16KTest : public SpeedAttentionVulkanTurboQuantTest {
+public:
+    std::vector<int> speedSeqs() const override {
+        return {16384};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant32KTest : public SpeedAttentionVulkanTurboQuantTest {
+public:
+    std::vector<int> speedSeqs() const override {
+        return {32768};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant32KDenseVTest : public SpeedAttentionVulkanTurboQuant32KTest {
+public:
+    std::vector<int> sparseModes() const override {
+        return {0};
+    }
+};
+
+class SpeedAttentionVulkanTurboQuant32KSparseVTest : public SpeedAttentionVulkanTurboQuant32KTest {
+public:
+    std::vector<int> sparseModes() const override {
+        return {1};
+    }
+};
+
 MNNTestSuiteRegister(AttentionTest, "op/attention");
+MNNTestSuiteRegister(AttentionVulkanTest, "op/attention/vulkan");
+MNNTestSuiteRegister(AttentionVulkanSparseVTest, "op/attention/vulkan/sparsev");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantTest, "op/attention/vulkan/turboquant");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantVTest, "op/attention/vulkan/turboquantv");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantKVTest, "op/attention/vulkan/turboquantkv");
+MNNTestSuiteRegister(AttentionVulkanTurboQuantKVTransitionTest, "op/attention/extra/vulkan/turboquantkv_transition");
 MNNTestSuiteRegister(SpeedAttentionTest, "speed/attention");
+MNNTestSuiteRegister(SpeedAttentionVulkanTest, "speed/attention/vulkan");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuantTest, "speed/attention/vulkan/turboquant");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant8KTest, "speed/attention/vulkan/8k/turboquant");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant16KTest, "speed/attention/vulkan/16k/turboquant");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant32KDenseVTest, "speed/attention/vulkan/32k/turboquant/densev");
+MNNTestSuiteRegister(SpeedAttentionVulkanTurboQuant32KSparseVTest, "speed/attention/vulkan/32k/turboquant/sparsev");
 #endif

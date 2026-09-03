@@ -260,7 +260,12 @@ const void VulkanDevice::getBufferMemoryRequirements(VkBuffer buffer, VkMemoryRe
 
 const VkResult VulkanDevice::allocMemory(VkDeviceMemory& memory, const VkMemoryAllocateInfo& allocateInfo,
                                          const VkAllocationCallbacks* allocator) const {
-    return vkAllocateMemory(mDevice, &allocateInfo, allocator, &memory);
+    const VkResult res = vkAllocateMemory(mDevice, &allocateInfo, allocator, &memory);
+    if (res != VK_SUCCESS) {
+        MNN_ERROR("VulkanDevice allocMemory failed: vkResult=%d, allocationSize=%llu, memoryTypeIndex=%u\n", res,
+                  (unsigned long long)allocateInfo.allocationSize, allocateInfo.memoryTypeIndex);
+    }
+    return res;
 }
 
 const void VulkanDevice::freeMemory(const VkDeviceMemory& memory, const VkAllocationCallbacks* allocator) const {
@@ -278,7 +283,16 @@ const void VulkanDevice::unmapMemory(const VkDeviceMemory memory) const {
 
 const VkResult VulkanDevice::bindBufferMemory(const VkBuffer buffer, const VkDeviceMemory memory,
                                               const VkDeviceSize memoryOffset) const {
-    return vkBindBufferMemory(mDevice, buffer, memory, memoryOffset);
+    const VkResult res = vkBindBufferMemory(mDevice, buffer, memory, memoryOffset);
+    if (res != VK_SUCCESS) {
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(mDevice, buffer, &req);
+        MNN_ERROR(
+            "VulkanDevice bindBufferMemory failed: vkResult=%d, memReq.size=%llu, memReq.align=%llu, typeBits=0x%x, offset=%llu\n",
+            res, (unsigned long long)req.size, (unsigned long long)req.alignment, req.memoryTypeBits,
+            (unsigned long long)memoryOffset);
+    }
+    return res;
 }
 
 const void VulkanDevice::destroyBuffer(const VkBuffer buffer, const VkAllocationCallbacks* allocator) const {
