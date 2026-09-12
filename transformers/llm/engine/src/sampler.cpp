@@ -160,6 +160,14 @@ Sampler* Sampler::createSampler(std::shared_ptr<LlmContext> context, std::shared
 
 Sampler::Sampler(std::shared_ptr<LlmContext> context, std::shared_ptr<LlmConfig> config)
     : mContext(context), mRng(std::random_device{}()) {
+    // GNUS fork patch (elmbridge Phase 3, D-12): seed the sampler RNG from the merged
+    // config JSON. The seed MUST be present in config_ BEFORE Llm::load() fires, because
+    // the Sampler is constructed inside load() (llm.cpp:306) — a seed applied after load
+    // never reaches this constructor. int64 seed is masked to the mt19937 uint32 seed width.
+    if (config->config_.contains("seed")) {
+        mRng.seed(static_cast<std::mt19937::result_type>(
+            config->config_["seed"].get<int64_t>() & 0xFFFFFFFFull));
+    }
     mConfig.max_all_tokens = config->max_all_tokens();
     mConfig.max_new_tokens = config->max_new_tokens();
     mConfig.type = config->sampler_type();

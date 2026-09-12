@@ -183,6 +183,18 @@ public:
     const LlmContext* getContext() const {
         return mContext.get();
     }
+    /// GNUS fork patch (elmbridge Phase 3, D-13): request mid-generation cancellation.
+    /// Callable from any thread; running generation loops unwind at their next per-step
+    /// poll (ArGeneration::generate loop head, generate.cpp:46). Thread-safety: the
+    /// status field is a plain enum written here and read per-step by the generation
+    /// thread — benign race by design, same pattern as TIMEOUT. No reason parameter
+    /// (intent stays processor-side per elmbridge D-09).
+    void cancel() { mContext->status = LlmStatus::USER_CANCEL; }
+    /// GNUS fork patch (elmbridge Phase 3, D-14): fork-patch level marker.
+    /// SGProcessingManager's CMake greps the INSTALLED llm.hpp for this symbol to
+    /// define SGPROC_MNN_LLM_FORK_PATCHES / SGPROC_MNN_HAS_LLM_CANCEL, so a stock MNN
+    /// still builds with a documented degraded path.
+    static constexpr int kGnusLlmForkPatchLevel = 1;
     virtual void setWavformCallback(std::function<bool(const float*, size_t, bool)> callback) {}
     virtual void generateWavform() {}
 protected:
